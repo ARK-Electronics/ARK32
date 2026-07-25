@@ -448,7 +448,63 @@ void runtimeMotorModeTick(void)
 		}
 
 		if (eepromBuffer.auto_advance) {
-			auto_advance_level = map(duty_cycle, 100, 2000, 13, 23);
+			/*
+			 * Commutation lag is dominated by the phase lag of current behind
+			 * applied voltage, atan(w*L/R), so what the advance schedule
+			 * actually wants on its x axis is a measure of speed - not duty
+			 * cycle, which only stands in for speed at one load.
+			 *
+			 * This replaces the duty proxy with measured k_erpm normalized to
+			 * what this motor can reach at full duty on the present pack
+			 * (kv * V * poles/2). Same 13..23 output range, same curve shape,
+			 * no retuned constants - only the x axis changes.
+			 *
+			 * WHAT THIS FIXES: load blindness. Under load rpm sits well below
+			 * what duty implies, so the real lag is lower and the duty curve
+			 * over-advances. More advance means more current, so the old curve
+			 * pushed the wrong way in exactly the condition that is already
+			 * thermally worst. Verified: at 6S/2000kV/14P, duty 1200, dropping
+			 * to 70% of no-load rpm moves the level 18 -> 16.
+			 *
+			 * WHAT THIS DOES NOT FIX: pack voltage. Under no load k_erpm scales
+			 * with V and so does max_kerpm, so the ratio - and this schedule -
+			 * is voltage-invariant, exactly like the duty curve it replaces
+			 * (verified 4S/6S/12S: identical level at equal duty). The physics
+			 * says otherwise: L/R falls roughly as 1/kv, which makes the lag a
+			 * function of BEMF (~rpm/kv) and leaves a residual voltage term.
+			 * Keying on BEMF instead would be the fuller correction, but it
+			 * changes full-throttle advance on every pack size at once and
+			 * needs bench data to pick endpoints. Deliberately not done here.
+			 *
+			 * So this is the conservative half: identical to today wherever
+			 * duty was a valid proxy, and different only under load, in the
+			 * direction that lowers current.
+			 *
+			 * Low endpoint is max_kerpm/16 (6.25%) rather than the duty curve's
+			 * 5% - a shift instead of a divide, and map() clamps to the bottom
+			 * of the range below it either way.
+			 *
+			 * Falls back to the duty proxy whenever the normalization cannot be
+			 * trusted (all paths unit-checked):
+			 *   - no scale: implausible kV or pole count (see settings.c)
+			 *   - no usable pack reading yet (boot, before the ADC settles)
+			 *   - measured erpm past the configured ceiling by >25%, the
+			 *     signature of a mis-entered motor kV. That case matters
+			 *     because entering 50-60% of the real kV is a known field
+			 *     workaround for the throttle-limiter bug (am32-firmware#405);
+			 *     normalizing against a ceiling that low would peg advance at
+			 *     the top of the range through most of the throttle band. The
+			 *     duty proxy is immune to a wrong kV, so it stays the fallback.
+			 */
+			uint16_t adv_max_kerpm = 0;
+			if (advance_erpm_scale_q12 != 0 && battery_voltage > 300) {
+				adv_max_kerpm = (uint16_t)(((uint32_t)advance_erpm_scale_q12 * battery_voltage) >> 12);
+			}
+			if (adv_max_kerpm > 8 && k_erpm <= (uint16_t)(adv_max_kerpm + (adv_max_kerpm >> 2))) {
+				auto_advance_level = map(k_erpm, adv_max_kerpm >> 4, adv_max_kerpm, 13, 23);
+			} else {
+				auto_advance_level = map(duty_cycle, 100, 2000, 13, 23);
+			}
 		}
 
 		/**************** old routine*********************/

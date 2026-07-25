@@ -218,6 +218,25 @@ void loadEEpromSettings(void)
 			high_rpm_level = 0;
 		}
 	}
+	/*
+	 * Advance-schedule normalization (see motor_runtime.h and the advance block
+	 * in runtime_loop.c). max_erpm at 100% duty is kv * volts * poles/2; folding
+	 * the centivolt scale and the Q12 fraction in gives
+	 *
+	 *   kerpm per centivolt, Q12 = kv * poles * 4096 / 200000
+	 *
+	 * so the hot path is a multiply and a shift with no division. Computed after
+	 * motor_kv has taken its final value (the cell-count reductions above).
+	 * Left at 0 - meaning "use the duty proxy" - for a kV below the range the
+	 * throttle limiter already treats as unusable, or a pole count outside the
+	 * 2..64 the DroneCAN MOTOR_POLES parameter accepts (an erased eeprom reads
+	 * 0 or 0xff). Worst case 10220 * 64 * 4096 fits uint32 with ~1.6e9 spare.
+	 */
+	advance_erpm_scale_q12 = 0;
+	if (motor_kv >= 300 && eepromBuffer.motor_poles >= 2 && eepromBuffer.motor_poles <= 64) {
+		advance_erpm_scale_q12 = (uint16_t)(((uint32_t)motor_kv * eepromBuffer.motor_poles * 4096u) / 200000u);
+	}
+
 	reverse_speed_threshold = map(motor_kv, 300, 3000, 1000, 500);
 	if (eepromBuffer.bi_direction) {
 		polling_mode_changeover = POLLING_MODE_THRESHOLD / 2;

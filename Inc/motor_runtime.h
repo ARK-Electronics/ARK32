@@ -27,6 +27,18 @@ extern volatile uint16_t waitTime;
 extern uint16_t advance;
 extern uint8_t temp_advance;
 extern uint8_t auto_advance_level;
+/*
+ * Advance-schedule normalization: kerpm of electrical frequency per centivolt
+ * of pack, Q12. Derived from motor kV and pole count once per settings load
+ * (settings.c) so the hot path needs only a multiply and a shift:
+ *
+ *   max_kerpm = (advance_erpm_scale_q12 * battery_voltage) >> 12
+ *
+ * i.e. the electrical frequency this motor reaches at 100% duty on the present
+ * pack. Zero means the schedule cannot be normalized (implausible kV or pole
+ * count) and the caller must fall back to the duty-cycle proxy.
+ */
+extern uint16_t advance_erpm_scale_q12;
 extern volatile char old_routine;
 extern volatile uint32_t zero_crosses;
 extern volatile uint32_t polling_mode_changeover;
