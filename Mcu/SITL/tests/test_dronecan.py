@@ -35,6 +35,7 @@ def test_dronecan_throttle_and_esc_status(sitl_can_factory, state_stream, mcast_
     def on_esc(e):
         status['rpm'] = e.message.rpm
         status['voltage'] = e.message.voltage
+        status['errors'] = e.message.error_count
         status['count'] = status.get('count', 0) + 1
 
     node.add_handler(dronecan.uavcan.equipment.esc.Status, on_esc)
@@ -59,6 +60,12 @@ def test_dronecan_throttle_and_esc_status(sitl_can_factory, state_stream, mcast_
         assert 3500 <= status.get('rpm', -1) <= 6500, status
         assert 15 < status.get('voltage', 0) < 18, status
         assert status.get('count', 0) >= 3, 'too few esc.Status: %s' % status
+        # error_count aggregates hard-error events (jump desync + stall rail).
+        # An honest spool-up to a steady 4-6k rpm must report none: the stall
+        # rail is gated on zero_crosses > 100 precisely so the kicks a normal
+        # start needs are not counted as errors.
+        assert status.get('errors', -1) == 0, \
+            'healthy run reported error_count=%s' % status.get('errors')
     finally:
         # stop motor
         for _ in range(10):

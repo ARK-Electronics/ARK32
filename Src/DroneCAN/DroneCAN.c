@@ -14,6 +14,7 @@
 #	include "signal.h"
 #	include "version.h"
 #	include "eeprom.h"
+#	include "faults.h"
 #	include <stdarg.h>
 #	include <stdio.h>
 #	include <string.h>
@@ -107,7 +108,6 @@ extern volatile char armed;
 extern volatile uint32_t commutation_interval;
 extern uint8_t auto_advance_level;
 extern uint16_t low_cell_volt_cutoff;
-extern uint32_t desync_happened;
 
 static uint16_t last_can_input;
 static uint64_t last_heartbeat_us;
@@ -1006,8 +1006,11 @@ static void send_ESCStatus(void)
 	struct uavcan_equipment_esc_Status pkt;
 	uint8_t buffer[UAVCAN_EQUIPMENT_ESC_STATUS_MAX_SIZE];
 
-	// make up some synthetic status data
-	pkt.error_count = desync_happened; // fill desync count here
+	/* Hard-error events since boot. Was desync_happened alone, which missed
+	 * every run killed by the stall rail (and so also the blind-grind and
+	 * blind/miss-limit paths that funnel into it) - a grinding motor
+	 * reported error_count 0. See faultErrorCount(). */
+	pkt.error_count = faultErrorCount();
 	pkt.voltage = battery_voltage * 0.01;
 
 	pkt.current = (current.sum / (float)current.count) * 0.01;

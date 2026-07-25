@@ -74,4 +74,34 @@ void faultDesyncEpisodeTick1kHz(void);
 /* True while a post-desync coast is mandatory (caller must not re-start). */
 uint8_t faultDesyncRestartHoldoffActive(void);
 
+/*
+ * Monotonic since-boot count of stall-rail trips on an ESTABLISHED run - the
+ * same zero_crosses > 100 gate the episode charge uses, so the many legitimate
+ * kicks a heavy prop needs at low throttle are not counted as errors.
+ *
+ * volatile: read from the main loop (telemetry) while the grind rail that
+ * forces this trip runs in tenKhzRoutine (ISR context).
+ */
+extern volatile uint32_t fault_stall_trips;
+
+/*
+ * Total hard-error events since boot, for uavcan.equipment.esc.Status
+ * error_count ("errors since start-up").
+ *
+ * Sums the two PRIMITIVE run-killers, which are mutually exclusive:
+ *   - desync_happened   : the jump-desync check in runtimeProcessDesyncCheck
+ *   - fault_stall_trips : the INTERVAL_TIMER stall rail
+ *
+ * Deliberately NOT additional addends, because each already funnels into the
+ * stall rail and would double-count one physical failure:
+ *   - blind-grind rail (faultDesyncEpisodeTick1kHz) kicks INTERVAL_TIMER to
+ *     46000 so the stall rail is guaranteed to trip on the next main pass
+ *   - blind-step / miss-bucket limit (bemf_zc.c) hands off the same way
+ *   - the episode-rail latch is a CONSEQUENCE of accumulating the above, and
+ *     is a state (ESC_FAULT_STUCK), not an independent event
+ * Attribution between those sub-causes belongs in the AM32-reserved FlexDebug
+ * payload, not in this scalar.
+ */
+uint32_t faultErrorCount(void);
+
 #endif /* FAULTS_H_ */
