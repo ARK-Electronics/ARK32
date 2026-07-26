@@ -171,6 +171,19 @@ from cmd, extra arguments are passed through). Notes:
   dependency (the CI artifact ships it bundled).
 - Windows Firewall must allow inbound UDP for the SITL binary (or ports
   57732-57734) for CAN and the input/state ports to receive.
+- the default ports (57732-57734) are in the Windows dynamic port range
+  (49152-65535). If Hyper-V, WSL2 or Docker Desktop is enabled, Windows
+  reserves blocks of that range at boot and `bind()` inside a reserved
+  block fails with `Permission denied` (`SITL: input bind` /
+  `SITL: state bind` at startup). Check with
+  `netsh interface ipv4 show excludedportrange protocol=udp` and pass
+  ports below 49152 - e.g. `--input-port 17733 --state-port 17734`, with
+  the GUI's matching `--port` / `--state-port`. CI's Windows smoke test
+  uses the 1773x ports for this reason. The CAN multicast port (57732)
+  is fixed for wire compatibility with libcanard / ArduPilot SITL and
+  cannot be moved; if that one lands in a reserved block, either free
+  the range (`net stop winnat`, restart, `net start winnat`) or run with
+  `--can-uri none`.
 - a socket never receives its own multicast on Windows, so the CAN TX
   self test is skipped there; on a machine with several interfaces pass
   an explicit one as `--can-uri mcast:0:<ip>`.

@@ -101,12 +101,22 @@ jobs:
         shell: C:\cygwin\bin\bash.exe --noprofile --norc -o igncr -eo pipefail '{0}'
         run: |
           cd $(cygpath -u "$GITHUB_WORKSPACE")
-          ./obj/AM32_AM32_SITL_CAN_*.elf --can-uri none --input-type 1 >boot.log 2>&1 &
+          # Not the 5773x defaults: those sit in the Windows dynamic port
+          # range (49152-65535), which Hyper-V/WinNAT reserves in blocks on
+          # the hosted runners - bind() there fails with EACCES ("Permission
+          # denied"). Anything below 49152 is outside the reservable range.
+          ./obj/AM32_AM32_SITL_CAN_*.elf --can-uri none --input-type 1 \
+            --input-port 17733 --state-port 17734 >boot.log 2>&1 &
           sleep 3
           kill %1 || true
           cat boot.log
           grep -q "PWM/DShot input on udp port" boot.log
           grep -q "state/model port udp" boot.log
+
+      - name: Dump reserved UDP port ranges on failure
+        if: failure()
+        shell: cmd
+        run: netsh interface ipv4 show excludedportrange protocol=udp
 
       - name: Package binary with cygwin runtime
         shell: C:\cygwin\bin\bash.exe --noprofile --norc -o igncr -eo pipefail '{0}'
