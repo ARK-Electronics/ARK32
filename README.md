@@ -1,12 +1,12 @@
-# AM32 — ARK Electronics fork
+# ARK32
 
 Firmware for ARM-based brushless ESC (electronic speed controllers).
 
-This repository is a **fork of [upstream AM32](https://github.com/am32-firmware/AM32)** maintained by **[ARK Electronics](https://arkelectron.com/)**. It tracks upstream capability while carrying ARK’s product line, refactor work, and test infrastructure.
+**ARK32** is a **fork of [upstream AM32](https://github.com/am32-firmware/AM32)** maintained by **[ARK Electronics](https://arkelectron.com/)**. It tracks upstream capability while carrying ARK’s product line, control-path work, and test infrastructure. (This repository was previously published as `ARK-Electronics/AM32`; that URL redirects here.)
 
-| | Upstream | This fork |
+| | Upstream AM32 | ARK32 |
 |--|----------|-----------|
-| Remote | [am32-firmware/AM32](https://github.com/am32-firmware/AM32) | [ARK-Electronics/AM32](https://github.com/ARK-Electronics/AM32) |
+| Remote | [am32-firmware/AM32](https://github.com/am32-firmware/AM32) | [ARK-Electronics/ARK32](https://github.com/ARK-Electronics/ARK32) |
 | Product branch | `main` | **`ark-release`** |
 | Focus | Multi-vendor ESC firmware | ARK targets + maintainability + CI |
 
@@ -14,7 +14,23 @@ For stock AM32 releases, configurators, Discord, and community support, prefer *
 
 ---
 
-## What this fork adds
+## What ARK32 adds
+
+### Commutation: BLHeli-style blind stepping, poll mode is startup-only
+
+Upstream runs two commutation modes and switches between them at runtime: an interrupt-driven closed loop on the comparator zero-cross (ZC), and a slower polled ("old routine") mode that it falls back to whenever the average commutation interval gets long. On ARK targets that fallback was the failure mode — a single missed crossing under load dropped the loop back to poll mode, which is slower, so the average got worse, so it stayed there. Motors could sit in an OL↔CL oscillation instead of spooling.
+
+ARK32 replaces the runtime mode switch with per-step extrapolation, the way BLHeli handles a missed crossing:
+
+- **Missed-ZC deadline.** After each commutation, `COM_TIMER` is re-armed as a deadline for the *next* crossing — expected arrival plus 50% grace. An accepted crossing cancels it by re-arming the timer for the normal commutation schedule.
+- **Blind step.** If the deadline fires first, the ESC commutates blind and takes the full elapsed time as the (late) interval measurement. The inflated sample pulls the running average toward *slower* timing — the safe direction for a decelerating rotor — and the next real crossing resyncs immediately. Blind steps do not count as zero crosses.
+- **Bounded.** 8 consecutive blind steps means position is genuinely unknown: commutation stops and the existing `INTERVAL_TIMER` stall rail restarts the motor through the normal startup ramp.
+- **No CL→OL exit at runtime.** Poll mode's enter thresholds are unchanged, but they now only apply during startup. Once the loop is on interrupts it stays there or restarts — it never degrades into polling.
+- **Interrupt-ZC trust rail.** A closed loop can hold a *stable false lock*, tracking switching artifact edges below usable BEMF: crossings keep arriving on time, so neither the blind-step deadline nor the average-jump desync check can see anything wrong. If a closed loop's per-electrical-rev average stays above `polling_mode_changeover + 500` for 4 consecutive revs, it is treated as a desync and restarted through startup. The 4-rev gate keeps a lagging average during spool-up from tripping it.
+
+Net effect: a missed crossing costs one extrapolated step instead of a mode change. In SITL, `racer_5inch` spools to ~13.7k rpm and holds, where the previous behavior bounced between open and closed loop around ~3k. Low-throttle crawl and throttle-chop behavior are unchanged.
+
+Source: [`Src/bemf_zc.c`](Src/bemf_zc.c) (deadline, blind step, resync), [`Src/commutation.c`](Src/commutation.c) (mode entry), [`Src/runtime_loop.c`](Src/runtime_loop.c) (desync / trust rail).
 
 ### Global refactor
 Large control-path split out of a monolithic `main.c` into focused modules (runtime, settings, motor control helpers, and related MCU/F051 work). The goal is safer changes, clearer ownership of hot paths, and room for instrumentation without growing one file forever.
@@ -52,7 +68,7 @@ In-the-loop bench automation for the **ARK 4IN1** (and related F051 work): build
 
 ## Build (make + GCC)
 
-IDE project trees (Keil / MRS) are **not** maintained in this fork. Use the Makefile and the pinned **xPack GNU Arm Embedded GCC** (see `make/tools.mk`).
+IDE project trees (Keil / MRS) are **not** maintained in ARK32. Use the Makefile and the pinned **xPack GNU Arm Embedded GCC** (see `make/tools.mk`).
 
 ```bash
 # Install the pinned xPack GNU Arm Embedded GCC 15 into tools/<os>/
@@ -97,7 +113,7 @@ Upstream feature docs and crawler notes: [AM32 wiki / crawler hardware](https://
 
 ## Motor beeps and sounds
 
-AM32 has no speaker. Beeps are PWM on the motor phases so the windings act as a small transducer (same idea as other BLHeli-family ESCs). Implementation: [`Src/sounds.c`](Src/sounds.c) / [`Inc/sounds.h`](Inc/sounds.h). Volume is EEPROM `beep_volume` (0–11; DroneCAN param `BEEP_VOLUME`, default 5). Sounds only run when the motor is **not spinning** (idle / disarmed / zero throttle as applicable).
+An ESC has no speaker. Beeps are PWM on the motor phases so the windings act as a small transducer (same idea as other BLHeli-family ESCs). Implementation: [`Src/sounds.c`](Src/sounds.c) / [`Inc/sounds.h`](Inc/sounds.h). Volume is EEPROM `beep_volume` (0–11; DroneCAN param `BEEP_VOLUME`, default 5). Sounds only run when the motor is **not spinning** (idle / disarmed / zero throttle as applicable).
 
 Pitch below is **relative** (higher PWM timer prescaler → lower pitch). Exact Hz depends on MCU clock and timer setup. The ARK signature tunes (startup and arm/beacon-4 morse) instead use fixed note frequencies via `playBJNote`.
 
@@ -203,11 +219,11 @@ These are **upstream / community** tools; they are not ARK-specific:
 - Bootloaders: [AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)  
 - Target list: [`Inc/targets.h`](Inc/targets.h) (this tree) or [upstream targets.h](https://github.com/am32-firmware/AM32/blob/main/Inc/targets.h)
 
-To put AM32 on a blank ESC you still need a matching MCU bootloader (ST-LINK / GD-LINK / CMSIS-DAP / AT-LINK, etc.), then flash application firmware with a configurator or one-wire serial path.
+To put ARK32 on a blank ESC you still need a matching MCU bootloader (ST-LINK / GD-LINK / CMSIS-DAP / AT-LINK, etc.), then flash application firmware with a configurator or one-wire serial path.
 
 ---
 
-## Hardware (typical for this fork)
+## Hardware (typical for ARK32)
 
 ARK work centers on **STM32F051** 4-in-1 ESCs and related F051 targets, while the tree still builds the broader AM32 MCU set above. Upstream also documents STSPIN32F0, G071, GD32E230, AT32F415/F421, and others — see their hardware notes and compatibility charts.
 
@@ -217,7 +233,7 @@ ARK work centers on **STM32F051** 4-in-1 ESCs and related F051 targets, while th
 
 | Topic | Where |
 |-------|--------|
-| **ARK / this fork** | [ARK-Electronics/AM32](https://github.com/ARK-Electronics/AM32) issues and PRs on `ark-release` |
+| **ARK32** | [ARK-Electronics/ARK32](https://github.com/ARK-Electronics/ARK32) issues and PRs on `ark-release` |
 | **Upstream AM32** | [Discord](https://discord.gg/h7ddYMmEVV), [Patreon](https://www.patreon.com/user?u=44228479), [am32.ca](https://am32.ca) |
 
 ---
@@ -230,4 +246,4 @@ GPL-3.0 — see [LICENSE](LICENSE). Same license family as upstream AM32.
 
 ## Upstream credits
 
-AM32 exists because of its authors, sponsors, and community. This fork inherits that work; see the [upstream README](https://github.com/am32-firmware/AM32/blob/main/README.md) for the full sponsor and contributor lists.
+AM32 exists because of its authors, sponsors, and community. ARK32 inherits that work; see the [upstream README](https://github.com/am32-firmware/AM32/blob/main/README.md) for the full sponsor and contributor lists.
