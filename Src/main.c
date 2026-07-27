@@ -300,7 +300,11 @@ int main(void)
 	checkDeviceInfo();
 	initCorePeripherals();
 	enableCorePeripherals();
-	/* May program BL region and NVIC_SystemReset when image differs. */
+	/*
+	 * May program BL region. Arms IWDG only if an update runs; resets
+	 * only on full verify success. On failure returns here with the app
+	 * still usable (see Src/bootloader_update.c).
+	 */
 	maybe_update_bootloader();
 	loadEEpromSettings();
 #endif

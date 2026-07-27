@@ -16,6 +16,14 @@ These are the build artifacts of [AM32-bootloader](https://github.com/AlexKlimaj
 
 The image is only linked for F051 targets built without `HWCI_PERF=1`.
 
+## Risk / recovery
+
+App-side BL rewrite erases flash pages at `0x08000000` (reset vectors and the one-wire bootloader). Power loss after page 0 is erased and before vectors are rewritten leaves the chip without a valid reset vector — it will not reach the app or the previous bootloader.
+
+- **In-field recovery:** SWD (or another pre-existing ROM/system boot path) is required to reflash the bootloader region. Keep a known-good `AM32_F051_BOOTLOADER_*.bin` and OpenOCD/probe procedure for production and bench recovery.
+- **Software path:** On program/verify failure the update aborts without `NVIC_SystemReset`, re-enables IRQs, and continues into the already-running app so the board can still be reached if vectors survived. Sticky flash faults cannot hang forever with IRQs off (bounded per-page retries + IWDG armed for the update).
+- **Power-loss mid-update** is still a brick until SWD reflash — that is inherent to rewriting the boot region in place.
+
 ## Updating
 
 1. Build the new bootloader and drop the `.bin` in here, keeping the version in the filename.
