@@ -71,10 +71,18 @@ CFLAGS_COMMON := $(CFLAGS_BASE)
 # switching it on for whichever feature needs the space keeps one codegen
 # configuration in tree, so what CI and the HWCI bench measure is what ships.
 #
+# Applies to every cross-compiled MCU (not only F051). scripts/check-codegen-ark.sh
+# (make codegen-check-ark / CI) only builds ARK_4IN1_F051, AM32REF_F051, and
+# REF_G431: it asserts F051 hot ISR entry points + known RAM_FUNC callees still
+# land in RAM when they remain as symbols, and that externally-read sections
+# (.file_name, .app_signature) are non-empty. It does not replace HWCI for
+# functional timing risk — global -O3 previously broke hold100 free-run on
+# ARK F051; LTO is a different knob but still wants a bench smoke before it is
+# trusted as the ship default.
+#
 # This does interact with the selective -O3 above: RAM_FUNC carries
 # optimize("O3") plus noclone, and the noclone is there precisely so LTO
-# constant-propagation clones cannot escape .ramfunc. scripts/check-ramfunc.sh
-# asserts every RAM_FUNC still lands in RAM, and CI runs it.
+# constant-propagation clones cannot escape .ramfunc.
 #
 # Escape hatch: LTO=0 builds without it, for bisecting a suspected miscompile
 # without editing this file.
@@ -205,9 +213,10 @@ targets:
 cppcheck:
 	$(QUIET)bash scripts/cppcheck-ark.sh
 
-# Assert the codegen invariants LTO can break silently: RAM_FUNC hot paths still
-# resident in RAM, and externally-read sections (.file_name, .app_signature) not
-# emptied by dead-code elimination. See scripts/check-codegen-ark.sh.
+# Assert the codegen invariants LTO can break silently: F051 hot ISR entry
+# points (+ known RAM_FUNC callees when still out-of-line) resident in RAM, and
+# externally-read sections (.file_name, .app_signature) not emptied by DCE.
+# See scripts/check-codegen-ark.sh.
 .PHONY : codegen-check-ark
 codegen-check-ark:
 	$(QUIET)$(MAKE) -B ARK_4IN1_F051 AM32REF_F051 REF_G431

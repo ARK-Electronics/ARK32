@@ -8,9 +8,17 @@
 #      RAM_FUNC so they run out of RAM instead of paying F051 flash wait states
 #      in an ISR. LTO is free to inline a RAM_FUNC body into a flash-resident
 #      caller, which drops the hot path back into flash with nothing to notice
-#      it. (Inlining into another RAM-resident function is fine and expected -
-#      that is why this checks the ISR entry points rather than the callees,
-#      which LTO legitimately absorbs.)
+#      it.
+#
+#      Policy (two tiers):
+#        - Required symbols must exist and live in RAM (0x20000000..). These are
+#          the F051 vector-table ISR entry points for the zero-cross comparator,
+#          20 kHz control loop, and commutation timer. LTO may absorb callees
+#          into them; the entries themselves must remain RAM-resident.
+#        - Optional hot callees (other known RAM_FUNC names). If still present
+#          as out-of-line symbols they must be in RAM — that is the silent
+#          "thin RAM ISR + flash body" failure mode. If LTO fully absorbs them
+#          into a RAM-resident caller, the symbol is gone and that is OK.
 #
 #   2. Section-placed data. .file_name and .app_signature are read out of the
 #      image by external tooling and never from C, so LTO drops them as dead
@@ -63,36 +71,50 @@ SECS=$("$READELF_BIN" -S -W "$ELF")
 
 rc=0
 
-# --- 1. hot-path ISR entry points must live in RAM (0x20000000..) -------------
-# These are the vector-table entries for the zero-cross comparator, the control
-# loop and the commutation timer. Whatever LTO inlines into them comes along.
-HOT_SYMS="ADC1_COMP_IRQHandler TIM6_DAC_IRQHandler TIM14_IRQHandler comStep commutate"
+# --- 1. hot-path symbols must live in RAM (0x20000000..) when present --------
+# Required: F051 vector-table ISR entry points (must exist + RAM).
+# Optional: known RAM_FUNC callees — if out-of-line, must be RAM; if absorbed, OK.
+REQUIRED_HOT_SYMS="ADC1_COMP_IRQHandler TIM6_DAC_IRQHandler TIM14_IRQHandler"
+OPTIONAL_HOT_SYMS="interruptRoutine tenKhzRoutine PeriodElapsedCallback getBemfState commutate comStep changeCompInput maskPhaseInterrupts enableCompInterrupts faultSignalTimeoutTick"
+
+check_sym_ram() {
+  local sym="$1" mode="$2"  # mode: required | optional
+  local addr
+  addr=$(awk -v s="$sym" '$NF==s {print $1; exit}' <<<"$SYMS")
+  if [ -z "$addr" ]; then
+    if [ "$mode" = "required" ]; then
+      echo "  FAIL: $sym not found in the image" >&2
+      rc=1
+    else
+      echo "  ok   $sym absent (LTO absorbed into caller)"
+    fi
+    return
+  fi
+  case "$addr" in
+    20*) echo "  ok   $sym @ 0x$addr (RAM)" ;;
+    *)   echo "  FAIL: $sym @ 0x$addr is not in RAM — RAM_FUNC placement lost" >&2; rc=1 ;;
+  esac
+}
 
 echo "=== codegen check: $ELF ==="
 if [ "$CHECK_RAMFUNC" -eq 1 ]; then
-  for sym in $HOT_SYMS; do
-    addr=$(awk -v s="$sym" '$NF==s {print $1; exit}' <<<"$SYMS")
-    if [ -z "$addr" ]; then
-      echo "  FAIL: $sym not found in the image" >&2
-      rc=1
-      continue
-    fi
-    case "$addr" in
-      20*) echo "  ok   $sym @ 0x$addr (RAM)" ;;
-      *)   echo "  FAIL: $sym @ 0x$addr is not in RAM — RAM_FUNC placement lost" >&2; rc=1 ;;
-    esac
+  for sym in $REQUIRED_HOT_SYMS; do
+    check_sym_ram "$sym" required
+  done
+  for sym in $OPTIONAL_HOT_SYMS; do
+    check_sym_ram "$sym" optional
   done
 else
   echo "  --   RAM residency skipped (RAM_FUNC has no section attribute here)"
 fi
 
-# --- 2. externally-read sections must be non-empty ----------------------------
+# --- 2. special sections must be non-empty when present -----------------------
 # .app_signature only exists in CAN builds; absent is fine, present-but-empty is
 # not. Locate the size relative to the section name rather than by fixed column:
 # readelf writes the index as "[ 9]" but "[12]", so a single-digit index splits
 # into two fields and shifts every positional column by one.
 check_section() {
-  local name="$1" required="$2"
+  local name="$1" required="$2" empty_hint="$3"
   local size
   size=$(awk -v n="$name" '{for (i = 1; i <= NF; i++) if ($i == n) { print $(i + 4); exit }}' <<<"$SECS")
   if [ -z "$size" ]; then
@@ -104,16 +126,19 @@ check_section() {
     return
   fi
   if [ $((16#$size)) -eq 0 ]; then
-    echo "  FAIL: section $name is present but empty — LTO dropped its contents" >&2
-    echo "        (the object needs __attribute__((used)))" >&2
+    echo "  FAIL: section $name is present but empty — $empty_hint" >&2
     rc=1
   else
     echo "  ok   $name = $((16#$size)) bytes"
   fi
 }
-check_section .file_name required
-check_section .app_signature optional
-check_section .noinit required
+# Externally-read image metadata: nothing in C reads these, so LTO DCE empties
+# them without __attribute__((used)).
+check_section .file_name required "LTO dropped its contents (object needs __attribute__((used)))"
+check_section .app_signature optional "LTO dropped its contents (object needs __attribute__((used)))"
+# Soft-reset cookie / retained SRAM (read+written from C). Empty here usually
+# means the cookie was removed or the linker script changed — not LTO DCE.
+check_section .noinit required "expected boot_sound_cookie (or other .noinit) — cookie removed or linker script changed?"
 
 if [ "$rc" -ne 0 ]; then
   echo "check-codegen-ark: FAIL" >&2
