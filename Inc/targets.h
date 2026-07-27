@@ -73,8 +73,17 @@
 #	define MILLIVOLT_PER_AMP 10
 #	define CURRENT_OFFSET 1 // millivolts
 #	define TARGET_VOLTAGE_DIVIDER 310
-#	define RAMP_SPEED_LOW_RPM 1
-#	define RAMP_SPEED_HIGH_RPM 1
+/* Match ARK_4IN1_F051 vehicle policy (voltage-comp ramp + eeprom max_ramp
+ * can only lower these ceilings). Was 1/1 (SLO-style) before the F051
+ * ramp/governor work was ported to this target. */
+#	define RAMP_SPEED_LOW_RPM 3
+#	define RAMP_SPEED_HIGH_RPM 8
+/* Unconfigured-eeprom max_ramp default — same 2 %/ms as 4IN1 / factory JSON. */
+#	define TARGET_DEFAULT_MAX_RAMP 20
+/* Closed-loop earlier at low RPM (same bench rationale as ARK_4IN1_F051). */
+#	ifndef POLLING_MODE_THRESHOLD
+#		define POLLING_MODE_THRESHOLD 5000
+#	endif
 // #define NO_POLLING_START
 #	define USE_RGB_LED
 #	define RED_PORT GPIOC

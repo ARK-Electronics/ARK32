@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Build a production full-flash image for ARK F051 ESCs.
+"""Build a production full-flash image for ARK ESCs.
 
-Assembles a single binary that covers the entire STM32F051 32 KiB flash map:
+Assembles a single binary that covers the whole MCU flash map:
 
-  0x08000000  bootloader region (4 KiB)     — ARK32-bootloader .bin, 0xFF padded
-  0x08001000  application region (27 KiB)  — make ARK_4IN1_F051 .bin, 0xFF padded
-  0x08007C00  EEPROM settings page (1 KiB) — factory defaults, 0xFF padded
+  bootloader region  — optional .bin (0xFF padded if omitted / short)
+  application region — make <TARGET> .bin, 0xFF padded
+  EEPROM page        — factory defaults from JSON, 0xFF padded
 
-Production used to: flash BL, flash app, write EEPROM via AM32 configurator,
-tweak settings, then ST-Link dump the whole chip. This script produces that
-same image from the repo so a release is one `make factory-image` artifact.
+Default layout is the STM32F051 32 KiB ARK 4IN1 map. Products with a
+``flash_map`` object in their defaults JSON (e.g. ARK_G431_CAN) override it.
 
 EEPROM field encodings match Inc/eeprom.h and Src/settings.c.
 """
@@ -24,18 +23,16 @@ import sys
 from pathlib import Path
 
 # STM32F051 flash map used by ARK_4IN1_F051 (Inc/targets.h, STM32F051K6TX_FLASH.ld)
-FLASH_SIZE = 32 * 1024
-BL_OFFSET = 0x0000
-BL_REGION_SIZE = 4 * 1024
-APP_OFFSET = 0x1000
-APP_REGION_SIZE = 27 * 1024  # ends at EEPROM_OFFSET
-EEPROM_OFFSET = 0x7C00
-EEPROM_PAGE_SIZE = 1 * 1024
-EEPROM_SETTINGS_SIZE = 192
+DEFAULT_FLASH_MAP = {
+    "flash_size": 32 * 1024,
+    "bl_offset": 0x0000,
+    "bl_region_size": 4 * 1024,
+    "app_offset": 0x1000,
+    "eeprom_offset": 0x7C00,
+    "eeprom_page_size": 1 * 1024,
+}
 
-assert BL_REGION_SIZE + APP_REGION_SIZE + EEPROM_PAGE_SIZE == FLASH_SIZE
-assert APP_OFFSET == BL_OFFSET + BL_REGION_SIZE
-assert EEPROM_OFFSET == APP_OFFSET + APP_REGION_SIZE
+EEPROM_SETTINGS_SIZE = 192
 
 
 class FactoryImageError(SystemExit):
@@ -54,13 +51,43 @@ def _read_version_h(path: Path) -> tuple[int, int, int]:
     return one("VERSION_MAJOR"), one("VERSION_MINOR"), one("EEPROM_VERSION")
 
 
+def resolve_flash_map(defaults: dict) -> dict:
+    """Merge product flash_map over F051 defaults; validate sizes."""
+    m = dict(DEFAULT_FLASH_MAP)
+    raw = defaults.get("flash_map") or {}
+    for k in DEFAULT_FLASH_MAP:
+        if k in raw:
+            m[k] = int(raw[k])
+    flash = m["flash_size"]
+    bl_off = m["bl_offset"]
+    bl_sz = m["bl_region_size"]
+    app_off = m["app_offset"]
+    ee_off = m["eeprom_offset"]
+    ee_sz = m["eeprom_page_size"]
+    if bl_off != 0:
+        raise FactoryImageError("flash_map.bl_offset must be 0")
+    if app_off != bl_off + bl_sz:
+        raise FactoryImageError(
+            f"flash_map: app_offset 0x{app_off:X} != bl_offset+bl_region_size "
+            f"0x{bl_off + bl_sz:X}"
+        )
+    if ee_off + ee_sz > flash:
+        raise FactoryImageError(
+            f"flash_map: eeprom ends past flash_size "
+            f"(0x{ee_off + ee_sz:X} > 0x{flash:X})"
+        )
+    if ee_off < app_off:
+        raise FactoryImageError("flash_map: eeprom_offset before app_offset")
+    m["app_region_size"] = ee_off - app_off
+    return m
+
+
 def encode_motor_kv(kv: int) -> int:
     """eeprom motor_kv byte: runtime kv = eeprom * 40 + 20."""
     if kv < 20 or kv > 10220:
         raise FactoryImageError(f"motor_kv {kv} out of range 20..10220")
     stored = (kv - 20) // 40
     if stored * 40 + 20 != kv:
-        # nearest legal value that encodes exactly
         nearest = stored * 40 + 20
         raise FactoryImageError(
             f"motor_kv {kv} is not representable exactly "
@@ -73,12 +100,8 @@ def encode_max_ramp_percent_per_ms(pct: float) -> int:
     """eeprom max_ramp: for values >= 10, storage is percent_per_ms * 10."""
     if pct <= 0 or pct > 25.5:
         raise FactoryImageError(f"max_ramp_percent_per_ms {pct} out of range")
-    # Prefer the coarse form (value >= 10) used by the configurator for
-    # whole-percent rates: 2.0 %/ms -> 20.
     stored = int(round(pct * 10))
     if stored < 10:
-        # fine mode is < 10 raw units (0.1 %/ms with ramp_divider); allow
-        # explicit sub-1%/ms via fractional pct if someone needs it.
         fine = int(round(pct * 10))
         if fine < 1 or fine > 9:
             raise FactoryImageError(
@@ -101,12 +124,10 @@ def encode_advance_degrees(degrees: int) -> int:
     """
     if degrees < 0 or degrees > 30:
         raise FactoryImageError(f"advance_degrees {degrees} out of range 0..30")
-    # exact integer temp that best matches: temp = round(deg * 64 / 60)
     temp = int(round(degrees * 64 / 60.0))
     if temp > 32:
         temp = 32
-    stored = temp + 10
-    return stored
+    return temp + 10
 
 
 def encode_servo_low_us(us: int) -> int:
@@ -136,10 +157,14 @@ def encode_servo_neutral_us(us: int) -> int:
 
 
 def build_eeprom_page(defaults: dict, version_major: int, version_minor: int,
-                      eeprom_version: int) -> bytes:
-    """Build a 1 KiB EEPROM page (192-byte settings + 0xFF pad)."""
+                      eeprom_version: int, page_size: int) -> bytes:
+    """Build an EEPROM page (192-byte settings + 0xFF pad to page_size)."""
+    if page_size < EEPROM_SETTINGS_SIZE:
+        raise FactoryImageError(
+            f"eeprom_page_size {page_size} < settings size {EEPROM_SETTINGS_SIZE}"
+        )
     s = defaults["settings"]
-    buf = bytearray([0xFF] * EEPROM_PAGE_SIZE)
+    buf = bytearray([0xFF] * page_size)
 
     # Offsets from Inc/eeprom.h. Start from upstream configurator skeleton
     # (Src/DroneCAN/DroneCAN.c default_settings) then overlay ARK production
@@ -234,21 +259,26 @@ def place_region(image: bytearray, offset: int, region_size: int, data: bytes,
             f"(offset 0x{offset:04X})"
         )
     image[offset:offset + len(data)] = data
-    # remainder of region already 0xFF
 
 
-def build_full_image(bootloader: bytes, app: bytes, eeprom_page: bytes) -> bytes:
-    image = bytearray([0xFF] * FLASH_SIZE)
-    place_region(image, BL_OFFSET, BL_REGION_SIZE, bootloader, "bootloader")
-    place_region(image, APP_OFFSET, APP_REGION_SIZE, app, "application")
-    place_region(image, EEPROM_OFFSET, EEPROM_PAGE_SIZE, eeprom_page, "eeprom")
+def build_full_image(bootloader: bytes, app: bytes, eeprom_page: bytes,
+                     fmap: dict) -> bytes:
+    image = bytearray([0xFF] * fmap["flash_size"])
+    place_region(
+        image, fmap["bl_offset"], fmap["bl_region_size"], bootloader, "bootloader"
+    )
+    place_region(
+        image, fmap["app_offset"], fmap["app_region_size"], app, "application"
+    )
+    place_region(
+        image, fmap["eeprom_offset"], fmap["eeprom_page_size"], eeprom_page, "eeprom"
+    )
     return bytes(image)
 
 
 def write_intel_hex(path: Path, data: bytes, base: int = 0x08000000) -> None:
     """Minimal I32HEX writer for a contiguous flash image."""
     lines: list[str] = []
-    # extended linear address for 0x08000000
     ela = (base >> 16) & 0xFFFF
     lines.append(_hex_record(0, 0x04, struct.pack(">H", ela)))
     offset = base & 0xFFFF
@@ -256,7 +286,6 @@ def write_intel_hex(path: Path, data: bytes, base: int = 0x08000000) -> None:
     while i < len(data):
         chunk = data[i:i + 16]
         addr = (offset + i) & 0xFFFF
-        # cross 64K boundary
         abs_addr = base + i
         if i > 0 and (abs_addr & 0xFFFF) == 0:
             ela = (abs_addr >> 16) & 0xFFFF
@@ -278,20 +307,23 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--defaults", type=Path, required=True,
                    help="factory/*_eeprom_defaults.json")
-    p.add_argument("--bootloader", type=Path, required=True,
-                   help="Bootloaders/AM32_F051_BOOTLOADER_*.bin")
+    p.add_argument("--bootloader", type=Path, default=None,
+                   help="Bootloaders/*.bin (optional: region filled with 0xFF)")
     p.add_argument("--app", type=Path, required=True,
-                   help="obj/ARK32_ARK_4IN1_F051_*.bin application image")
+                   help="obj/ARK32_<PRODUCT>_*.bin application image")
     p.add_argument("--version-h", type=Path, default=Path("Inc/version.h"))
     p.add_argument("--out-bin", type=Path, required=True,
-                   help="full 32 KiB flash image (.bin)")
+                   help="full flash image (.bin)")
     p.add_argument("--out-hex", type=Path, default=None,
                    help="optional Intel HEX of the full image")
     p.add_argument("--out-eeprom", type=Path, default=None,
-                   help="optional 1 KiB eeprom page dump")
+                   help="optional eeprom page dump")
+    p.add_argument("--allow-empty-bootloader", action="store_true",
+                   help="permit missing --bootloader (0xFF-padded BL region)")
     args = p.parse_args(argv)
 
     defaults = json.loads(args.defaults.read_text(encoding="utf-8"))
+    fmap = resolve_flash_map(defaults)
     ver_maj, ver_min, eeprom_ver_h = _read_version_h(args.version_h)
     eeprom_ver = int(defaults.get("eeprom_version", eeprom_ver_h))
     if eeprom_ver != eeprom_ver_h:
@@ -301,11 +333,28 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
-    eeprom_page = build_eeprom_page(defaults, ver_maj, ver_min, eeprom_ver)
-    bootloader = args.bootloader.read_bytes()
-    app = args.app.read_bytes()
+    eeprom_page = build_eeprom_page(
+        defaults, ver_maj, ver_min, eeprom_ver, fmap["eeprom_page_size"]
+    )
 
-    image = build_full_image(bootloader, app, eeprom_page)
+    if args.bootloader is not None:
+        if not args.bootloader.is_file():
+            raise FactoryImageError(f"bootloader not found: {args.bootloader}")
+        bootloader = args.bootloader.read_bytes()
+    elif args.allow_empty_bootloader:
+        bootloader = b""
+        print(
+            "warning: no bootloader; BL region will be 0xFF "
+            "(flash BL separately before shipping)",
+            file=sys.stderr,
+        )
+    else:
+        raise FactoryImageError(
+            "bootloader required (pass --bootloader or --allow-empty-bootloader)"
+        )
+
+    app = args.app.read_bytes()
+    image = build_full_image(bootloader, app, eeprom_page, fmap)
 
     args.out_bin.parent.mkdir(parents=True, exist_ok=True)
     args.out_bin.write_bytes(image)
@@ -325,8 +374,10 @@ def main(argv: list[str] | None = None) -> int:
     for line in decode_summary(eeprom_page):
         print(f"  {line}")
     print(
-        f"regions: bl={len(bootloader)}B app={len(app)}B "
-        f"eeprom_settings={EEPROM_SETTINGS_SIZE}B"
+        f"regions: bl={len(bootloader)}B/{fmap['bl_region_size']}B "
+        f"app={len(app)}B/{fmap['app_region_size']}B "
+        f"eeprom@0x{fmap['eeprom_offset']:X} "
+        f"settings={EEPROM_SETTINGS_SIZE}B page={fmap['eeprom_page_size']}B"
     )
     return 0
 
