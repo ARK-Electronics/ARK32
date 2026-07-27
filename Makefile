@@ -250,8 +250,16 @@ codegen-check-ark:
 # Build ARK F051 with HWCI_PERF and enforce flash/RAM headroom (F051 is tight).
 # -B forces a rebuild so a prior non-HWCI image is not size-checked by mistake.
 .PHONY : size-check-ark
+# Gate both ARK F051 variants. Neither bounds the other any more: the HWCI build
+# carries the perf struct the release build lacks, and the release build carries
+# the 4 KiB embedded bootloader image (and LTO) that HWCI omits. Checking one no
+# longer implies the other fits.
 size-check-ark:
+	$(QUIET)$(ECHO) "--- ARK_4IN1_F051 HWCI_PERF=1 (no embedded bootloader) ---"
 	$(QUIET)$(MAKE) -B ARK_4IN1_F051 HWCI_PERF=1
+	$(QUIET)bash scripts/check-size-ark.sh
+	$(QUIET)$(ECHO) "--- ARK_4IN1_F051 release (embedded bootloader + LTO) ---"
+	$(QUIET)$(MAKE) -B ARK_4IN1_F051
 	$(QUIET)bash scripts/check-size-ark.sh
 
 # Code formatting (clang-format ≈ PX4 astyle/Linux look; see .clang-format).

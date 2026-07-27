@@ -70,10 +70,14 @@ BSS=$(sec_size .bss)
 # Survives soft-reset (not zeroed); currently the signal-lost boot cookie
 NOINIT=$(sec_size .noinit)
 HEAPSTACK=$(sec_size ._user_heap_stack)
+# Embedded bootloader image, if this build carries one. It sits in its own
+# section rather than .rodata, so it has to be added explicitly or the gate
+# silently under-reports by the whole 4 KiB. 0 on builds without it.
+BL_IMAGE=$(sec_size .bl_image)
 
 # RX image in flash: code + const + vectab + filename + init arrays +
-# the flash load image of .data
-FLASH_USED=$((ISR + TEXT + RODATA + INITA + FINIA + FILE_NAME_SZ + DATA))
+# embedded bootloader image + the flash load image of .data
+FLASH_USED=$((ISR + TEXT + RODATA + INITA + FINIA + FILE_NAME_SZ + BL_IMAGE + DATA))
 # RAM at runtime: .data + .bss + .noinit + heap/stack reservation
 RAM_USED=$((DATA + BSS + NOINIT + HEAPSTACK))
 
@@ -86,7 +90,9 @@ flash_pct=$(awk -v u="$FLASH_USED" -v c="$FLASH_CAPACITY" 'BEGIN{printf "%.2f", 
 ram_pct=$(awk -v u="$RAM_USED" -v c="$RAM_CAPACITY" 'BEGIN{printf "%.2f", 100*u/c}')
 
 echo "=== size check: $ELF ==="
-echo "  .text=$TEXT .rodata=$RODATA .data=$DATA .bss=$BSS .noinit=$NOINIT heap/stack=$HEAPSTACK"
+BL_NOTE=""
+[ "${BL_IMAGE:-0}" -gt 0 ] 2>/dev/null && BL_NOTE=" .bl_image=$BL_IMAGE"
+echo "  .text=$TEXT .rodata=$RODATA .data=$DATA .bss=$BSS .noinit=$NOINIT heap/stack=$HEAPSTACK$BL_NOTE"
 echo "  FLASH used=$FLASH_USED / $FLASH_CAPACITY (${flash_pct}%)  limit=${FLASH_MAX} (${FLASH_MAX_PCT}%)"
 echo "  RAM   used=$RAM_USED / $RAM_CAPACITY (${ram_pct}%)  limit=${RAM_MAX} (${RAM_MAX_PCT}%)"
 
