@@ -103,7 +103,10 @@ uint16_t low_cell_volt_cutoff = 330; // 3.3volts per cell
 
 //=========================== END EEPROM Defaults ===========================
 
-const char filename[30] AM32_FLASH_SECTION(".file_name") = FILE_NAME;
+/* used: nothing in C reads this - the configurator reads the .file_name region
+ * out of the image - so LTO drops it as dead without the attribute, leaving the
+ * section empty and the firmware unidentifiable. */
+const char filename[30] __attribute__((used)) AM32_FLASH_SECTION(".file_name") = FILE_NAME;
 _Static_assert(sizeof(FIRMWARE_NAME) <= 13, "Firmware name too long"); // max 12 character firmware name plus NULL
 
 // move these to targets folder or peripherals for each mcu
