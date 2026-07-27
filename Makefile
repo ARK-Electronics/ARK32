@@ -175,7 +175,8 @@ $(eval xCFLAGS := $$(if $$(call has_can_suffix,$$(2)),$(CFLAGS_CAN_$(1))))
 $(eval xSRC := $$(if $$(call has_can_suffix,$$(2)),$(SRC_CAN_$(1))))
 
 # Embed the bootloader image on F051 unless this is an HWCI_PERF build, which
-# keeps its flash headroom and its non-LTO codegen for perf instrumentation.
+# keeps its flash headroom for perf instrumentation and has no use for a
+# bootloader update on the bench.
 $(eval xEMBED_BL := $(if $(filter F051,$(1)),$(if $(filter 1,$(HWCI_PERF)),,1)))
 
 # Per-target app sources: drop brushed/hwci unless the product asks for them
@@ -186,14 +187,12 @@ $(eval SRC_APP_$(2) := $(SRC_COMMON_BASE)$(if $(call has_brushed_suffix,$(2)), $
 $(eval xCFLAGS_COMMON := $(if $(CFLAGS_COMMON_$(1)),$(CFLAGS_COMMON_$(1)),$(CFLAGS_COMMON)))
 $(eval xLDFLAGS_COMMON := $(if $(LDFLAGS_COMMON_$(1)),$(LDFLAGS_COMMON_$(1)),$(LDFLAGS_COMMON)))
 
-# The 4 KiB image + update glue is ~1 KiB over non-LTO headroom on F051, so
-# embedding builds use -flto. HWCI stays non-LTO and omits the image.
 # BL_IMAGE_FILE is repo-relative and resolved by the assembler against the cwd,
-# which make always sets to the repo root.
+# which make always sets to the repo root. The 4 KiB image only fits because LTO
+# is on by default (see CFLAGS_COMMON above); it does not turn LTO on itself.
 CFLAGS_$(2) = -DAM32_MCU=\"$(MCU)\" $(MCU_$(1)) -D$(2) $(CFLAGS_$(1)) $(xCFLAGS_COMMON) $(xCFLAGS) \
-	$(if $(xEMBED_BL),-DEMBED_BOOTLOADER -DBL_IMAGE_FILE=\"$(BL_IMAGE_F051)\" -DBL_REGION_SIZE=$(BL_REGION_SIZE_F051) -flto)
-LDFLAGS_$(2) = $(xLDFLAGS_COMMON) $(LDFLAGS_$(1)) $(if $(xLDSCRIPT),-T$(xLDSCRIPT)) \
-	$(if $(xEMBED_BL),-flto)
+	$(if $(xEMBED_BL),-DEMBED_BOOTLOADER -DBL_IMAGE_FILE=\"$(BL_IMAGE_F051)\" -DBL_REGION_SIZE=$(BL_REGION_SIZE_F051))
+LDFLAGS_$(2) = $(xLDFLAGS_COMMON) $(LDFLAGS_$(1)) $(if $(xLDSCRIPT),-T$(xLDSCRIPT))
 
 -include $$($(2)_BASENAME).d
 
@@ -252,13 +251,13 @@ codegen-check-ark:
 .PHONY : size-check-ark
 # Gate both ARK F051 variants. Neither bounds the other any more: the HWCI build
 # carries the perf struct the release build lacks, and the release build carries
-# the 4 KiB embedded bootloader image (and LTO) that HWCI omits. Checking one no
-# longer implies the other fits.
+# the 4 KiB embedded bootloader image HWCI omits. Checking one no longer implies
+# the other fits.
 size-check-ark:
 	$(QUIET)$(ECHO) "--- ARK_4IN1_F051 HWCI_PERF=1 (no embedded bootloader) ---"
 	$(QUIET)$(MAKE) -B ARK_4IN1_F051 HWCI_PERF=1
 	$(QUIET)bash scripts/check-size-ark.sh
-	$(QUIET)$(ECHO) "--- ARK_4IN1_F051 release (embedded bootloader + LTO) ---"
+	$(QUIET)$(ECHO) "--- ARK_4IN1_F051 release (embedded bootloader) ---"
 	$(QUIET)$(MAKE) -B ARK_4IN1_F051
 	$(QUIET)bash scripts/check-size-ark.sh
 
