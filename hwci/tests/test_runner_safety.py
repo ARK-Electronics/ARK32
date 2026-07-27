@@ -1,5 +1,7 @@
 """Runner-level (host-side) safety enforcement - must trip on ANY rig, even
 when the stand backend does no checking of its own."""
+import pytest
+
 from hwci.config import Profile, Segment
 from hwci.esc_telem.kiss import KissFrame
 from hwci.flightstand.base import SafetyLimits
@@ -141,6 +143,51 @@ def test_runner_aborts_on_live_bemf_desync():
     assert "bemf_timeout" in result.meta["aborted"]
     assert thr.disarmed is True
     assert len(result.rows) < 200  # did not run the full 2 s segment out
+
+
+def test_live_desync_ignores_single_sample_blind_swd_glitch():
+    """A one-sample garbage jump on zc_blind_steps must not abort (bench:
+    0 -> 19e6 while eRPM/RPM were healthy)."""
+    from hwci.runner import LiveDesyncWatch, DesyncTripped
+    from hwci.perf import PerfSample
+
+    w = LiveDesyncWatch()
+    # Establish spin
+    w.check(0.30, None, PerfSample(raw={
+        "bemf_timeout_state": 0, "running": 1, "e_rpm": 50,
+        "zc_blind_steps": 0,
+    }))
+    # Single corrupt SWD word — must not raise
+    w.check(0.30, None, PerfSample(raw={
+        "bemf_timeout_state": 0, "running": 1, "e_rpm": 50,
+        "zc_blind_steps": 19_595_444,
+    }))
+    # Next healthy sample
+    w.check(0.30, None, PerfSample(raw={
+        "bemf_timeout_state": 0, "running": 1, "e_rpm": 50,
+        "zc_blind_steps": 0,
+    }))
+
+
+def test_live_desync_aborts_on_sustained_blind_burst():
+    from hwci.runner import LiveDesyncWatch, DesyncTripped
+    from hwci.perf import PerfSample
+
+    w = LiveDesyncWatch()
+    w.check(0.30, None, PerfSample(raw={
+        "bemf_timeout_state": 0, "running": 1, "e_rpm": 50,
+        "zc_blind_steps": 100,
+    }))
+    with pytest.raises(DesyncTripped, match="blind-step"):
+        # Two consecutive real-sized jumps (>=32 each)
+        w.check(0.30, None, PerfSample(raw={
+            "bemf_timeout_state": 0, "running": 1, "e_rpm": 50,
+            "zc_blind_steps": 140,
+        }))
+        w.check(0.30, None, PerfSample(raw={
+            "bemf_timeout_state": 0, "running": 1, "e_rpm": 50,
+            "zc_blind_steps": 180,
+        }))
 
 
 def test_runner_aborts_on_rpm_collapse_while_throttle_high():

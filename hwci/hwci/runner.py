@@ -114,7 +114,10 @@ class LiveDesyncWatch:
         self._ref_rpm: float | None = None
         self._prev_throttle = 0.0
         self._spin_established = False
-        self._blind0: int | None = None
+        # Previous sample's monotonic zc_blind_steps (host-diffed rate).
+        self._blind_prev: int | None = None
+        # Consecutive samples with a real blind-step burst (filters SWD glitches).
+        self._blind_burst_streak = 0
 
     def check(self, throttle: float, stand: StandSample | None,
               pf: PerfSample | None) -> None:
@@ -145,16 +148,35 @@ class LiveDesyncWatch:
                     f"firmware bemf_timeout={bemf} while throttle="
                     f"{thr:.2f} (aborting into desync)")
             # Burst of blind steps after established spin: closed loop is
-            # freewheeling commutations — cut if the counter jumps hard.
+            # freewheeling commutations. Host-diff consecutive samples (the
+            # counter is monotonic u32, like loop_iters). Ignore single-sample
+            # SWD garbage (bench: 0 -> 19e6 while RPM/eRPM were healthy) and
+            # require a short streak so one bad read cannot abort a tune.
             blind = raw.get("zc_blind_steps")
             if blind is not None and self._spin_established and thr >= 0.25:
                 b = int(blind)
-                if self._blind0 is None:
-                    self._blind0 = b
-                elif b - self._blind0 >= 32:
-                    raise DesyncTripped(
-                        f"blind-step burst +{b - self._blind0} "
-                        f"(total {b}) while throttle={thr:.2f}")
+                prev = self._blind_prev
+                self._blind_prev = b
+                if prev is not None and b >= prev:
+                    delta = b - prev
+                    # ~100 Hz sample: real grind is ~tens/sample; multi-thousand
+                    # jumps are corrupt reads, not motor behavior.
+                    if delta > 200:
+                        self._blind_burst_streak = 0
+                    elif delta >= 32:
+                        self._blind_burst_streak += 1
+                        if self._blind_burst_streak >= 2:
+                            raise DesyncTripped(
+                                f"blind-step burst +{delta}/sample "
+                                f"(streak {self._blind_burst_streak}, "
+                                f"total {b}) while throttle={thr:.2f}")
+                    else:
+                        self._blind_burst_streak = 0
+                elif prev is not None and b < prev:
+                    # Firmware counter reset (stats clear) — re-arm.
+                    self._blind_burst_streak = 0
+            else:
+                self._blind_burst_streak = 0
 
         # --- stand RPM collapse while throttle high and not falling ------
         if stand is not None:
@@ -186,7 +208,8 @@ class LiveDesyncWatch:
 
         if thr < self.min_drive_throttle:
             self._ref_rpm = None
-            self._blind0 = None
+            self._blind_prev = None
+            self._blind_burst_streak = 0
         self._prev_throttle = thr
 
 
