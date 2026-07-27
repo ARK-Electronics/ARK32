@@ -14,7 +14,6 @@
 #include "common.h"
 
 extern int16_t converted_degrees;
-extern int32_t smoothed_raw_current;
 extern uint16_t VOLTAGE_DIVIDER;
 
 void adcAppServiceConversion(void)
@@ -59,13 +58,12 @@ void adcAppServiceConversion(void)
 
 	degrees_celsius = converted_degrees;
 
+	const int32_t smoothed_raw_current = getSmoothedCurrent();
 #ifdef NXP
 	battery_voltage = ((7 * battery_voltage) + ((ADC_raw_volts * 3300 / 65535 * VOLTAGE_DIVIDER) / 100)) / 8;
-	smoothed_raw_current = getSmoothedCurrent();
 	actual_current = (((smoothed_raw_current * 3300 / 65535) - CURRENT_OFFSET) * 100) / (MILLIVOLT_PER_AMP);
 #else
 	battery_voltage = ((7 * battery_voltage) + ((ADC_raw_volts * 3300 / 4095 * VOLTAGE_DIVIDER) / 100)) >> 3;
-	smoothed_raw_current = getSmoothedCurrent();
 	actual_current = ((smoothed_raw_current * 3300 / 41) - (CURRENT_OFFSET * 100)) / (MILLIVOLT_PER_AMP);
 #endif
 	if (actual_current < 0) {

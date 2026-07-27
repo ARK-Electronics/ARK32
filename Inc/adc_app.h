@@ -12,7 +12,7 @@
 /*
  * Finish the pending DMA sample, restart conversion, update:
  *   converted_degrees, degrees_celsius, battery_voltage, actual_current
- * (and smoothed_raw_current). Does not clear PROCESS_ADC_FLAG or run LVC.
+ * Does not clear PROCESS_ADC_FLAG or run LVC.
  */
 void adcAppServiceConversion(void);
 

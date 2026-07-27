@@ -62,15 +62,22 @@ int32_t doPidCalculations(struct fastPID *pidnow, int actual, int target)
 
 uint16_t getSmoothedCurrent()
 {
-	total = total - readings[readIndex];
-	readings[readIndex] = ADC_raw_current;
-	total = total + readings[readIndex];
-	readIndex = readIndex + 1;
-	if (readIndex >= numReadings) {
-		readIndex = 0;
+	// Sample once: ADC_raw_current is written by ADC_DMA_Callback(), which also
+	// runs from the DMA ISR. The sum is incremental, so the value stored in the
+	// ring and the value added here must be the same one or the running total
+	// drifts permanently when the two reads straddle an update.
+	const uint16_t sample = ADC_raw_current;
+
+	current_total -= current_readings[current_read_index];
+	current_readings[current_read_index] = sample;
+	current_total += sample;
+
+	current_read_index++;
+	if (current_read_index >= NUM_CURRENT_READINGS) {
+		current_read_index = 0;
 	}
-	smoothedcurrent = total / numReadings;
-	return smoothedcurrent;
+
+	return current_total / NUM_CURRENT_READINGS;
 }
 
 void setInput()

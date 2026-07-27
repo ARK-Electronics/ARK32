@@ -143,7 +143,6 @@ char brushed_direction_set = 0;
 
 volatile uint16_t tenkhzcounter = 0;
 int32_t consumed_current = 0;
-int32_t smoothed_raw_current = 0;
 int16_t actual_current = 0;
 
 char lowkv = 0;
@@ -218,11 +217,9 @@ volatile uint16_t adjusted_input = 0; // ISR-written in setInput(), read in the 
 #define TEMP30_CAL_VALUE ((uint16_t *)((uint32_t)0x1FFFF7B8))
 #define TEMP110_CAL_VALUE ((uint16_t *)((uint32_t)0x1FFFF7C2))
 
-uint16_t smoothedcurrent = 0;
-const uint8_t numReadings = 50; // the readings from the analog input
-uint8_t readIndex = 0;		// the index of the current reading
-uint32_t total = 0;
-uint16_t readings[50];
+uint8_t current_read_index = 0; // index of the oldest sample in the ring
+uint32_t current_total = 0;	// running sum of current_readings[]
+uint16_t current_readings[NUM_CURRENT_READINGS];
 
 uint8_t bemf_timeout_happened = 0;
 uint8_t changeover_step = 5;
