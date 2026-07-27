@@ -54,6 +54,9 @@ In-the-loop bench automation for the **ARK 4IN1** (and related F051 work): build
 - Bench setups: [hwci/docs/BENCH_SETUPS.md](hwci/docs/BENCH_SETUPS.md)
 - CI: `.github/workflows/hwci.yml`
 
+### Bootloader
+Field bootloaders and app-side BL update use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** (see [Bootloader](#bootloader) below and [Bootloaders/README.md](Bootloaders/README.md)).
+
 ---
 
 ## Branch model
@@ -210,16 +213,26 @@ Other DShot commands (direction, bi-dir, EDT, programming mode, etc.) do **not**
 
 ---
 
+## Bootloader
+
+ARK ESCs use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** (fork of upstream [AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)). Use ARK release images for ARK hardware — not the stock upstream bootloader alone when you need ARK-specific fixes (e.g. bidirectional DShot idle detection).
+
+| | |
+|--|--|
+| Source / releases | [ARK-Electronics/ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) · [releases](https://github.com/ARK-Electronics/ARK32-bootloader/releases) |
+| Committed F051 image for app embed | [`Bootloaders/`](Bootloaders/) (see [Bootloaders/README.md](Bootloaders/README.md)) |
+| App-side BL update | Release F051 builds embed the image and rewrite the on-chip BL if it differs (`Src/bootloader_update.c`) |
+
+To put ARK32 on a blank ESC: flash a matching **ARK32-bootloader** build with ST-LINK / GD-LINK / CMSIS-DAP / AT-LINK (etc.), then flash application firmware with a configurator or one-wire serial. Later app flashes can also carry and apply a newer BL via the embed path above.
+
 ## Configuration tools & stock firmware
 
 These are **upstream / community** tools; they are not ARK-specific:
 
 - [AM32 Configurator](https://am32.ca) (web) and [downloads](https://am32.ca/downloads)  
 - [esc-configurator.com](https://esc-configurator.com/)  
-- Bootloaders: [AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)  
+- Upstream bootloaders (non-ARK): [am32-firmware/AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)  
 - Target list: [`Inc/targets.h`](Inc/targets.h) (this tree) or [upstream targets.h](https://github.com/am32-firmware/AM32/blob/main/Inc/targets.h)
-
-To put ARK32 on a blank ESC you still need a matching MCU bootloader (ST-LINK / GD-LINK / CMSIS-DAP / AT-LINK, etc.), then flash application firmware with a configurator or one-wire serial path.
 
 ---
 

@@ -1,12 +1,20 @@
 # Bootloader images
 
-Prebuilt ARK32 bootloader binaries, committed so the app can embed one and rewrite the bootloader region at boot (see `Src/bootloader_update.c`).
+Prebuilt **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** binaries, committed so the app can embed one and rewrite the bootloader region at boot (see `Src/bootloader_update.c`).
 
-These are release artifacts of [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) converted from the published Intel HEX to a flat binary and checked in. They are stored as `.bin` rather than a C array so the bytes stay comparable against a release asset (a hex dump in a header cannot).
+[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) is ARK’s fork of [upstream AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader). For ARK hardware (ARK 4IN1 and related), always take images from **ARK32-bootloader releases**, not from the upstream bootloader repo alone.
+
+These files are release artifacts converted from the published Intel HEX to a flat binary and checked in. They are stored as `.bin` rather than a C array so the bytes stay comparable against a release asset (a hex dump in a header cannot).
 
 | File | Target | Signal pin | Source |
 |---|---|---|---|
 | `AM32_F051_BOOTLOADER_PB4_V18.bin` | STM32F051, ARK 4IN1 / `HARDWARE_GROUP_F0_B` | PB4 | [ARK32-bootloader v18.0.0](https://github.com/ARK-Electronics/ARK32-bootloader/releases/tag/v18.0.0) (`0d667c5`), asset `AM32_F051_BOOTLOADER_PB4_V18.hex` |
+
+| Resource | URL |
+|---|---|
+| Repository | https://github.com/ARK-Electronics/ARK32-bootloader |
+| Releases | https://github.com/ARK-Electronics/ARK32-bootloader/releases |
+| Upstream (non-ARK) | https://github.com/am32-firmware/AM32-bootloader |
 
 `.gitignore` ignores `*.bin` repo-wide; this directory is un-ignored explicitly.
 
