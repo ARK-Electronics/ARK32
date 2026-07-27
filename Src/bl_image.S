@@ -3,7 +3,7 @@
  *
  * The bootloader is committed as a .bin (see Bootloaders/README.md) and pulled
  * in verbatim with .incbin, so the bytes the linker places are provably the
- * same artifact the AM32-bootloader build produced - a hex-dumped C array is
+ * same artifact the ARK32-bootloader release produced - a hex-dumped C array is
  * not verifiable against a release, a .bin is.
  *
  * Assembling the blob here rather than compiling a generated C array also keeps

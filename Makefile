@@ -113,9 +113,10 @@ SRC_COMMON_BASE := $(filter-out $(SRC_OPTIONAL_BRUSHED) $(SRC_OPTIONAL_HWCI),$(S
 
 # App-side bootloader update. The image is a committed bootloader .bin pulled in
 # with .incbin (Src/bl_image.S) rather than a generated C array, so the linked
-# bytes stay verifiable against the AM32-bootloader release they came from.
-# .S, not .[cs]: the wildcard above skips it, so it is opt-in per target.
-# Bumping the bootloader means dropping the new .bin in and editing this one line.
+# bytes stay verifiable against the ARK32-bootloader release they came from
+# (see Bootloaders/README.md). .S, not .[cs]: the wildcard above skips it, so
+# it is opt-in per target. Bumping the bootloader means dropping the new .bin
+# (converted from the release .hex) and editing this one line if the name changes.
 SRC_OPTIONAL_BL_IMAGE := $(MAIN_SRC_DIR)/bl_image.S
 BL_IMAGE_F051 := Bootloaders/AM32_F051_BOOTLOADER_PB4_V18.bin
 # 0x08000000..ORIGIN(FLASH_VECTAB); the F051 linker script asserts the match.
