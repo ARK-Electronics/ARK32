@@ -191,15 +191,28 @@ void loadEEpromSettings(void)
 		if (motor_kv < 300) {
 			low_rpm_throttle_limit = 0;
 		}
-		// guard divisions for an erased eeprom (motor_poles 0 or 0xff),
-		// ARM hardware division returns 0 but it is UB in C
-		uint8_t rpm_level_div = 0;
-		if (eepromBuffer.motor_poles != 0) {
-			rpm_level_div = 32 / eepromBuffer.motor_poles;
-		}
-		if (rpm_level_div != 0) {
-			low_rpm_level = motor_kv / 100 / rpm_level_div;
-			high_rpm_level = motor_kv / 12 / rpm_level_div;
+		/* Throttle-restriction envelope in kerpm, scaled from kv and pole
+		 * count. The envelope is (kv / N) * (motor_poles / 32): multiply
+		 * before dividing so the pole term keeps its fractional part -
+		 * the old "kv / N / (32 / poles)" form truncated 32/poles to an
+		 * integer (2 for the common 14-pole motor instead of 2.29, and 0
+		 * for anything above 32 poles, which zeroed the envelope and
+		 * removed the restriction entirely).
+		 *
+		 * The high divisor is 17, not the 12 that shipped in v2.20: 12
+		 * raises the erpm at which full duty is released by ~1.42x, so a
+		 * correctly configured high-kv motor stays in the restricted
+		 * region well past where it should and never reaches full thrust
+		 * (am32-firmware/AM32#405 - the community workaround of entering
+		 * 50-60% of the real kv cancels exactly this factor).
+		 *
+		 * Out-of-range pole counts (an erased eeprom reads 0 or 0xff)
+		 * leave the envelope at zero, which map() treats as "always at
+		 * the high-rpm limit" - i.e. unrestricted, as before. 2..64 is
+		 * the range the DroneCAN MOTOR_POLES parameter accepts. */
+		if (eepromBuffer.motor_poles >= 2 && eepromBuffer.motor_poles <= 64) {
+			low_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (100U * 32U);
+			high_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (17U * 32U);
 		} else {
 			low_rpm_level = 0;
 			high_rpm_level = 0;
