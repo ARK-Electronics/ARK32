@@ -1,15 +1,19 @@
 # Bootloader images
 
-Prebuilt **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** binaries, committed so the app can embed one and rewrite the bootloader region at boot (see `Src/bootloader_update.c`).
+Prebuilt **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** binaries, committed so:
 
-[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) is ARK’s fork of [upstream AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader). For ARK hardware (ARK 4IN1 and related), always take images from **ARK32-bootloader releases**, not from the upstream bootloader repo alone.
+1. **F051 (ARK 4IN1):** the app can embed one and rewrite the bootloader region at boot (see `Src/bootloader_update.c`).
+2. **G431 CAN (ARK 12S CAN):** `make factory-image-g431-can` can assemble a full-flash production image (BL + app + EEPROM) without a separate BL flash step.
 
-These files are release artifacts converted from the published Intel HEX to a flat binary and checked in. They are stored as `.bin` rather than a C array so the bytes stay comparable against a release asset (a hex dump in a header cannot).
+[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) is ARK’s fork of [upstream AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader). For ARK hardware, always take images from **ARK32-bootloader**, not from the upstream bootloader repo alone.
+
+These files are release (or branch) artifacts as flat binaries. They are stored as `.bin` rather than a C array so the bytes stay comparable against a build or release asset (a hex dump in a header cannot).
 
 | File | Target | Signal pin | Source |
 |---|---|---|---|
 | `AM32_F051_BOOTLOADER_ARK4IN1_V18.bin` | STM32F051, ARK 4IN1 (default embed) | PB4; **PA15 nSLEEP low** | [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) `master` (`cdce0a2`, #4); product `AM32_F051_BOOTLOADER_ARK4IN1` |
 | `AM32_F051_BOOTLOADER_PB4_V18.bin` | STM32F051 generic PB4 (reference only) | PB4 | [ARK32-bootloader v18.0.0](https://github.com/ARK-Electronics/ARK32-bootloader/releases/tag/v18.0.0) (`0d667c5`), asset `AM32_F051_BOOTLOADER_PB4_V18.hex` |
+| `AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin` | STM32G431/G491, ARK 12S CAN ESC (`ARK_G431_CAN`) | PB4 (also FDCAN TX PB9 / RX PA11); **DRV ENABLE low** | [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) dual-protocol + bl-params (`086755b`), target `AM32_G431_BOOTLOADER_ARKG4_CAN` |
 
 | Resource | URL |
 |---|---|
@@ -19,20 +23,35 @@ These files are release artifacts converted from the published Intel HEX to a fl
 
 `.gitignore` ignores `*.bin` repo-wide; this directory is un-ignored explicitly.
 
-## How the image is used
+## How the images are used
 
-`Src/bl_image.S` pulls the file in with `.incbin` and pads it to the bootloader region size with `0xFF`. The linker script places it in a dedicated `.bl_image` section and asserts that it is exactly the region size and that it does not live inside the region it will erase.
+### F051 app-side embed
 
-The image is linked for **all F051 targets by default**, including `HWCI_PERF=1`
-(LTO leaves enough flash for the image and the perf struct). To strip it for a
-size emergency or pure perf A/B:
+`Src/bl_image.S` pulls the F051 file in with `.incbin` and pads it to the bootloader region size with `0xFF`. The linker script places it in a dedicated `.bl_image` section and asserts that it is exactly the region size and that it does not live inside the region it will erase.
+
+The image is linked for **F051 release builds by default**. `HWCI_PERF=1`
+does **not** embed it (flash goes to the perf struct; the HWCI rig already has
+a bootloader on-chip). To strip it on a release build:
 
 ```bash
 make ARK_4IN1_F051 EMBED_BOOTLOADER=0
-make ARK_4IN1_F051 HWCI_PERF=1 NO_EMBED_BL=1
+make ARK_4IN1_F051 NO_EMBED_BL=1
 ```
 
 Either kill switch disables embed (`EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`).
+`HWCI_PERF=1` also disables embed automatically.
+
+### G431 CAN factory image
+
+`BL_IMAGE_G431_CAN` in the `Makefile` points at `AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin`. That file is **not** app-side embedded yet (no G431 `.bl_image` path); it is only consumed by:
+
+```bash
+make factory-image-g431-can
+# or
+make factory-image-check
+```
+
+The factory builder places it at `0x08000000` (16 KiB region) and pads with `0xFF` to the app base at `0x08004000`. See [factory/README.md](../factory/README.md).
 
 ## Risk / recovery
 
@@ -44,6 +63,8 @@ App-side BL rewrite erases flash pages at `0x08000000` (reset vectors and the on
 - **Power-loss mid-update** is still a brick until SWD reflash — that is inherent to rewriting the boot region in place.
 
 ## Updating
+
+### F051
 
 1. Build or download the ARK 4IN1 product from [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) (`make AM32_F051_BOOTLOADER_ARK4IN1`), or convert a release `.hex` with the pinned toolchain.
 2. Install the flat binary:
@@ -59,7 +80,21 @@ App-side BL rewrite erases flash pages at `0x08000000` (reset vectors and the on
 
 3. Point `BL_IMAGE_F051` in the `Makefile` at the new path if the filename changed (default is already the ARK4IN1 blob).
 4. Update the table above with the release tag / source commit.
-5. Rebuild — the `.bin` is an explicit prerequisite of the `.elf`, so the change is picked up.
+5. Rebuild — the `.bin` is an explicit prerequisite of the F051 `.elf`, so the change is picked up.
+
+### G431 CAN
+
+1. Build from [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader):
+
+   ```sh
+   make AM32_G431_BOOTLOADER_ARKG4_CAN
+   cp obj/AM32_G431_BOOTLOADER_ARKG4_CAN_V*.bin \
+     /path/to/ARK32/Bootloaders/
+   ```
+
+2. Point `BL_IMAGE_G431_CAN` in the `Makefile` at the new path if the filename changed.
+3. Update the table above with the source commit / release tag.
+4. Rebuild factory image: `make factory-image-g431-can` (or `factory-image-check`).
 
 **Do not embed the generic `…_PB4` image on ARK 4IN1** if the chip has ARK4IN1 BL: first boot would rewrite PA15 nSLEEP-off back to stock.
 
