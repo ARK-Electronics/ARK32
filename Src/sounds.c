@@ -128,6 +128,7 @@ void playBlueJayTune(void)
 // Power-on leaves garbage so the magic check fails and we play the full ARK tune.
 #define BOOT_SOUND_MAGIC 0xA32B5001u
 #define BOOT_SOUND_SIGNAL_LOST 1u
+#define BOOT_SOUND_BL_UPDATED 2u
 
 static volatile uint32_t boot_sound_cookie[2] __attribute__((section(".noinit")));
 
@@ -137,14 +138,30 @@ void bootSoundMarkSignalLost(void)
 	boot_sound_cookie[1] = BOOT_SOUND_SIGNAL_LOST;
 }
 
-static uint8_t bootSoundTakeSignalLost(void)
+void bootSoundMarkBootloaderUpdated(void)
 {
-	if (boot_sound_cookie[0] == BOOT_SOUND_MAGIC && boot_sound_cookie[1] == BOOT_SOUND_SIGNAL_LOST) {
+	boot_sound_cookie[0] = BOOT_SOUND_MAGIC;
+	boot_sound_cookie[1] = BOOT_SOUND_BL_UPDATED;
+}
+
+static uint8_t bootSoundTakeReason(uint32_t reason)
+{
+	if (boot_sound_cookie[0] == BOOT_SOUND_MAGIC && boot_sound_cookie[1] == reason) {
 		boot_sound_cookie[0] = 0;
 		boot_sound_cookie[1] = 0;
 		return 1;
 	}
 	return 0;
+}
+
+static uint8_t bootSoundTakeSignalLost(void)
+{
+	return bootSoundTakeReason(BOOT_SOUND_SIGNAL_LOST);
+}
+
+static uint8_t bootSoundTakeBootloaderUpdated(void)
+{
+	return bootSoundTakeReason(BOOT_SOUND_BL_UPDATED);
 }
 
 static void playArkMorseLetter(const char *code, uint16_t freq, uint16_t unit_ms)
@@ -186,12 +203,39 @@ void playSignalLostTone(void)
 	__enable_irq();
 }
 
+/*
+ * Two rising beeps after a successful app-side bootloader rewrite (next boot
+ * only). Higher and longer than playSignalLostTone so it is clearly a
+ * "success" cue, not a fault path.
+ */
+void playBootloaderUpdatedTone(void)
+{
+	__disable_irq();
+	RELOAD_WATCHDOG_COUNTER();
+	comStep(3);
+	playBJNote(ARK_NOTE_E6, 90);
+	SET_DUTY_CYCLE_ALL(0);
+	delayMillis(50);
+	RELOAD_WATCHDOG_COUNTER();
+	playBJNote(ARK_NOTE_G6, 140);
+	allOff();
+	SET_PRESCALER_PWM(0);
+	signaltimeout = 0;
+	SET_AUTO_RELOAD_PWM(TIMER1_MAX_ARR);
+	__enable_irq();
+}
+
 void playStartupTune()
 {
 	// Signal-timeout path soft-resets; play a short lost-tone instead of full ARK
 	if (bootSoundTakeSignalLost()) {
 		playSignalLostTone();
 		return;
+	}
+	// Successful BL rewrite: rising chirp, then the normal startup signature
+	if (bootSoundTakeBootloaderUpdated()) {
+		playBootloaderUpdatedTone();
+		delayMillis(80);
 	}
 	__disable_irq();
 	comStep(3);

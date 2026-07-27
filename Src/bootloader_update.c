@@ -15,6 +15,7 @@
 #include "eeprom.h"
 #include "main.h"
 #include "peripherals.h"
+#include "sounds.h"
 #include "targets.h"
 
 #include <stdint.h>
@@ -116,6 +117,8 @@ void maybe_update_bootloader(void)
 
 	/* Reset only when the full BL region matches the embedded image. */
 	if (memcmp(have, want, len) == 0) {
+		/* Next boot plays a short success chirp before the normal tune. */
+		bootSoundMarkBootloaderUpdated();
 		NVIC_SystemReset();
 	}
 

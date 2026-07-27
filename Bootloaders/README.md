@@ -30,6 +30,7 @@ App-side BL rewrite erases flash pages at `0x08000000` (reset vectors and the on
 
 - **In-field recovery:** SWD (or another pre-existing ROM/system boot path) is required to reflash the bootloader region. Keep a known-good `AM32_F051_BOOTLOADER_*.bin` (or the release `.hex`) and OpenOCD/probe procedure for production and bench recovery.
 - **Software path:** On program/verify failure the update aborts without `NVIC_SystemReset`, re-enables IRQs, and continues into the already-running app so the board can still be reached if vectors survived. Sticky flash faults cannot hang forever with IRQs off (bounded per-page retries + IWDG armed for the update).
+- **Success cue:** After a verified rewrite the app soft-resets; the next boot plays a short rising two-beep chirp (`playBootloaderUpdatedTone`) before the normal ARK/BlueJay startup tune so a field flash can be confirmed by ear.
 - **Power-loss mid-update** is still a brick until SWD reflash — that is inherent to rewriting the boot region in place.
 
 ## Updating
