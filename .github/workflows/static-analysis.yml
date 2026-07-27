@@ -72,3 +72,22 @@ jobs:
             obj/AM32_ARK_4IN1_F051_*.bin
           if-no-files-found: ignore
           retention-days: 14
+
+  codegen-ark:
+    name: codegen invariants (ARK F051 LTO)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Arm toolchain
+        run: |
+          make arm_sdk_install
+          make arm_sdk_check
+
+      # Guards the two things LTO breaks without failing a build or a test:
+      # RAM_FUNC hot paths inlined back into flash, and .file_name /
+      # .app_signature emptied by dead-code elimination.
+      - name: Build ARK + codegen check
+        run: make codegen-check-ark -j$(nproc)

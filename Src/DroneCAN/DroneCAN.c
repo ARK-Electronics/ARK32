@@ -52,6 +52,11 @@ static bool done_startup;
 
 /*
   application signature, filled in by set_app_signature.py
+
+  used: nothing in C ever reads this, so LTO drops it as dead exactly the way it
+  drops .file_name, leaving the section empty. No LTO'd CAN target exists today
+  (SITL is native and opts out), so this is here to stop adding one from
+  silently shipping an image with no signature.
  */
 const struct {
 	uint32_t magic1;
@@ -61,7 +66,7 @@ const struct {
 	uint32_t crc2;	// crc32 from end of app_signature to end of fw
 	char mcu[16];
 	uint32_t unused[2];
-} app_signature AM32_FLASH_SECTION(".app_signature") = {
+} app_signature __attribute__((used)) AM32_FLASH_SECTION(".app_signature") = {
 	.magic1 = APP_SIGNATURE_MAGIC1,
 	.magic2 = APP_SIGNATURE_MAGIC2,
 	.fwlen = 0,

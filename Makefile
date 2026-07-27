@@ -60,6 +60,29 @@ CFLAGS_BASE += -Wall -Wundef -Wextra -Werror -Wno-unused-parameter -Wno-stringop
 
 CFLAGS_COMMON := $(CFLAGS_BASE)
 
+# Link time optimization, on by default for the cross-compiled firmware.
+#
+# The firmware is compiled and linked in one gcc invocation, so -flto here covers
+# both halves and needs no other build changes. SITL overrides CFLAGS_COMMON and
+# is unaffected.
+#
+# On Cortex-M0 the call overhead is high and the app region is small: LTO recovers
+# ~4.1 KiB of the F051's 27 KiB app region. Carrying it as the default rather than
+# switching it on for whichever feature needs the space keeps one codegen
+# configuration in tree, so what CI and the HWCI bench measure is what ships.
+#
+# This does interact with the selective -O3 above: RAM_FUNC carries
+# optimize("O3") plus noclone, and the noclone is there precisely so LTO
+# constant-propagation clones cannot escape .ramfunc. scripts/check-ramfunc.sh
+# asserts every RAM_FUNC still lands in RAM, and CI runs it.
+#
+# Escape hatch: LTO=0 builds without it, for bisecting a suspected miscompile
+# without editing this file.
+LTO ?= 1
+ifeq ($(LTO),1)
+CFLAGS_COMMON += -flto
+endif
+
 # Hardware-CI performance instrumentation (opt-in, off by default).
 # Build with `make <TARGET> HWCI_PERF=1` to emit the hwci_perf RAM struct that
 # the hardware-CI harness (see hwci/) reads over SWD. Production/release builds
@@ -181,6 +204,16 @@ targets:
 .PHONY : cppcheck
 cppcheck:
 	$(QUIET)bash scripts/cppcheck-ark.sh
+
+# Assert the codegen invariants LTO can break silently: RAM_FUNC hot paths still
+# resident in RAM, and externally-read sections (.file_name, .app_signature) not
+# emptied by dead-code elimination. See scripts/check-codegen-ark.sh.
+.PHONY : codegen-check-ark
+codegen-check-ark:
+	$(QUIET)$(MAKE) -B ARK_4IN1_F051 AM32REF_F051 REF_G431
+	$(QUIET)bash scripts/check-codegen-ark.sh $(OBJ)/$(IDENTIFIER)_ARK_4IN1_F051_$(FIRMWARE_VERSION).elf
+	$(QUIET)bash scripts/check-codegen-ark.sh $(OBJ)/$(IDENTIFIER)_AM32REF_F051_$(FIRMWARE_VERSION).elf
+	$(QUIET)bash scripts/check-codegen-ark.sh --no-ramfunc $(OBJ)/$(IDENTIFIER)_REF_G431_$(FIRMWARE_VERSION).elf
 
 # Build ARK F051 with HWCI_PERF and enforce flash/RAM headroom (F051 is tight).
 # -B forces a rebuild so a prior non-HWCI image is not size-checked by mistake.
