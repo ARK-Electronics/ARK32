@@ -143,11 +143,14 @@ extern uint16_t ADC_raw_ntc;
 extern uint16_t ADC_smoothed_input;
 extern int16_t converted_degrees;
 extern uint8_t temperature_offset;
-extern uint16_t smoothedcurrent;
-extern uint8_t readIndex;
-extern uint32_t total;
-extern uint16_t readings[];
-extern const uint8_t numReadings;
+/* Boxcar average of the raw current ADC (getSmoothedCurrent(), control_loop.c).
+ * The window is a macro, not a `const uint8_t`: Cortex-M0 has no hardware
+ * divide, and a runtime divisor pulls in the __aeabi_uidiv helper on every ADC
+ * conversion. As a compile-time constant the divide folds to a multiply-shift. */
+#define NUM_CURRENT_READINGS 50
+extern uint8_t current_read_index;
+extern uint32_t current_total;
+extern uint16_t current_readings[NUM_CURRENT_READINGS];
 extern char cell_count;
 extern uint16_t e_rpm;
 extern uint16_t k_erpm;
@@ -178,7 +181,6 @@ extern uint16_t servo_neutral;
 extern uint8_t servo_dead_band;
 extern volatile uint8_t PROCESS_ADC_FLAG;
 extern int32_t consumed_current;
-extern int32_t smoothed_raw_current;
 extern char send_esc_info_flag;
 extern uint16_t VOLTAGE_DIVIDER;
 extern char LOW_VOLTAGE_CUTOFF;

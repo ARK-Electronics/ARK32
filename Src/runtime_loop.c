@@ -184,8 +184,19 @@ void runtimeSampleBemfPreLevel(void)
 void runtimeUpdateDshotIrqPriority(void)
 {
 #if !defined(MCU_G031) && !defined(NEED_INPUT_READY)
+	// This runs every main-loop pass but the scheme only flips when the ESC
+	// crosses DSHOT_PRIORITY_THRESHOLD, so latch it and skip the NVIC writes
+	// in the steady state. Single caller (main loop), so the static is safe.
+	static uint8_t applied_input_priority = 0xFF; // unknown at boot: first pass always writes
+	const uint8_t want_input_priority = (dshot_telemetry && (commutation_interval > DSHOT_PRIORITY_THRESHOLD));
+
+	if (want_input_priority == applied_input_priority) {
+		return;
+	}
+	applied_input_priority = want_input_priority;
+
 #	ifdef NXP
-	if (dshot_telemetry && (commutation_interval > DSHOT_PRIORITY_THRESHOLD)) {
+	if (want_input_priority) {
 		NVIC_SetPriority(IC_DMA_IRQ_NAME, 0);
 		NVIC_SetPriority(COM_TIMER_IRQ, 1);
 		NVIC_SetPriority(COMP0_IRQ, 1);
@@ -197,7 +208,7 @@ void runtimeUpdateDshotIrqPriority(void)
 		NVIC_SetPriority(COMP1_IRQ, 0);
 	}
 #	else
-	if (dshot_telemetry && (commutation_interval > DSHOT_PRIORITY_THRESHOLD)) {
+	if (want_input_priority) {
 		NVIC_SetPriority(IC_DMA_IRQ_NAME, 0);
 		NVIC_SetPriority(COM_TIMER_IRQ, 1);
 		NVIC_SetPriority(COMPARATOR_IRQ, 1);
