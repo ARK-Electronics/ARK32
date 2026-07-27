@@ -269,6 +269,28 @@ size-check-ark:
 	$(QUIET)$(MAKE) -B ARK_4IN1_F051
 	$(QUIET)bash scripts/check-size-ark.sh
 
+# Production full-flash image for ARK 4IN1: bootloader + app + factory EEPROM
+# defaults in one 32 KiB binary (see factory/README.md). Replaces the old
+# flash-BL / flash-app / configurator / ST-Link dump release flow.
+.PHONY : factory-image factory-image-check
+FACTORY_PRODUCT := ARK_4IN1_F051
+FACTORY_APP_BASENAME := $(OBJ)/$(IDENTIFIER)_$(FACTORY_PRODUCT)_$(FIRMWARE_VERSION)
+FACTORY_DEFAULTS := factory/ARK_4IN1_F051_eeprom_defaults.json
+factory-image: $(FACTORY_PRODUCT)
+	$(QUIET)$(ECHO) "Building factory full-flash image for $(FACTORY_PRODUCT)"
+	$(QUIET)python3 scripts/build_factory_image.py \
+		--defaults $(FACTORY_DEFAULTS) \
+		--bootloader $(BL_IMAGE_F051) \
+		--app $(FACTORY_APP_BASENAME).bin \
+		--version-h $(MAIN_INC_DIR)/version.h \
+		--out-bin $(FACTORY_APP_BASENAME).factory.bin \
+		--out-hex $(FACTORY_APP_BASENAME).factory.hex \
+		--out-eeprom $(FACTORY_APP_BASENAME).eeprom.bin
+
+# Build + layout/defaults gate used by CI (.github/workflows/static-analysis.yml).
+factory-image-check: factory-image
+	$(QUIET)bash scripts/check-factory-image-ark.sh
+
 # Code formatting (clang-format ≈ PX4 astyle/Linux look; see .clang-format).
 # Same target names as PX4:
 #   make format          — rewrite sources in place
