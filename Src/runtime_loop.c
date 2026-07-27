@@ -474,15 +474,25 @@ void runtimeMotorModeTick(void)
 			 * hits level 23, map() clamps anything above the ceiling, and the
 			 * load-side correction is unchanged (it is the ratio that moves).
 			 *
-			 * WHAT THIS DOES NOT FIX: pack voltage. Under no load k_erpm scales
-			 * with V and so does max_kerpm, so the ratio - and this schedule -
-			 * is voltage-invariant, exactly like the duty curve it replaces
-			 * (verified 4S/6S/12S: identical level at equal duty). The physics
-			 * says otherwise: L/R falls roughly as 1/kv, which makes the lag a
-			 * function of BEMF (~rpm/kv) and leaves a residual voltage term.
-			 * Keying on BEMF instead would be the fuller correction, but it
-			 * changes full-throttle advance on every pack size at once and
-			 * needs bench data to pick endpoints. Deliberately not done here.
+			 * Pack sag vs ceiling: the free-run ceiling is max_kerpm(V_ref).
+			 * Instantaneous battery_voltage sags under load; if that live
+			 * reading were V_ref, a smaller ceiling would raise
+			 * k_erpm/max_kerpm and partially undo the load correction this
+			 * block exists for. V_ref is therefore a peak-hold while
+			 * throttle is applied (ignore IR drop), and tracks live voltage
+			 * at idle so SoC is re-learned between loads / after a pack
+			 * swap. Rest recovery after a heavy pull also raises the peak.
+			 *
+			 * WHAT THIS DOES NOT FIX: the physics residual on pack voltage.
+			 * Under free-run k_erpm scales with V and so does max_kerpm, so
+			 * the ratio - and this schedule - is voltage-invariant across
+			 * pack sizes at equal duty (verified 4S/6S/12S), exactly like
+			 * the duty curve it replaces. The physics says L/R falls roughly
+			 * as 1/kv, which makes the lag a function of BEMF (~rpm/kv) and
+			 * leaves a residual voltage term. Keying on BEMF instead would
+			 * be the fuller correction, but it changes full-throttle
+			 * advance on every pack size at once and needs bench data to
+			 * pick endpoints. Deliberately not done here.
 			 *
 			 * So this is the conservative half: close to today wherever duty
 			 * was a valid free-run proxy, and different under load in the
@@ -504,9 +514,19 @@ void runtimeMotorModeTick(void)
 			 *     the top of the range through most of the throttle band. The
 			 *     duty proxy is immune to a wrong kV, so it stays the fallback.
 			 */
+			/* Peak-hold pack V for the free-run ceiling (centivolts). */
+			static uint16_t advance_pack_v_cv;
 			uint16_t adv_max_kerpm = 0;
 			if (advance_erpm_scale_q12 != 0 && battery_voltage > 300) {
-				adv_max_kerpm = (uint16_t)(((uint32_t)advance_erpm_scale_q12 * battery_voltage) >> 12);
+				if (duty_cycle < 100 || advance_pack_v_cv == 0) {
+					/* Idle (or first sample): follow live voltage so SoC /
+					 * pack swap is re-learned and cold start is not stuck at 0. */
+					advance_pack_v_cv = battery_voltage;
+				} else if (battery_voltage > advance_pack_v_cv) {
+					/* Loaded: track peaks only (rest recovery, higher SoC). */
+					advance_pack_v_cv = battery_voltage;
+				}
+				adv_max_kerpm = (uint16_t)(((uint32_t)advance_erpm_scale_q12 * advance_pack_v_cv) >> 12);
 			}
 			if (adv_max_kerpm > 8 && k_erpm <= (uint16_t)(adv_max_kerpm + (adv_max_kerpm >> 2))) {
 				auto_advance_level = map(k_erpm, adv_max_kerpm >> 4, adv_max_kerpm, 13, 23);

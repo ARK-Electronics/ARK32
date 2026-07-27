@@ -32,14 +32,19 @@ extern uint8_t auto_advance_level;
  * of pack, Q12. Derived from motor kV and pole count once per settings load
  * (settings.c) so the hot path needs only a multiply and a shift:
  *
- *   max_kerpm = (advance_erpm_scale_q12 * battery_voltage) >> 12
+ *   max_kerpm = (advance_erpm_scale_q12 * V_ref) >> 12
  *
- * That ceiling is 15/16 of the ideal free-run electrical frequency
+ * V_ref is a peak-hold of battery_voltage while throttle is applied (see
+ * runtime_loop.c): instantaneous pack sag under load must not shrink the
+ * ceiling or it fights the eRPM load correction. At idle V_ref tracks live
+ * voltage so SoC is re-learned between loads.
+ *
+ * The ceiling is 15/16 of the ideal free-run electrical frequency
  * (kv * V * poles/2): real free-run sits a few percent below ideal (IR drop,
  * iron loss), and without the scale-down full-throttle free-run often stops
- * one advance notch short of the duty-curve top (23). Zero means the schedule
- * cannot be normalized (implausible kV or pole count) and the caller must
- * fall back to the duty-cycle proxy.
+ * one advance notch short of the duty-curve top (23). Zero scale means the
+ * schedule cannot be normalized (implausible kV or pole count) and the
+ * caller must fall back to the duty-cycle proxy.
  */
 extern uint16_t advance_erpm_scale_q12;
 extern volatile char old_routine;
