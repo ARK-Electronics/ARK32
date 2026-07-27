@@ -54,6 +54,9 @@ In-the-loop bench automation for the **ARK 4IN1** (and related F051 work): build
 - Bench setups: [hwci/docs/BENCH_SETUPS.md](hwci/docs/BENCH_SETUPS.md)
 - CI: `.github/workflows/hwci.yml`
 
+### Bootloader
+Field bootloaders and app-side BL update use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** (see [Bootloader](#bootloader) below and [Bootloaders/README.md](Bootloaders/README.md)).
+
 ---
 
 ## Branch model
@@ -90,7 +93,7 @@ make format            # apply clang-format (.clang-format) to app + MCU sources
 make check_format      # fail if sources need formatting (used in PR CI)
 make format_changed    # format only files changed vs origin/ark-release
 make cppcheck          # static analysis of the ARK F051 control path
-make size-check-ark    # ARK F051 + HWCI_PERF flash/RAM gate
+make size-check-ark    # ARK F051 flash/RAM gate (HWCI+embed worst case, then release)
 ```
 
 Style is **PX4-inspired** via clang-format (Linux braces, tab indent width 8, `int *p`, column 140) — same `make format` / `check_format` workflow as PX4, not astyle itself. See `.clang-format`.
@@ -139,8 +142,9 @@ Pitch below is **relative** (higher PWM timer prescaler → lower pitch). Exact 
 
 | Function | When | Pattern |
 |----------|------|---------|
-| **`playStartupTune`** | Normal brushless boot (after init; also CRSF path) | If the previous run soft-reset from an RC **signal timeout**, plays **`playSignalLostTone`** instead (see below). Else if EEPROM custom tune byte 0 is programmed (not `0xFF`): plays **BlueJay-compatible** melody from `eepromBuffer.tune[]` via `playBlueJayTune`. Otherwise default: the **ARK signature tune** — “ARK” in morse code (·– / ·–· / –·–), one letter per step up a C major arpeggio (C6 → E6 → G6), ~1.4 s total. |
+| **`playStartupTune`** | Normal brushless boot (after init; also CRSF path) | If the previous run soft-reset from an RC **signal timeout**, plays **`playSignalLostTone`** instead (see below). Else if the previous run finished an app-side **bootloader update**, plays **`playBootloaderUpdatedTone`** then continues. Else if EEPROM custom tune byte 0 is programmed (not `0xFF`): plays **BlueJay-compatible** melody from `eepromBuffer.tune[]` via `playBlueJayTune`. Otherwise default: the **ARK signature tune** — “ARK” in morse code (·– / ·–· / –·–), one letter per step up a C major arpeggio (C6 → E6 → G6), ~1.4 s total. |
 | **`playSignalLostTone`** | Soft-reset after armed (~0.5 s) or disarmed (~2 s) input timeout (`faultPollSignalTimeout` → `NVIC_SystemReset`) | **One short low blip** on C5 (≈ 523 Hz, ~70 ms). Marked via a `.noinit` cookie before reset so cold boot still plays the full ARK tune. Linker `.noinit` is provided for **F051** and **G431** (gcc + Keil G431 scatter). |
+| **`playBootloaderUpdatedTone`** | Next boot after a successful app-side bootloader rewrite (`maybe_update_bootloader` → `bootSoundMarkBootloaderUpdated` → reset) | **Two rising beeps** E6 → G6 (~90 ms + ~140 ms). Then the normal ARK/BlueJay startup continues. Cookie in `.noinit` so cold power-on never false-triggers. |
 | **`playBrushedStartupTune`** | `BRUSHED_MODE` builds only | **Four rising beeps** (~300 ms), phases 1–4 (prescalers 40 → 30 → 25 → 20). |
 | **`playBlueJayTune`** | Custom startup only | Notes/rests encoded in EEPROM tune blob (configurator “custom startup music”). Inter-note pause can scale with tune header byte 3. |
 
@@ -210,16 +214,26 @@ Other DShot commands (direction, bi-dir, EDT, programming mode, etc.) do **not**
 
 ---
 
+## Bootloader
+
+ARK ESCs use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** (fork of upstream [AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)). Use ARK release images for ARK hardware — not the stock upstream bootloader alone when you need ARK-specific fixes (e.g. bidirectional DShot idle detection).
+
+| | |
+|--|--|
+| Source / releases | [ARK-Electronics/ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) · [releases](https://github.com/ARK-Electronics/ARK32-bootloader/releases) |
+| Committed F051 image for app embed | [`Bootloaders/`](Bootloaders/) (see [Bootloaders/README.md](Bootloaders/README.md)) |
+| App-side BL update | F051 builds embed the image by default (including `HWCI_PERF=1`) and rewrite the on-chip BL if it differs (`Src/bootloader_update.c`). Success soft-resets; the next boot plays **`playBootloaderUpdatedTone`** (two rising beeps) then the normal startup tune. Strip with `EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`. |
+
+To put ARK32 on a blank ESC: flash a matching **ARK32-bootloader** build with ST-LINK / GD-LINK / CMSIS-DAP / AT-LINK (etc.), then flash application firmware with a configurator or one-wire serial. Later app flashes can also carry and apply a newer BL via the embed path above.
+
 ## Configuration tools & stock firmware
 
 These are **upstream / community** tools; they are not ARK-specific:
 
 - [AM32 Configurator](https://am32.ca) (web) and [downloads](https://am32.ca/downloads)  
 - [esc-configurator.com](https://esc-configurator.com/)  
-- Bootloaders: [AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)  
+- Upstream bootloaders (non-ARK): [am32-firmware/AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)  
 - Target list: [`Inc/targets.h`](Inc/targets.h) (this tree) or [upstream targets.h](https://github.com/am32-firmware/AM32/blob/main/Inc/targets.h)
-
-To put ARK32 on a blank ESC you still need a matching MCU bootloader (ST-LINK / GD-LINK / CMSIS-DAP / AT-LINK, etc.), then flash application firmware with a configurator or one-wire serial path.
 
 ---
 

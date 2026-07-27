@@ -262,6 +262,7 @@ an settings option)
 #endif
 
 #include "version.h"
+#include "bootloader_update.h"
 
 // firmware build options !! fixed speed and duty cycle modes are not to be used
 // with sinusoidal startup !!
@@ -299,6 +300,12 @@ int main(void)
 	checkDeviceInfo();
 	initCorePeripherals();
 	enableCorePeripherals();
+	/*
+	 * May program BL region. Arms IWDG only if an update runs; resets
+	 * only on full verify success. On failure returns here with the app
+	 * still usable (see Src/bootloader_update.c).
+	 */
+	maybe_update_bootloader();
 	loadEEpromSettings();
 #endif
 

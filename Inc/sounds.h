@@ -19,10 +19,16 @@ void playDuskingTune(void);
 void playDefaultTone(void);
 void playChangedTone(void);
 void playSignalLostTone(void);
+void playBootloaderUpdatedTone(void);
 
 /* Call just before NVIC_SystemReset on RC signal timeout so the next boot
  * plays playSignalLostTone instead of the full ARK startup signature. */
 void bootSoundMarkSignalLost(void);
+
+/* Call just before NVIC_SystemReset after a successful app-side bootloader
+ * rewrite so the next boot plays playBootloaderUpdatedTone before the normal
+ * startup tune. */
+void bootSoundMarkBootloaderUpdated(void);
 
 void setVolume(uint8_t volume);
 
