@@ -22,7 +22,16 @@ These files are release artifacts converted from the published Intel HEX to a fl
 
 `Src/bl_image.S` pulls the file in with `.incbin` and pads it to the bootloader region size with `0xFF`. The linker script places it in a dedicated `.bl_image` section and asserts that it is exactly the region size and that it does not live inside the region it will erase.
 
-The image is only linked for F051 targets built without `HWCI_PERF=1`.
+The image is linked for **all F051 targets by default**, including `HWCI_PERF=1`
+(LTO leaves enough flash for the image and the perf struct). To strip it for a
+size emergency or pure perf A/B:
+
+```bash
+make ARK_4IN1_F051 EMBED_BOOTLOADER=0
+make ARK_4IN1_F051 HWCI_PERF=1 NO_EMBED_BL=1
+```
+
+Either kill switch disables embed (`EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`).
 
 ## Risk / recovery
 

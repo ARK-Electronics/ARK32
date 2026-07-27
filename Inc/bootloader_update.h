@@ -2,7 +2,8 @@
 
 /*
  * Optionally rewrite the AM32 bootloader from an image embedded in the app.
- * No-op when EMBED_BOOTLOADER is not defined (e.g. HWCI_PERF builds).
+ * No-op when EMBED_BOOTLOADER is not defined (e.g. EMBED_BOOTLOADER=0 /
+ * NO_EMBED_BL=1 kill switches).
  *
  * Call once early after clocks/flash are usable and before motors run.
  * Arms IWDG only when an update is about to run. Calls NVIC_SystemReset()

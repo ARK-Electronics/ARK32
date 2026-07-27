@@ -6,8 +6,8 @@
  * only on full success.
  *
  * The image itself is a committed .bin pulled in by Src/bl_image.S; this file
- * only sees its bounds. HWCI_PERF builds omit EMBED_BOOTLOADER so neither the
- * ~4 KiB image nor this logic is linked.
+ * only sees its bounds. F051 embeds by default (including HWCI_PERF=1); use
+ * EMBED_BOOTLOADER=0 or NO_EMBED_BL=1 to omit the image and this logic.
  */
 
 #include "bootloader_update.h"

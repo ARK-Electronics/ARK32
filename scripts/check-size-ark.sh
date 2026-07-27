@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Fail if the ARK F051 (+ HWCI_PERF) image exceeds flash/RAM budgets.
+# Fail if the ARK F051 image exceeds flash/RAM budgets.
+# Typical gate input: HWCI_PERF=1 with the default embedded bootloader (worst case).
 #
 # STM32F051K6 application region (from linker script / build map):
 #   FLASH (app): 27424 bytes

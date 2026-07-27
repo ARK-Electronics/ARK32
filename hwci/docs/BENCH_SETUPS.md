@@ -76,6 +76,8 @@ Details: [setup_px4_bdshot.md](setup_px4_bdshot.md) (formerly `bdshot_baseline.m
 ## What is shared
 
 - Same AM32 target / `HWCI_PERF=1` firmware (BDShot counters are zero-cost when
-  idle if the host never enables BDShot).
+  idle if the host never enables BDShot). F051 also **embeds the bootloader**
+  by default in that image; after a BL version bump the first boot may rewrite
+  the BL and soft-reset (see [hwci/README.md](../README.md#embedded-bootloader-f051)).
 - Same ST-Link debug header.
 - Same motor/ESC hardware (wiring of the **signal** pin differs).

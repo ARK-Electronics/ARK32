@@ -93,7 +93,7 @@ make format            # apply clang-format (.clang-format) to app + MCU sources
 make check_format      # fail if sources need formatting (used in PR CI)
 make format_changed    # format only files changed vs origin/ark-release
 make cppcheck          # static analysis of the ARK F051 control path
-make size-check-ark    # ARK F051 + HWCI_PERF flash/RAM gate
+make size-check-ark    # ARK F051 flash/RAM gate (HWCI+embed worst case, then release)
 ```
 
 Style is **PX4-inspired** via clang-format (Linux braces, tab indent width 8, `int *p`, column 140) — same `make format` / `check_format` workflow as PX4, not astyle itself. See `.clang-format`.
@@ -222,7 +222,7 @@ ARK ESCs use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootl
 |--|--|
 | Source / releases | [ARK-Electronics/ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) · [releases](https://github.com/ARK-Electronics/ARK32-bootloader/releases) |
 | Committed F051 image for app embed | [`Bootloaders/`](Bootloaders/) (see [Bootloaders/README.md](Bootloaders/README.md)) |
-| App-side BL update | Release F051 builds embed the image and rewrite the on-chip BL if it differs (`Src/bootloader_update.c`). Success soft-resets; the next boot plays **`playBootloaderUpdatedTone`** (two rising beeps) then the normal startup tune. |
+| App-side BL update | F051 builds embed the image by default (including `HWCI_PERF=1`) and rewrite the on-chip BL if it differs (`Src/bootloader_update.c`). Success soft-resets; the next boot plays **`playBootloaderUpdatedTone`** (two rising beeps) then the normal startup tune. Strip with `EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`. |
 
 To put ARK32 on a blank ESC: flash a matching **ARK32-bootloader** build with ST-LINK / GD-LINK / CMSIS-DAP / AT-LINK (etc.), then flash application firmware with a configurator or one-wire serial. Later app flashes can also carry and apply a newer BL via the embed path above.
 

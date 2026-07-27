@@ -86,6 +86,32 @@ make ARK_4IN1_F051 HWCI_PERF=1
 Files: `Inc/hwci_perf.h`, `Src/hwci_perf.c`, three hooks in `Src/main.c`
 (`tenKhzRoutine` enter/exit, `while(1)` top), one `Makefile` flag.
 
+## Embedded bootloader (F051)
+
+F051 builds **embed the ARK32-bootloader image by default**, including
+`HWCI_PERF=1` (LTO leaves room for both). At boot the app compares the on-chip
+BL region to the embedded image and rewrites it if they differ
+(`Src/bootloader_update.c`).
+
+**After a BL version bump** (new `.bin` in `Bootloaders/`, or a board still on
+an older BL):
+
+1. First app boot may erase/program `0x08000000`, soft-reset, and play the
+   short rising **BL-updated** chirp before the normal startup tune.
+2. The harness may see an extra reset or a brief app-not-alive window; re-flash
+   or re-run the profile is fine once the on-chip BL matches.
+3. Later boots are a no-op `memcmp` (no rewrite thrash).
+
+To strip the embed for size emergencies or pure perf A/Bs (no app-side BL
+update in that binary):
+
+```
+make ARK_4IN1_F051 HWCI_PERF=1 NO_EMBED_BL=1
+# or: EMBED_BOOTLOADER=0
+```
+
+Details: [Bootloaders/README.md](../Bootloaders/README.md).
+
 ## Hardware setup
 
 ### Debug (one channel at a time)
@@ -352,12 +378,17 @@ hwci/tests/                        75 offline tests (sim, DWARF layout, fail-clo
   compatibility, so re-check `_StubAdapter` after a Flight Stand Software
   update. The API reports SI units (Newtons, rad/s) — `thrust_is_grams:
   false`, `rpm_is_rad_per_s: true` in the signal map.
-* The **AM32 bootloader only jumps to the app when the throttle signal line
-  idles low at boot**. An inactive stand output can leave the line high and
+* The **AM32 / ARK32 bootloader only jumps to the app when the throttle signal
+  line idles low at boot**. An inactive stand output can leave the line high and
   park the ESC in the bootloader after every flash or power-cycle (observed
   on the ARK 4IN1 bench). Live-source bring-up detects this via the perf
   magic, commands zero throttle, resets the MCU, and waits for the app —
-  see `_ensure_app_alive` in `hwci/runner.py`.
+  see `_ensure_app_alive` in `hwci/runner.py`. OpenOCD flash also force-starts
+  the app via the vector table so a stuck BL does not block settings trials.
+* **App-side BL update** (default on F051, including `HWCI_PERF=1`): if the
+  embedded image does not match the on-chip BL, the first boot after flash may
+  rewrite the BL region, soft-reset, and chirp before the normal startup tune.
+  Re-run once matched; see [Embedded bootloader](#embedded-bootloader-f051).
 * `HWCI_PERF` is validated for the STM32F0 (ARK 4IN1). The timestamp macro uses
   the shared `get_timer_us16()` helper, so STM32/GigaDevice/Artery targets
   compile with `HWCI_PERF=1`; NXP and WCH are `#error`-gated (no usable
