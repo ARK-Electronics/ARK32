@@ -35,6 +35,13 @@ uint32_t faultErrorCount(void)
 	return desync_happened + fault_stall_trips;
 }
 
+void faultErrorCountReset(void)
+{
+	/* Per-arm cycle (DSDL: error_count resets when the motor restarts). */
+	fault_stall_trips = 0;
+	desync_happened = 0;
+}
+
 uint8_t faultHandleStuckRotorIfNeeded(void)
 {
 #ifndef BRUSHED_MODE

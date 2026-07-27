@@ -598,6 +598,7 @@ static void set_input(uint16_t input)
 {
 	if (!armed && input != 0 && eepromBuffer.can.require_arming && dronecan_armed && !eepromBuffer.can.require_zero_throttle) {
 		// allow restart if unexpected ESC reboot in flight
+		faultErrorCountReset(); // armed 0->1: per-arm error_count (DSDL)
 		armed = 1;
 	}
 
@@ -1006,10 +1007,11 @@ static void send_ESCStatus(void)
 	struct uavcan_equipment_esc_Status pkt;
 	uint8_t buffer[UAVCAN_EQUIPMENT_ESC_STATUS_MAX_SIZE];
 
-	/* Hard-error events since boot. Was desync_happened alone, which missed
-	 * every run killed by the stall rail (and so also the blind-grind and
-	 * blind/miss-limit paths that funnel into it) - a grinding motor
-	 * reported error_count 0. See faultErrorCount(). */
+	/* Hard-error events this arm cycle (DSDL: resets when the motor
+	 * restarts; both addends zeroed on armed 0->1). Was desync_happened
+	 * alone, which missed every run killed by the stall rail (and so also
+	 * the blind-grind and blind/miss-limit paths that funnel into it) - a
+	 * grinding motor reported error_count 0. See faultErrorCount(). */
 	pkt.error_count = faultErrorCount();
 	pkt.voltage = battery_voltage * 0.01;
 

@@ -75,9 +75,11 @@ void faultDesyncEpisodeTick1kHz(void);
 uint8_t faultDesyncRestartHoldoffActive(void);
 
 /*
- * Monotonic since-boot count of stall-rail trips on an ESTABLISHED run - the
- * same zero_crosses > 100 gate the episode charge uses, so the many legitimate
+ * Stall-rail trips on an ESTABLISHED run this arm cycle - the same
+ * zero_crosses > 100 gate the episode charge uses, so the many legitimate
  * kicks a heavy prop needs at low throttle are not counted as errors.
+ * Cleared with desync_happened on the armed 0->1 edge (see
+ * faultErrorCountReset()).
  *
  * volatile: read from the main loop (telemetry) while the grind rail that
  * forces this trip runs in tenKhzRoutine (ISR context).
@@ -85,12 +87,16 @@ uint8_t faultDesyncRestartHoldoffActive(void);
 extern volatile uint32_t fault_stall_trips;
 
 /*
- * Total hard-error events since boot, for uavcan.equipment.esc.Status
- * error_count ("errors since start-up").
+ * Total hard-error events this arm cycle, for uavcan.equipment.esc.Status
+ * error_count (DSDL: "Resets when the motor restarts").
  *
  * Sums the two PRIMITIVE run-killers, which are mutually exclusive:
  *   - desync_happened   : the jump-desync check in runtimeProcessDesyncCheck
  *   - fault_stall_trips : the INTERVAL_TIMER stall rail
+ *
+ * Both are zeroed on arm (0->1) via faultErrorCountReset() so a clean re-arm
+ * reports error_count 0; the flight controller then sees only faults that
+ * occurred after this arm. Do not clear only one addend - lifetimes must match.
  *
  * Deliberately NOT additional addends, because each already funnels into the
  * stall rail and would double-count one physical failure:
@@ -103,5 +109,8 @@ extern volatile uint32_t fault_stall_trips;
  * payload, not in this scalar.
  */
 uint32_t faultErrorCount(void);
+
+/* Zero both error_count addends. Call only on the armed 0->1 edge. */
+void faultErrorCountReset(void);
 
 #endif /* FAULTS_H_ */
