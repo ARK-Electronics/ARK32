@@ -27,6 +27,21 @@ extern volatile uint16_t zero_input_count;
 extern volatile uint32_t dma_buffer[64];
 extern void resetInputCaptureTimer(void);
 
+/* See the comments on the declarations in faults.h. */
+volatile uint32_t fault_stall_trips = 0;
+
+uint32_t faultErrorCount(void)
+{
+	return desync_happened + fault_stall_trips;
+}
+
+void faultErrorCountReset(void)
+{
+	/* Per-arm cycle (DSDL: error_count resets when the motor restarts). */
+	fault_stall_trips = 0;
+	desync_happened = 0;
+}
+
 uint8_t faultHandleStuckRotorIfNeeded(void)
 {
 #ifndef BRUSHED_MODE
@@ -327,6 +342,12 @@ void faultHandleBemfIntervalStall(void)
 		// this rail is guaranteed to run next pass): blind stepping only
 		// arms at zero_crosses >= 100, so those episodes always charge.
 		if (zero_crosses > 100) {
+			/* Established run died here. This is the ONLY place the
+			 * stall rail is counted, and it is the aggregation point
+			 * for the grind rail and the blind/miss-limit handoff,
+			 * both of which reach the loop through this trip - see
+			 * faultErrorCount(). */
+			fault_stall_trips++;
 			faultDesyncEpisodeCharge(DESYNC_EPISODE_STALL_RAIL);
 		}
 		if (escIsFault()) {

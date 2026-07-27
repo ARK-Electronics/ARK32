@@ -8,6 +8,7 @@
 #include "common.h"
 #include "signal.h"
 #include "eeprom.h"
+#include "faults.h"
 
 volatile esc_state_t esc_state = ESC_DISARMED;
 volatile uint16_t esc_illegal_edge_count = 0;
@@ -180,6 +181,13 @@ void escToArming(void)
 
 void escToArmedIdle(void)
 {
+	/* Armed 0->1: clear esc.Status error_count for this arm cycle.
+	 * DSDL says error_count "Resets when the motor restarts"; arm is the
+	 * ESC-side restart of the drive session. Only on the rising edge so
+	 * re-entering ARMED_IDLE from a stall coast does not wipe counts. */
+	if (!armed) {
+		faultErrorCountReset();
+	}
 	armed = 1;
 	running = 0;
 	stepper_sine = 0;
