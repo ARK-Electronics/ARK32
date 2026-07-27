@@ -91,3 +91,33 @@ jobs:
       # .app_signature emptied by dead-code elimination.
       - name: Build ARK + codegen check
         run: make codegen-check-ark -j$(nproc)
+
+  # Production full-flash image (BL + app + factory EEPROM). Fails if the
+  # 32 KiB layout or ARK 4IN1 ship defaults regress. See factory/README.md.
+  factory-image:
+    name: factory image (ARK 4IN1 full flash)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Arm toolchain
+        run: |
+          make arm_sdk_install
+          make arm_sdk_check
+
+      - name: Build + verify factory full-flash image
+        run: make factory-image-check -j$(nproc)
+
+      - name: Upload factory artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ark-4in1-factory-image
+          path: |
+            obj/AM32_ARK_4IN1_F051_*.factory.bin
+            obj/AM32_ARK_4IN1_F051_*.factory.hex
+            obj/AM32_ARK_4IN1_F051_*.eeprom.bin
+          if-no-files-found: error
+          retention-days: 30

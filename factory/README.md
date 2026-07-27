@@ -76,3 +76,13 @@ make factory-image
 ## Script
 
 [`scripts/build_factory_image.py`](../scripts/build_factory_image.py) — pure Python 3, no third-party deps. Invoked by `make factory-image`.
+
+## CI
+
+Every PR/push runs **`factory-image`** in [`.github/workflows/static-analysis.yml`](../.github/workflows/static-analysis.yml):
+
+```bash
+make factory-image-check   # build + scripts/check-factory-image-ark.sh
+```
+
+The job fails if the 32 KiB layout is wrong or the EEPROM page drifts from `ARK_4IN1_F051_eeprom_defaults.json`. Artifacts (`*.factory.bin` / `.hex` / `.eeprom.bin`) are uploaded as `ark-4in1-factory-image`.

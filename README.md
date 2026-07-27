@@ -86,6 +86,7 @@ make -j$(nproc) ARK_4IN1_F051
 # Production full-flash image (bootloader + app + factory EEPROM defaults)
 make factory-image
 # -> obj/AM32_ARK_4IN1_F051_<ver>.factory.bin  (flash at 0x08000000)
+make factory-image-check   # same + layout/defaults gate (CI)
 ```
 
 Firmware objects land under `obj/`. MCU families supported by the build system include F051, F031, G071, E230, F415, F421, L431, G431, V203, G031, A153, and SITL — exact product names live in `Inc/targets.h`.
