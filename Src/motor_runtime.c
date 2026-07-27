@@ -89,6 +89,7 @@ uint16_t stall_protect_target_interval = TARGET_STALL_PROTECTION_INTERVAL;
 uint16_t enter_sine_angle = 180;
 char do_once_sinemode = 0;
 uint8_t auto_advance_level;
+uint16_t advance_erpm_scale_q12 = 0; // see motor_runtime.h; 0 = fall back to the duty proxy
 
 //============================= Servo Settings ==============================
 uint16_t servo_low_threshold = 1100;  // anything below this point considered 0

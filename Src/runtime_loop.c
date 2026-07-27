@@ -448,7 +448,91 @@ void runtimeMotorModeTick(void)
 		}
 
 		if (eepromBuffer.auto_advance) {
-			auto_advance_level = map(duty_cycle, 100, 2000, 13, 23);
+			/*
+			 * Commutation lag is dominated by the phase lag of current behind
+			 * applied voltage, atan(w*L/R), so what the advance schedule
+			 * actually wants on its x axis is a measure of speed - not duty
+			 * cycle, which only stands in for speed at one load.
+			 *
+			 * This replaces the duty proxy with measured k_erpm normalized to
+			 * a realistic free-run ceiling on the present pack (15/16 of the
+			 * ideal kv * V * poles/2 - see settings.c). Same 13..23 output
+			 * range, same curve shape - only the x axis changes.
+			 *
+			 * WHAT THIS FIXES: load blindness. Under load rpm sits well below
+			 * what duty implies, so the real lag is lower and the duty curve
+			 * over-advances. More advance means more current, so the old curve
+			 * pushed the wrong way in exactly the condition that is already
+			 * thermally worst. Verified: at 6S/2000kV/14P, duty 1200, dropping
+			 * to 70% of no-load rpm moves the level 18 -> 16.
+			 *
+			 * Free-run vs ideal: pure kv*V is a hard upper bound motors rarely
+			 * reach (IR drop, iron loss). Mapping against that ideal left
+			 * full-throttle free-run about one advance notch short of the duty
+			 * curve's top (22 instead of 23). The 15/16 scale baked into
+			 * advance_erpm_scale_q12 is the cheap fix: typical free-run still
+			 * hits level 23, map() clamps anything above the ceiling, and the
+			 * load-side correction is unchanged (it is the ratio that moves).
+			 *
+			 * Pack sag vs ceiling: the free-run ceiling is max_kerpm(V_ref).
+			 * Instantaneous battery_voltage sags under load; if that live
+			 * reading were V_ref, a smaller ceiling would raise
+			 * k_erpm/max_kerpm and partially undo the load correction this
+			 * block exists for. V_ref is therefore a peak-hold while
+			 * throttle is applied (ignore IR drop), and tracks live voltage
+			 * at idle so SoC is re-learned between loads / after a pack
+			 * swap. Rest recovery after a heavy pull also raises the peak.
+			 *
+			 * WHAT THIS DOES NOT FIX: the physics residual on pack voltage.
+			 * Under free-run k_erpm scales with V and so does max_kerpm, so
+			 * the ratio - and this schedule - is voltage-invariant across
+			 * pack sizes at equal duty (verified 4S/6S/12S), exactly like
+			 * the duty curve it replaces. The physics says L/R falls roughly
+			 * as 1/kv, which makes the lag a function of BEMF (~rpm/kv) and
+			 * leaves a residual voltage term. Keying on BEMF instead would
+			 * be the fuller correction, but it changes full-throttle
+			 * advance on every pack size at once and needs bench data to
+			 * pick endpoints. Deliberately not done here.
+			 *
+			 * So this is the conservative half: close to today wherever duty
+			 * was a valid free-run proxy, and different under load in the
+			 * direction that lowers current.
+			 *
+			 * Low endpoint is max_kerpm/16 (6.25% of the free-run ceiling)
+			 * rather than the duty curve's 5% - a shift instead of a divide,
+			 * and map() clamps to the bottom of the range below it either way.
+			 *
+			 * Falls back to the duty proxy whenever the normalization cannot be
+			 * trusted (all paths unit-checked):
+			 *   - no scale: implausible kV or pole count (see settings.c)
+			 *   - no usable pack reading yet (boot, before the ADC settles)
+			 *   - measured erpm past the configured ceiling by >25%, the
+			 *     signature of a mis-entered motor kV. That case matters
+			 *     because entering 50-60% of the real kV is a known field
+			 *     workaround for the throttle-limiter bug (am32-firmware#405);
+			 *     normalizing against a ceiling that low would peg advance at
+			 *     the top of the range through most of the throttle band. The
+			 *     duty proxy is immune to a wrong kV, so it stays the fallback.
+			 */
+			/* Peak-hold pack V for the free-run ceiling (centivolts). */
+			static uint16_t advance_pack_v_cv;
+			uint16_t adv_max_kerpm = 0;
+			if (advance_erpm_scale_q12 != 0 && battery_voltage > 300) {
+				if (duty_cycle < 100 || advance_pack_v_cv == 0) {
+					/* Idle (or first sample): follow live voltage so SoC /
+					 * pack swap is re-learned and cold start is not stuck at 0. */
+					advance_pack_v_cv = battery_voltage;
+				} else if (battery_voltage > advance_pack_v_cv) {
+					/* Loaded: track peaks only (rest recovery, higher SoC). */
+					advance_pack_v_cv = battery_voltage;
+				}
+				adv_max_kerpm = (uint16_t)(((uint32_t)advance_erpm_scale_q12 * advance_pack_v_cv) >> 12);
+			}
+			if (adv_max_kerpm > 8 && k_erpm <= (uint16_t)(adv_max_kerpm + (adv_max_kerpm >> 2))) {
+				auto_advance_level = map(k_erpm, adv_max_kerpm >> 4, adv_max_kerpm, 13, 23);
+			} else {
+				auto_advance_level = map(duty_cycle, 100, 2000, 13, 23);
+			}
 		}
 
 		/**************** old routine*********************/

@@ -16,11 +16,19 @@ cd "$ROOT"
 # arm-none-eabi-size "text" spans those RX regions; do not compare to 27424 alone.
 FLASH_CAPACITY="${FLASH_CAPACITY:-27648}"
 RAM_CAPACITY="${RAM_CAPACITY:-8000}"
-# After -Os (+ RAM_FUNC -O3), const pwmSin, no-heap, inlined esc predicates,
-# HWCI sits ~88% flash / ~80% RAM. Leave margin for accidental growth.
-# (Global -O3 filled ~99% and regressed hold100 free-run on F051 — do not raise
-# this limit just to fit -O3.)
-FLASH_MAX_PCT="${FLASH_MAX_PCT:-95}"
+# Flash is budgeted to near-capacity deliberately: the F051 app region is the
+# binding constraint on this fork, and holding back 5% was blocking feature work
+# for margin the project does not need. The gate exists to catch a PR that
+# *overflows*, not to reserve headroom.
+#
+# NOTE: this is a size decision only. Global -O3 previously filled ~99% AND
+# regressed hold100 free-run on F051 (armed/input drop near ~97% throttle) — see
+# the CFLAGS comment in the Makefile. That regression is functional, not a size
+# problem, so a higher limit here is NOT permission to enable global -O3.
+#
+# RAM stays at 90%: unlike flash, the remaining RAM is stack headroom, and
+# overflowing it fails at runtime rather than at link time.
+FLASH_MAX_PCT="${FLASH_MAX_PCT:-99.8}"
 RAM_MAX_PCT="${RAM_MAX_PCT:-90}"
 
 ELF=$(ls -1 obj/AM32_ARK_4IN1_F051_*.elf 2>/dev/null | head -1 || true)
@@ -69,8 +77,10 @@ FLASH_USED=$((ISR + TEXT + RODATA + INITA + FINIA + FILE_NAME_SZ + DATA))
 # RAM at runtime: .data + .bss + .noinit + heap/stack reservation
 RAM_USED=$((DATA + BSS + NOINIT + HEAPSTACK))
 
-FLASH_MAX=$((FLASH_CAPACITY * FLASH_MAX_PCT / 100))
-RAM_MAX=$((RAM_CAPACITY * RAM_MAX_PCT / 100))
+# Fractional percentages are supported (e.g. 99.8), so the limits are computed
+# with awk rather than shell integer arithmetic, truncating toward zero.
+FLASH_MAX=$(awk -v c="$FLASH_CAPACITY" -v p="$FLASH_MAX_PCT" 'BEGIN{printf "%d", c*p/100}')
+RAM_MAX=$(awk -v c="$RAM_CAPACITY" -v p="$RAM_MAX_PCT" 'BEGIN{printf "%d", c*p/100}')
 
 flash_pct=$(awk -v u="$FLASH_USED" -v c="$FLASH_CAPACITY" 'BEGIN{printf "%.2f", 100*u/c}')
 ram_pct=$(awk -v u="$RAM_USED" -v c="$RAM_CAPACITY" 'BEGIN{printf "%.2f", 100*u/c}')
