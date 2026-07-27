@@ -56,7 +56,7 @@ openocd -f interface/stlink.cfg -f target/stm32f0x.cfg \
 
 | Region | Address | Size | Source |
 |--------|---------|------|--------|
-| Bootloader | `0x08000000` | 16 KiB | Optional `Bootloaders/AM32_G431*_CAN*.bin`; else **0xFF pad** (flash BL separately) |
+| Bootloader | `0x08000000` | 16 KiB | `Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin` (16 KiB region, file ~14 KiB + 0xFF pad) |
 | Application | `0x08004000` | ~111.5 KiB | `make ARK_G431_CAN` (`ldscript_CAN.ld`) |
 | EEPROM | `0x0801F800` | 2 KiB | [`ARK_G431_CAN_eeprom_defaults.json`](ARK_G431_CAN_eeprom_defaults.json) |
 
@@ -81,8 +81,8 @@ make factory-image
 
 ## Field updates vs factory image
 
-- **Production / blank chip:** flash the `.factory.bin` once (G431: commit a CAN bootloader under `Bootloaders/` first, or flash BL then the factory image / app+eeprom).
-- **In-field app update:** flash the normal app `.bin` / `.hex` at the app base (F051 `0x08001000`, G431 CAN `0x08004000`). EEPROM is left alone. F051 builds also embed the bootloader for optional app-side BL refresh (`EMBED_BOOTLOADER`, see [Bootloaders/README.md](../Bootloaders/README.md)). There is **no** G431 app-side BL embed yet (no committed G431 BL image).
+- **Production / blank chip:** flash the `.factory.bin` once (includes BL + app + EEPROM for both products).
+- **In-field app update:** flash the normal app `.bin` / `.hex` at the app base (F051 `0x08001000`, G431 CAN `0x08004000`). EEPROM is left alone. F051 builds also embed the bootloader for optional app-side BL refresh (`EMBED_BOOTLOADER`, see [Bootloaders/README.md](../Bootloaders/README.md)). G431 currently uses the committed BL only for the factory full-flash image (no app-side BL rewrite path yet).
 
 ## Script
 
@@ -96,4 +96,4 @@ Every PR/push runs **`factory-image`** in [`.github/workflows/static-analysis.ym
 make factory-image-check   # build + scripts/check-factory-image-ark.sh
 ```
 
-The job fails if the 32 KiB layout is wrong or the EEPROM page drifts from `ARK_4IN1_F051_eeprom_defaults.json`. Artifacts (`*.factory.bin` / `.hex` / `.eeprom.bin`) are uploaded as `ark-4in1-factory-image`.
+The job fails if the flash layout is wrong or the EEPROM page drifts from the product defaults JSON (F051 or G431). Artifacts (`*.factory.bin` / `.hex` / `.eeprom.bin`) are uploaded as `ark-factory-images`.

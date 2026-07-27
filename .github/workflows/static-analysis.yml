@@ -90,8 +90,8 @@ jobs:
 
   # Production full-flash images (BL + app + factory EEPROM). Fails if the
   # flash layout or ARK ship defaults regress. See factory/README.md.
-  # Covers ARK_4IN1_F051 (32 KiB + committed BL) and ARK_G431_CAN (128 KiB;
-  # BL region 0xFF until a G431 CAN bootloader .bin is committed).
+  # Covers ARK_4IN1_F051 (32 KiB + committed BL) and ARK_G431_CAN (128 KiB
+  # + committed AM32_G431_BOOTLOADER_ARKG4_CAN under Bootloaders/).
   factory-image:
     name: factory image (ARK 4IN1 + G431 CAN)
     runs-on: ubuntu-latest

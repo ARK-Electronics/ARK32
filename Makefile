@@ -284,9 +284,11 @@ FACTORY_F051_DEFAULTS := factory/ARK_4IN1_F051_eeprom_defaults.json
 FACTORY_G431_PRODUCT := ARK_G431_CAN
 FACTORY_G431_BASENAME := $(OBJ)/$(IDENTIFIER)_$(FACTORY_G431_PRODUCT)_$(FIRMWARE_VERSION)
 FACTORY_G431_DEFAULTS := factory/ARK_G431_CAN_eeprom_defaults.json
-# Optional: drop a G431 CAN bootloader .bin here to embed it in the full image.
-# When missing, the 16 KiB BL region is 0xFF-padded (flash BL separately).
-BL_IMAGE_G431_CAN ?= $(firstword $(wildcard Bootloaders/AM32_G431*_CAN*.bin Bootloaders/AM32_G431*CAN*.bin))
+# G431 CAN 16 KiB bootloader region (ARK 12S CAN ESC). Committed under
+# Bootloaders/ from ARK32-bootloader AM32_G431_BOOTLOADER_ARKG4_CAN. When
+# missing, factory-image-g431-can can still 0xFF-pad via --allow-empty-bootloader
+# if you override BL_IMAGE_G431_CAN to empty.
+BL_IMAGE_G431_CAN ?= Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin
 
 factory-image-f051: $(FACTORY_F051_PRODUCT)
 	$(QUIET)$(ECHO) "Building factory full-flash image for $(FACTORY_F051_PRODUCT)"
@@ -303,7 +305,7 @@ factory-image-g431-can: $(FACTORY_G431_PRODUCT)
 	$(QUIET)$(ECHO) "Building factory full-flash image for $(FACTORY_G431_PRODUCT)"
 	$(QUIET)python3 scripts/build_factory_image.py \
 		--defaults $(FACTORY_G431_DEFAULTS) \
-		$(if $(BL_IMAGE_G431_CAN),--bootloader $(BL_IMAGE_G431_CAN),--allow-empty-bootloader) \
+		$(if $(wildcard $(BL_IMAGE_G431_CAN)),--bootloader $(BL_IMAGE_G431_CAN),--allow-empty-bootloader) \
 		--app $(FACTORY_G431_BASENAME).bin \
 		--version-h $(MAIN_INC_DIR)/version.h \
 		--out-bin $(FACTORY_G431_BASENAME).factory.bin \
