@@ -455,9 +455,9 @@ void runtimeMotorModeTick(void)
 			 * cycle, which only stands in for speed at one load.
 			 *
 			 * This replaces the duty proxy with measured k_erpm normalized to
-			 * what this motor can reach at full duty on the present pack
-			 * (kv * V * poles/2). Same 13..23 output range, same curve shape,
-			 * no retuned constants - only the x axis changes.
+			 * a realistic free-run ceiling on the present pack (15/16 of the
+			 * ideal kv * V * poles/2 - see settings.c). Same 13..23 output
+			 * range, same curve shape - only the x axis changes.
 			 *
 			 * WHAT THIS FIXES: load blindness. Under load rpm sits well below
 			 * what duty implies, so the real lag is lower and the duty curve
@@ -465,6 +465,14 @@ void runtimeMotorModeTick(void)
 			 * pushed the wrong way in exactly the condition that is already
 			 * thermally worst. Verified: at 6S/2000kV/14P, duty 1200, dropping
 			 * to 70% of no-load rpm moves the level 18 -> 16.
+			 *
+			 * Free-run vs ideal: pure kv*V is a hard upper bound motors rarely
+			 * reach (IR drop, iron loss). Mapping against that ideal left
+			 * full-throttle free-run about one advance notch short of the duty
+			 * curve's top (22 instead of 23). The 15/16 scale baked into
+			 * advance_erpm_scale_q12 is the cheap fix: typical free-run still
+			 * hits level 23, map() clamps anything above the ceiling, and the
+			 * load-side correction is unchanged (it is the ratio that moves).
 			 *
 			 * WHAT THIS DOES NOT FIX: pack voltage. Under no load k_erpm scales
 			 * with V and so does max_kerpm, so the ratio - and this schedule -
@@ -476,13 +484,13 @@ void runtimeMotorModeTick(void)
 			 * changes full-throttle advance on every pack size at once and
 			 * needs bench data to pick endpoints. Deliberately not done here.
 			 *
-			 * So this is the conservative half: identical to today wherever
-			 * duty was a valid proxy, and different only under load, in the
+			 * So this is the conservative half: close to today wherever duty
+			 * was a valid free-run proxy, and different under load in the
 			 * direction that lowers current.
 			 *
-			 * Low endpoint is max_kerpm/16 (6.25%) rather than the duty curve's
-			 * 5% - a shift instead of a divide, and map() clamps to the bottom
-			 * of the range below it either way.
+			 * Low endpoint is max_kerpm/16 (6.25% of the free-run ceiling)
+			 * rather than the duty curve's 5% - a shift instead of a divide,
+			 * and map() clamps to the bottom of the range below it either way.
 			 *
 			 * Falls back to the duty proxy whenever the normalization cannot be
 			 * trusted (all paths unit-checked):

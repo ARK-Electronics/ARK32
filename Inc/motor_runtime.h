@@ -34,9 +34,12 @@ extern uint8_t auto_advance_level;
  *
  *   max_kerpm = (advance_erpm_scale_q12 * battery_voltage) >> 12
  *
- * i.e. the electrical frequency this motor reaches at 100% duty on the present
- * pack. Zero means the schedule cannot be normalized (implausible kV or pole
- * count) and the caller must fall back to the duty-cycle proxy.
+ * That ceiling is 15/16 of the ideal free-run electrical frequency
+ * (kv * V * poles/2): real free-run sits a few percent below ideal (IR drop,
+ * iron loss), and without the scale-down full-throttle free-run often stops
+ * one advance notch short of the duty-curve top (23). Zero means the schedule
+ * cannot be normalized (implausible kV or pole count) and the caller must
+ * fall back to the duty-cycle proxy.
  */
 extern uint16_t advance_erpm_scale_q12;
 extern volatile char old_routine;
