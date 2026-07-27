@@ -82,9 +82,31 @@ make arm_sdk_check          # optional: confirm GCC 15.x at the pin path
 # List / build targets (examples)
 make targets
 make -j$(nproc) ARK_4IN1_F051
+
+# Production full-flash image (bootloader + app + factory EEPROM defaults)
+make factory-image
+# -> obj/AM32_ARK_4IN1_F051_<ver>.factory.bin  (flash at 0x08000000)
 ```
 
 Firmware objects land under `obj/`. MCU families supported by the build system include F051, F031, G071, E230, F415, F421, L431, G431, V203, G031, A153, and SITL — exact product names live in `Inc/targets.h`.
+
+### Production release image (ARK 4IN1)
+
+Do **not** hand-assemble production firmware (flash BL → flash app → configurator EEPROM → ST-Link dump). Build the full 32 KiB image from the repo:
+
+```bash
+make factory-image
+```
+
+That links the release app, then runs [`scripts/build_factory_image.py`](scripts/build_factory_image.py) to lay out:
+
+| Region | Source |
+|--------|--------|
+| Bootloader @ `0x08000000` | [`Bootloaders/`](Bootloaders/) ARK32-bootloader image |
+| Application @ `0x08001000` | `make ARK_4IN1_F051` |
+| EEPROM @ `0x08007C00` | [`factory/ARK_4IN1_F051_eeprom_defaults.json`](factory/ARK_4IN1_F051_eeprom_defaults.json) |
+
+Ship/program `obj/AM32_ARK_4IN1_F051_*.factory.bin` (or `.factory.hex`). Defaults (PWM-by-RPM, 1020 kV, 2 %/ms ramp, 15° fixed advance, PWM min/max 1020/1980 µs) are documented in [`factory/README.md`](factory/README.md).
 
 Optional static analysis / size / format helpers:
 
@@ -224,7 +246,7 @@ ARK ESCs use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootl
 | Committed F051 image for app embed | [`Bootloaders/`](Bootloaders/) (see [Bootloaders/README.md](Bootloaders/README.md)) |
 | App-side BL update | F051 builds embed the image by default (including `HWCI_PERF=1`) and rewrite the on-chip BL if it differs (`Src/bootloader_update.c`). Success soft-resets; the next boot plays **`playBootloaderUpdatedTone`** (two rising beeps) then the normal startup tune. Strip with `EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`. |
 
-To put ARK32 on a blank ESC: flash a matching **ARK32-bootloader** build with ST-LINK / GD-LINK / CMSIS-DAP / AT-LINK (etc.), then flash application firmware with a configurator or one-wire serial. Later app flashes can also carry and apply a newer BL via the embed path above.
+To put ARK32 on a **blank production ESC**, flash the full-chip factory image (`make factory-image` → `obj/*factory.bin` at `0x08000000`) so bootloader, app, and EEPROM defaults land in one step — see [factory/README.md](factory/README.md). For development or field app-only updates, flash a matching **ARK32-bootloader** with ST-LINK (if needed), then the application `.bin`/`.hex` at `0x08001000` (or use a configurator / one-wire serial). Later app flashes can also carry and apply a newer BL via the embed path above.
 
 ## Configuration tools & stock firmware
 
