@@ -124,6 +124,22 @@ SECTIONS
     PROVIDE_HIDDEN (__fini_array_end = .);
     . = ALIGN(4);
   } >FLASH
+
+  /* Bootloader image embedded for the app-side bootloader update (Src/bl_image.S).
+     Empty unless the build defines EMBED_BOOTLOADER. Kept in its own output
+     section for two reasons: the 4 KiB blob stays attributable in the map and
+     the size gate instead of disappearing into .rodata, and the bounds symbols
+     give the asserts at the end of this file something to test. Placed last in
+     FLASH so it does not split the code and rodata it has nothing to do with. */
+  .bl_image :
+  {
+    . = ALIGN(4);
+    _bl_image_start = .;
+    KEEP (*(.bl_image))
+    . = ALIGN(4);
+    _bl_image_end = .;
+  } >FLASH
+
   /* The file name */
   .file_name :
   {
@@ -197,3 +213,19 @@ SECTIONS
 
   .ARM.attributes 0 : { *(.ARM.attributes) }
 }
+
+/* The embedded bootloader image is written over the bootloader region, which runs
+   from the start of flash up to the app at ORIGIN(FLASH_VECTAB). Both properties
+   below are structurally true today - the app links above FLASH_VECTAB and the
+   image is padded to the region size in Src/bl_image.S - but they are the two
+   mistakes that brick a board rather than fail a test, so a future MEMORY edit
+   should break the link instead. Size 0 is the non-embedding build. */
+_bl_region_start = 0x08000000;
+_bl_region_size  = ORIGIN(FLASH_VECTAB) - _bl_region_start;
+
+ASSERT(_bl_image_end - _bl_image_start == 0 ||
+       _bl_image_end - _bl_image_start == _bl_region_size,
+       "embedded bootloader image must be exactly the size of the bootloader region")
+
+ASSERT(_bl_image_start >= ORIGIN(FLASH_VECTAB),
+       "embedded bootloader image must not live inside the region it erases")

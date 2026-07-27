@@ -4,7 +4,9 @@
  * When EMBED_BOOTLOADER is set, compare flash @ MCU base to the embedded
  * image; if different, program the BL region with IRQs off, verify, reset.
  *
- * HWCI_PERF builds omit EMBED_BOOTLOADER so the ~4 KiB image is not linked.
+ * The image itself is a committed .bin pulled in by Src/bl_image.S; this file
+ * only sees its bounds. HWCI_PERF builds omit EMBED_BOOTLOADER so neither the
+ * ~4 KiB image nor this logic is linked.
  */
 
 #include "bootloader_update.h"
@@ -18,8 +20,15 @@
 
 #if defined(EMBED_BOOTLOADER) && defined(MCU_F051)
 
-/* ARK 4IN1 / HARDWARE_GROUP_F0_B signal pin is PB4. */
-#	include "bootloader_images/bl_image_f051_pb4.h"
+/*
+ * Bounds of the image assembled by Src/bl_image.S, defined by the .bl_image
+ * output section in the linker script. Linker symbols carry no value of their
+ * own - only their address matters - so they are declared as arrays and the
+ * length is the difference between them. The linker script asserts the size
+ * matches the bootloader region and that the image sits outside it.
+ */
+extern const uint8_t _bl_image_start[];
+extern const uint8_t _bl_image_end[];
 
 #	ifndef MCU_FLASH_START
 #		define MCU_FLASH_START 0x08000000u
@@ -30,8 +39,8 @@
 
 void maybe_update_bootloader(void)
 {
-	const uint32_t len = (uint32_t)sizeof(bl_image);
-	const uint8_t *want = bl_image;
+	const uint32_t len = (uint32_t)(_bl_image_end - _bl_image_start);
+	const uint8_t *want = _bl_image_start;
 	const uint8_t *have = (const uint8_t *)(uintptr_t)MCU_FLASH_START;
 
 	if (len == 0u || (len & 1u) != 0u) {

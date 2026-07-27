@@ -111,6 +111,16 @@ SRC_OPTIONAL_BRUSHED := $(MAIN_SRC_DIR)/brushed.c
 SRC_OPTIONAL_HWCI    := $(MAIN_SRC_DIR)/hwci_perf.c
 SRC_COMMON_BASE := $(filter-out $(SRC_OPTIONAL_BRUSHED) $(SRC_OPTIONAL_HWCI),$(SRC_COMMON_ALL))
 
+# App-side bootloader update. The image is a committed bootloader .bin pulled in
+# with .incbin (Src/bl_image.S) rather than a generated C array, so the linked
+# bytes stay verifiable against the AM32-bootloader release they came from.
+# .S, not .[cs]: the wildcard above skips it, so it is opt-in per target.
+# Bumping the bootloader means dropping the new .bin in and editing this one line.
+SRC_OPTIONAL_BL_IMAGE := $(MAIN_SRC_DIR)/bl_image.S
+BL_IMAGE_F051 := Bootloaders/AM32_F051_BOOTLOADER_PB4_V18.bin
+# 0x08000000..ORIGIN(FLASH_VECTAB); the F051 linker script asserts the match.
+BL_REGION_SIZE_F051 := 4096
+
 # configure some directories that are relative to wherever ROOT_DIR is located
 OBJ := obj
 BIN_DIR := $(ROOT)/$(OBJ)
@@ -164,26 +174,34 @@ $(eval xLDSCRIPT := $$(if $$(call has_can_suffix,$$(2)),$(LDSCRIPT_CAN_$(1)),$(L
 $(eval xCFLAGS := $$(if $$(call has_can_suffix,$$(2)),$(CFLAGS_CAN_$(1))))
 $(eval xSRC := $$(if $$(call has_can_suffix,$$(2)),$(SRC_CAN_$(1))))
 
+# Embed the bootloader image on F051 unless this is an HWCI_PERF build, which
+# keeps its flash headroom and its non-LTO codegen for perf instrumentation.
+$(eval xEMBED_BL := $(if $(filter F051,$(1)),$(if $(filter 1,$(HWCI_PERF)),,1)))
+
 # Per-target app sources: drop brushed/hwci unless the product asks for them
-$(eval SRC_APP_$(2) := $(SRC_COMMON_BASE)$(if $(call has_brushed_suffix,$(2)), $(SRC_OPTIONAL_BRUSHED))$(if $(filter 1,$(HWCI_PERF)), $(SRC_OPTIONAL_HWCI)))
+$(eval SRC_APP_$(2) := $(SRC_COMMON_BASE)$(if $(call has_brushed_suffix,$(2)), $(SRC_OPTIONAL_BRUSHED))$(if $(filter 1,$(HWCI_PERF)), $(SRC_OPTIONAL_HWCI))$(if $(xEMBED_BL), $(SRC_OPTIONAL_BL_IMAGE)))
 
 # allow an MCU type to override the common compiler/linker flags (used by SITL
 # for a native build) and to have no linker script
 $(eval xCFLAGS_COMMON := $(if $(CFLAGS_COMMON_$(1)),$(CFLAGS_COMMON_$(1)),$(CFLAGS_COMMON)))
 $(eval xLDFLAGS_COMMON := $(if $(LDFLAGS_COMMON_$(1)),$(LDFLAGS_COMMON_$(1)),$(LDFLAGS_COMMON)))
 
-# App-side bootloader update: embed BL image on F051 unless HWCI_PERF=1.
 # The 4 KiB image + update glue is ~1 KiB over non-LTO headroom on F051, so
-# EMBED builds use -flto. HWCI stays non-LTO and omits the image.
+# embedding builds use -flto. HWCI stays non-LTO and omits the image.
+# BL_IMAGE_FILE is repo-relative and resolved by the assembler against the cwd,
+# which make always sets to the repo root.
 CFLAGS_$(2) = -DAM32_MCU=\"$(MCU)\" $(MCU_$(1)) -D$(2) $(CFLAGS_$(1)) $(xCFLAGS_COMMON) $(xCFLAGS) \
-	$(if $(filter F051,$(1)),$(if $(filter 1,$(HWCI_PERF)),,-DEMBED_BOOTLOADER -flto))
+	$(if $(xEMBED_BL),-DEMBED_BOOTLOADER -DBL_IMAGE_FILE=\"$(BL_IMAGE_F051)\" -DBL_REGION_SIZE=$(BL_REGION_SIZE_F051) -flto)
 LDFLAGS_$(2) = $(xLDFLAGS_COMMON) $(LDFLAGS_$(1)) $(if $(xLDSCRIPT),-T$(xLDSCRIPT)) \
-	$(if $(filter F051,$(1)),$(if $(filter 1,$(HWCI_PERF)),,-flto))
+	$(if $(xEMBED_BL),-flto)
 
 -include $$($(2)_BASENAME).d
 
 # Cross targets require the pinned xPack GCC 15 (see make/tools.mk). SITL is native.
-$$($(2)_BASENAME).elf: $(if $(NATIVE_$(1)),,arm_sdk_check) $$(SRC_APP_$(2)) $$(SRC_$(1)) $(xSRC)
+# The bootloader .bin is listed explicitly: .incbin happens in the assembler, so
+# it never shows up in the -MMD depfile and swapping the image would otherwise
+# not rebuild anything.
+$$($(2)_BASENAME).elf: $(if $(NATIVE_$(1)),,arm_sdk_check) $$(SRC_APP_$(2)) $$(SRC_$(1)) $(xSRC) $(if $(xEMBED_BL),$(BL_IMAGE_F051))
 	@$(ECHO) Compiling $$(notdir $$@)
 	$(QUIET)$(MKDIR) -p $(OBJ)
 	$(QUIET)$(xCC) $$(CFLAGS_$(2)) $$(LDFLAGS_$(2)) -MMD -MP -MF $$(@:.elf=.d) -o $$(@) $$(SRC_APP_$(2)) $$(SRC_$(1)) $(xSRC) $(LDLIBS_$(1))
