@@ -267,27 +267,56 @@ size-check-ark:
 	$(QUIET)$(MAKE) -B ARK_4IN1_F051
 	$(QUIET)bash scripts/check-size-ark.sh
 
-# Production full-flash image for ARK 4IN1: bootloader + app + factory EEPROM
-# defaults in one 32 KiB binary (see factory/README.md). Replaces the old
-# flash-BL / flash-app / configurator / ST-Link dump release flow.
-.PHONY : factory-image factory-image-check
-FACTORY_PRODUCT := ARK_4IN1_F051
-FACTORY_APP_BASENAME := $(OBJ)/$(IDENTIFIER)_$(FACTORY_PRODUCT)_$(FIRMWARE_VERSION)
-FACTORY_DEFAULTS := factory/ARK_4IN1_F051_eeprom_defaults.json
-factory-image: $(FACTORY_PRODUCT)
-	$(QUIET)$(ECHO) "Building factory full-flash image for $(FACTORY_PRODUCT)"
+# Production full-flash images: bootloader + app + factory EEPROM defaults.
+# See factory/README.md. Replaces flash-BL / flash-app / configurator / dump.
+.PHONY : factory-image factory-image-f051 factory-image-g431-can factory-image-check
+FACTORY_F051_PRODUCT := ARK_4IN1_F051
+FACTORY_F051_BASENAME := $(OBJ)/$(IDENTIFIER)_$(FACTORY_F051_PRODUCT)_$(FIRMWARE_VERSION)
+FACTORY_F051_DEFAULTS := factory/ARK_4IN1_F051_eeprom_defaults.json
+FACTORY_G431_PRODUCT := ARK_G431_CAN
+FACTORY_G431_BASENAME := $(OBJ)/$(IDENTIFIER)_$(FACTORY_G431_PRODUCT)_$(FIRMWARE_VERSION)
+FACTORY_G431_DEFAULTS := factory/ARK_G431_CAN_eeprom_defaults.json
+# Optional: drop a G431 CAN bootloader .bin here to embed it in the full image.
+# When missing, the 16 KiB BL region is 0xFF-padded (flash BL separately).
+BL_IMAGE_G431_CAN ?= $(firstword $(wildcard Bootloaders/AM32_G431*_CAN*.bin Bootloaders/AM32_G431*CAN*.bin))
+
+factory-image-f051: $(FACTORY_F051_PRODUCT)
+	$(QUIET)$(ECHO) "Building factory full-flash image for $(FACTORY_F051_PRODUCT)"
 	$(QUIET)python3 scripts/build_factory_image.py \
-		--defaults $(FACTORY_DEFAULTS) \
+		--defaults $(FACTORY_F051_DEFAULTS) \
 		--bootloader $(BL_IMAGE_F051) \
-		--app $(FACTORY_APP_BASENAME).bin \
+		--app $(FACTORY_F051_BASENAME).bin \
 		--version-h $(MAIN_INC_DIR)/version.h \
-		--out-bin $(FACTORY_APP_BASENAME).factory.bin \
-		--out-hex $(FACTORY_APP_BASENAME).factory.hex \
-		--out-eeprom $(FACTORY_APP_BASENAME).eeprom.bin
+		--out-bin $(FACTORY_F051_BASENAME).factory.bin \
+		--out-hex $(FACTORY_F051_BASENAME).factory.hex \
+		--out-eeprom $(FACTORY_F051_BASENAME).eeprom.bin
+
+factory-image-g431-can: $(FACTORY_G431_PRODUCT)
+	$(QUIET)$(ECHO) "Building factory full-flash image for $(FACTORY_G431_PRODUCT)"
+	$(QUIET)python3 scripts/build_factory_image.py \
+		--defaults $(FACTORY_G431_DEFAULTS) \
+		$(if $(BL_IMAGE_G431_CAN),--bootloader $(BL_IMAGE_G431_CAN),--allow-empty-bootloader) \
+		--app $(FACTORY_G431_BASENAME).bin \
+		--version-h $(MAIN_INC_DIR)/version.h \
+		--out-bin $(FACTORY_G431_BASENAME).factory.bin \
+		--out-hex $(FACTORY_G431_BASENAME).factory.hex \
+		--out-eeprom $(FACTORY_G431_BASENAME).eeprom.bin
+
+# Default target builds both ARK production images.
+factory-image: factory-image-f051 factory-image-g431-can
 
 # Build + layout/defaults gate used by CI (.github/workflows/static-analysis.yml).
 factory-image-check: factory-image
-	$(QUIET)bash scripts/check-factory-image-ark.sh
+	$(QUIET)$(ECHO) "--- factory check $(FACTORY_F051_PRODUCT) ---"
+	$(QUIET)FACTORY_PRODUCT=$(FACTORY_F051_PRODUCT) \
+		FACTORY_DEFAULTS=$(FACTORY_F051_DEFAULTS) \
+		BL_IMAGE=$(BL_IMAGE_F051) \
+		bash scripts/check-factory-image-ark.sh
+	$(QUIET)$(ECHO) "--- factory check $(FACTORY_G431_PRODUCT) ---"
+	$(QUIET)FACTORY_PRODUCT=$(FACTORY_G431_PRODUCT) \
+		FACTORY_DEFAULTS=$(FACTORY_G431_DEFAULTS) \
+		BL_IMAGE="$(BL_IMAGE_G431_CAN)" \
+		bash scripts/check-factory-image-ark.sh
 
 # Code formatting (clang-format ≈ PX4 astyle/Linux look; see .clang-format).
 # Same target names as PX4:
