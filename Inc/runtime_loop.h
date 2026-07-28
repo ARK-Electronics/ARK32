@@ -55,5 +55,19 @@ extern uint8_t dcm_hold_ms;
 /* PR #63: advance-schedule rpm hold */
 extern uint16_t adv_kerpm_hold;
 extern uint8_t adv_kerpm_hold_ms;
+/*
+ * PR #65: BEMF-headroom governor state (file-scope so SITL ZC_STATS / SWD
+ * can assert un-latch engagement and force a low-slope bind on the bench).
+ * Only runtime_loop.c writes these in production paths.
+ */
+extern uint16_t gov_slope_q10;
+extern uint16_t gov_conf;
+extern uint16_t gov_stuck_ms;
+extern uint16_t gov_release_ceil;
+/* Sticky count of un-latch events (engagement observability; never cleared by coast). */
+extern uint16_t gov_unlatch_count;
+
+/* SITL/HWCI test hook: force slope + confidence so the ceiling can bind. */
+void runtimeGovForceForTest(uint16_t slope_q10, uint16_t conf);
 
 #endif /* RUNTIME_LOOP_H_ */

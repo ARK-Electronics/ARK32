@@ -1,0 +1,35 @@
+name: pr65_gov_unlatch_900kv
+description: >
+  PR #65 stuck-low-slope un-latch exercise on 900KV + 10". Seed a real slope
+  at 25% for ~6 s (gov arms after ~0.3 s of steady closed loop), then step to
+  50% and hold. A companion host poke (scripts/gov_force_low_slope.py) injects
+  a too-low slope mid-seed so the ceiling binds; this profile's step+hold is
+  long enough for GOV_STUCK_MS (1 s) rolling-flat un-latch and soft release.
+  live_desync_mode latch_only; observational smoke gates.
+sample_rate_hz: 100
+arm_settle_s: 3.0
+pole_pairs: 7
+demag_rpm_drop_fraction: 0.25
+demag_commutation_spike: 3.0
+steady_tail_fraction: 0.5
+live_desync_mode: latch_only
+
+safety:
+  max_current_a: 50.0
+  max_motor_temp_c: 85.0
+  max_rpm: 12000
+  max_thrust_n: 40.0
+
+smoke_gates:
+  enabled: false
+
+segments:
+  - {label: idle,       throttle: 0.00, duration_s: 2.0}
+  - {label: ramp_seed,  throttle: 0.25, duration_s: 3.0, ramp: true}
+  # Seed window: gov conf arms; host poke injects low slope near the end.
+  - {label: seed25,     throttle: 0.25, duration_s: 6.0, steady: true}
+  # Step demand under a (possibly stuck) low ceiling — un-latch + soft release.
+  - {label: step50,     throttle: 0.50, duration_s: 1.5, ramp: true}
+  - {label: hold50_ul,  throttle: 0.50, duration_s: 5.0, steady: true}
+  - {label: rampdn,     throttle: 0.00, duration_s: 3.0, ramp: true}
+  - {label: stop,       throttle: 0.00, duration_s: 2.0}

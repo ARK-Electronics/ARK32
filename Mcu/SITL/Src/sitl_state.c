@@ -28,17 +28,21 @@
   SITL -> client:
     u16 magic 0x5354, u8 version=1, u8 count, count * sample
     u16 magic 0x5355, u8 ok, u8 pad, message   (LOAD_MODEL reply)
-    u16 magic 0x5356, u8 version=4, u8 pad, u32 zero_crosses,
+    u16 magic 0x5356, u8 version=5, u8 pad, u32 zero_crosses,
       u32 commutation_interval, u32 dropped_edges, u32 desync_happened,
       u8 old_routine, u8 running, u8 armed, u8 zc_blind_steps,
       u8 zc_miss_bucket, u8 zc_deadline_armed,
       u8 dcm_hold_ms, u8 pad2, u16 dcm_hold_value,       (v2 PR 62)
       u8 adv_kerpm_hold_ms, u8 pad3, u16 adv_kerpm_hold, (v3 PR 63)
-      i32 zc_trend, u32 zc_predicted, u16 waitTime, u16 advance (v4 PR 64)
+      i32 zc_trend, u32 zc_predicted, u16 waitTime, u16 advance, (v4 PR 64)
+      u16 gov_conf, u16 gov_slope_q10, u16 gov_duty_ceiling,
+      u16 gov_stuck_ms, u16 gov_release_ceil, u16 gov_unlatch_count (v5 PR 65)
       (ZC_STATS reply). Fields are only ever APPENDED and the version is
       bumped; clients that unpack a shorter prefix keep working unchanged
       (they length-check with >=), which is why v1 readers such as
       test_blind_step.py and the v2/v3 hold tests need no edit.
+      cmd 5 GOV_FORCE: u16 slope_q10, u16 conf — force governor state for
+        un-latch engagement tests (see runtimeGovForceForTest).
 */
 
 #include "sitl.h"
@@ -247,9 +251,16 @@ void sitl_state_poll(void)
 			uint32_t zc_predicted;
 			uint16_t wait_time;
 			uint16_t advance_val;
+			/* v5: governor un-latch (PR #65). */
+			uint16_t gov_conf_v;
+			uint16_t gov_slope_q10_v;
+			uint16_t gov_duty_ceiling_v;
+			uint16_t gov_stuck_ms_v;
+			uint16_t gov_release_ceil_v;
+			uint16_t gov_unlatch_count_v;
 		} reply = {
 			.magic = 0x5356,
-			.version = 4,
+			.version = 5,
 			.zero_crosses = zero_crosses,
 			.commutation_interval = commutation_interval,
 			.dropped_edges = motor_zc_dropped(),
@@ -268,8 +279,20 @@ void sitl_state_poll(void)
 			.zc_predicted = bemfZcGetPredicted(),
 			.wait_time = waitTime,
 			.advance_val = advance,
+			.gov_conf_v = gov_conf,
+			.gov_slope_q10_v = gov_slope_q10,
+			.gov_duty_ceiling_v = gov_duty_ceiling,
+			.gov_stuck_ms_v = gov_stuck_ms,
+			.gov_release_ceil_v = gov_release_ceil,
+			.gov_unlatch_count_v = gov_unlatch_count,
 		};
 		sendto(fd, &reply, sizeof(reply), 0, (struct sockaddr *)&src, sizeof(src));
+	} else if (cmd == 5 && ret >= 8) {
+		// GOV_FORCE: pad unused; u16 slope_q10, u16 conf
+		uint16_t slope, conf;
+		memcpy(&slope, pkt + 4, 2);
+		memcpy(&conf, pkt + 6, 2);
+		runtimeGovForceForTest(slope, conf);
 	}
 }
 
