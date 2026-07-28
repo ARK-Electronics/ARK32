@@ -337,6 +337,16 @@ void runtimeSendTelemetryIfNeeded(void)
 #	define GOV_HEADROOM_CV 300   /* 3.0 V of slip headroom above the BEMF line */
 #	define GOV_CEIL_FLOOR 350    /* ceiling never below this (nor min_startup_duty+100) */
 #	define GOV_CONF_ARM 300
+/*
+ * Un-latch window (see (b2)). 1 s of continuously ceiling-limited running
+ * with less than GOV_STUCK_ERPM_EPS of eRPM gain over the whole window
+ * means the ceiling has stopped shaping a transient and started setting an
+ * operating point. A real heavy-prop spool gains far more than the epsilon
+ * in a second, so it never trips. EPS includes margin for e_rpm quantisation
+ * and residual jitter (e_rpm units are tens of electrical RPM).
+ */
+#	define GOV_STUCK_MS 1000
+#	define GOV_STUCK_ERPM_EPS 8
 
 __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 {
@@ -347,6 +357,8 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 	// is low) and the estimator re-tracks in ~30 ms of steady running.
 	static uint16_t gov_slope_q10;
 	static uint16_t gov_conf;
+	static uint16_t gov_stuck_ms;
+	static uint16_t gov_stuck_erpm;
 	// One volatile read each; everything below works on locals (M0: every
 	// volatile re-read is a literal-pool load + ldr, and this function is
 	// flash-budget critical).
@@ -388,6 +400,47 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 		if (gov_conf < 1000) {
 			gov_conf++;
 		}
+	}
+
+	/*
+	 * (b2) Un-latch. The estimator above cannot take a sample while the
+	 * ceiling binds, because riding it makes duty_cycle_setpoint equal
+	 * gov_duty_ceiling and the gate requires strictly less. That is
+	 * deliberate - a sample taken while limited would read the ceiling
+	 * back to itself - but it means a slope learned too low is permanent:
+	 * the ceiling holds duty down, the rotor settles at whatever eRPM that
+	 * duty sustains, and no further sample can ever correct it. The true
+	 * slope is genuinely unobservable while limited (without a per-motor
+	 * shunt the slip term cannot be separated), so the only way out is to
+	 * stop limiting and re-learn.
+	 *
+	 * Discriminate the two reasons the ceiling can bind for a long time:
+	 *   - eRPM still climbing: a heavy prop spooling as fast as it
+	 *     physically can. This is the governor working and must not be
+	 *     disturbed.
+	 *   - eRPM flat: the ceiling is holding the rotor at an operating
+	 *     point instead of shaping a transient. Nothing is being
+	 *     protected, and the estimate that produced it cannot self-correct.
+	 *
+	 * Only the second case disarms (gov_conf = 0), which returns the
+	 * ceiling to 2000 and lets the estimator re-seed from the next
+	 * unlimited sample - ~0.3 s of steady running, the same arm cost as a
+	 * cold start.
+	 */
+	const uint8_t gov_limited = (closed && gov_conf >= GOV_CONF_ARM && duty_cycle_setpoint >= gov_duty_ceiling && zc_blind_steps == 0 &&
+				     zc_demag_run == 0 && zc_grind_hold_ms == 0);
+	if (!gov_limited) {
+		gov_stuck_ms = 0;
+	} else if (gov_stuck_ms == 0) {
+		gov_stuck_erpm = (uint16_t)erpm;
+		gov_stuck_ms = 1;
+	} else if (erpm > (uint32_t)gov_stuck_erpm + GOV_STUCK_ERPM_EPS) {
+		gov_stuck_ms = 0; // still accelerating: the ceiling is doing its job
+	} else if (gov_stuck_ms < GOV_STUCK_MS) {
+		gov_stuck_ms++;
+	} else {
+		gov_stuck_ms = 0;
+		gov_conf = 0; // re-learn; ceiling returns to 2000 until re-armed
 	}
 
 	// (c) BEMF-headroom ceiling from the live eRPM: equilibrium duty via
