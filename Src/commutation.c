@@ -156,7 +156,7 @@ void zcfoundroutine()
 	SET_INTERVAL_TIMER_COUNT(0);
 	commutation_interval = (thiszctime + (3 * commutation_interval)) / 4;
 	advance = (temp_advance * commutation_interval) >> 6; //   7.5 degree increments
-	waitTime = commutation_interval / 2 - advance;
+	waitTime = bemfZcWaitTimeFromInterval(commutation_interval, advance);
 	while ((INTERVAL_TIMER_COUNT) < (waitTime)) {
 		if (zero_crosses < 5) {
 			break;

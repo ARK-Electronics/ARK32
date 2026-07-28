@@ -28,16 +28,17 @@
   SITL -> client:
     u16 magic 0x5354, u8 version=1, u8 count, count * sample
     u16 magic 0x5355, u8 ok, u8 pad, message   (LOAD_MODEL reply)
-    u16 magic 0x5356, u8 version=3, u8 pad, u32 zero_crosses,
+    u16 magic 0x5356, u8 version=4, u8 pad, u32 zero_crosses,
       u32 commutation_interval, u32 dropped_edges, u32 desync_happened,
       u8 old_routine, u8 running, u8 armed, u8 zc_blind_steps,
       u8 zc_miss_bucket, u8 zc_deadline_armed,
       u8 dcm_hold_ms, u8 pad2, u16 dcm_hold_value,       (v2 PR 62)
-      u8 adv_kerpm_hold_ms, u8 pad3, u16 adv_kerpm_hold  (v3 PR 63)
+      u8 adv_kerpm_hold_ms, u8 pad3, u16 adv_kerpm_hold, (v3 PR 63)
+      i32 zc_trend, u32 zc_predicted, u16 waitTime, u16 advance (v4 PR 64)
       (ZC_STATS reply). Fields are only ever APPENDED and the version is
       bumped; clients that unpack a shorter prefix keep working unchanged
       (they length-check with >=), which is why v1 readers such as
-      test_blind_step.py and the v2 ceiling-hold test need no edit.
+      test_blind_step.py and the v2/v3 hold tests need no edit.
 */
 
 #include "sitl.h"
@@ -45,6 +46,7 @@
 #include "motor.h"
 #include "motor_runtime.h"
 #include "runtime_loop.h"
+#include "bemf_zc.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -240,9 +242,14 @@ void sitl_state_poll(void)
 			uint8_t adv_kerpm_hold_ms;
 			uint8_t pad3;
 			uint16_t adv_kerpm_hold;
+			/* v4: accel-predictor consumer path (PR #64). */
+			int32_t zc_trend;
+			uint32_t zc_predicted;
+			uint16_t wait_time;
+			uint16_t advance_val;
 		} reply = {
 			.magic = 0x5356,
-			.version = 3,
+			.version = 4,
 			.zero_crosses = zero_crosses,
 			.commutation_interval = commutation_interval,
 			.dropped_edges = motor_zc_dropped(),
@@ -257,6 +264,10 @@ void sitl_state_poll(void)
 			.dcm_hold_value = dcm_hold_value,
 			.adv_kerpm_hold_ms = adv_kerpm_hold_ms,
 			.adv_kerpm_hold = adv_kerpm_hold,
+			.zc_trend = bemfZcGetTrend(),
+			.zc_predicted = bemfZcGetPredicted(),
+			.wait_time = waitTime,
+			.advance_val = advance,
 		};
 		sendto(fd, &reply, sizeof(reply), 0, (struct sockaddr *)&src, sizeof(src));
 	}

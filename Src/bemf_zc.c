@@ -94,6 +94,18 @@
  */
 #define ZC_TREND_MIN_ZC 20
 static int32_t zc_trend;
+/* Last predicted interval used for advance/waitTime (observability + SITL). */
+static uint32_t zc_predicted;
+
+int32_t bemfZcGetTrend(void)
+{
+	return zc_trend;
+}
+
+uint32_t bemfZcGetPredicted(void)
+{
+	return zc_predicted;
+}
 
 RAM_FUNC void PeriodElapsedCallback()
 {
@@ -180,12 +192,15 @@ RAM_FUNC void PeriodElapsedCallback()
 		}
 		predicted = (uint32_t)((int32_t)commutation_interval + corr);
 	}
+	zc_predicted = predicted;
 	if (!eepromBuffer.auto_advance) {
 		advance = (predicted * temp_advance) >> 6; // 60 divde 64 0.9375 degree increments
 	} else {
 		advance = (predicted * auto_advance_level) >> 6; // 60 divde 64 0.9375 degree increments
 	}
-	waitTime = (predicted >> 1) - advance;
+	/* Saturate: predicted can be as low as CI/2 under max negative
+	 * correction, so (predicted/2 - advance) must not wrap uint16. */
+	waitTime = bemfZcWaitTimeFromInterval(predicted, advance);
 	if (!old_routine) {
 		enableCompInterrupts(); // enable comp interrupt
 		if (zero_crosses >= ZC_DEADLINE_MIN_ZC) {
@@ -391,6 +406,7 @@ RAM_FUNC void interruptRoutine()
 void bemfZcResetTrend(void)
 {
 	zc_trend = 0;
+	zc_predicted = 0;
 }
 
 void startMotor()
@@ -401,7 +417,7 @@ void startMotor()
 		zc_blind_steps = 0;
 		zc_miss_bucket = 0;
 		zc_blind_window_count = 0;
-		zc_trend = 0; // no interval history across a stop
+		bemfZcResetTrend(); // no interval history across a stop
 		zc_pre_seen = 1;
 		zc_demag_run = 0;
 		commutate();

@@ -11,6 +11,7 @@
 #include "esc_state.h"
 #include "control_loop.h"
 #include "commutation.h"
+#include "bemf_zc.h"
 #include "functions.h"
 #include "peripherals.h"
 #include "phaseouts.h"
@@ -180,6 +181,7 @@ void runtimeProcessDesyncCheck(void)
 				adv_kerpm_hold_ms = ADV_ERPM_HOLD_MS;
 			}
 			zero_crosses = 0;
+			bemfZcResetTrend();
 			desync_happened++;
 			// Same established-run gate as the stall rail (see
 			// faultHandleBemfIntervalStall): interval jumps while the
