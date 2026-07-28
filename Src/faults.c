@@ -14,6 +14,7 @@
 #include "eeprom.h"
 #include "signal.h"
 #include "commutation.h"
+#include "bemf_zc.h"
 #include "targets.h"
 #include "esc_state.h"
 #include "IO.h"
@@ -405,11 +406,13 @@ void faultHandleBemfIntervalStall(void)
 		if (escIsFault()) {
 			/* Episode rail latched: do not re-enter startup. */
 			zero_crosses = 0;
+			bemfZcResetTrend();
 			running = 0;
 			return;
 		}
 		escNoteStallOrDesync(1);
 		zero_crosses = 0;
+		bemfZcResetTrend();
 		if (faultDesyncRestartHoldoffActive()) {
 			/* Coast until holdoff expires; main loop will re-arm. */
 			running = 0;

@@ -130,6 +130,7 @@ void setInput()
 						    escInSineStart()) {
 							forward = 1 - eepromBuffer.dir_reversed;
 							zero_crosses = 0;
+							bemfZcResetTrend();
 							old_routine = 1;
 							maskPhaseInterrupts();
 							brushed_direction_set = 0;
@@ -144,6 +145,7 @@ void setInput()
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
 							zero_crosses = 0;
+							bemfZcResetTrend();
 							old_routine = 1;
 							forward = eepromBuffer.dir_reversed;
 							maskPhaseInterrupts();
@@ -207,6 +209,7 @@ void setInput()
 						    escInSineStart()) {
 							forward = 1 - eepromBuffer.dir_reversed;
 							zero_crosses = 0;
+							bemfZcResetTrend();
 							old_routine = 1;
 							maskPhaseInterrupts();
 							brushed_direction_set = 0;
@@ -221,6 +224,7 @@ void setInput()
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
 							zero_crosses = 0;
+							bemfZcResetTrend();
 							old_routine = 1;
 							forward = eepromBuffer.dir_reversed;
 							maskPhaseInterrupts();
@@ -362,6 +366,7 @@ void setInput()
 				if (!escIsDriving()) {
 					old_routine = 1;
 					zero_crosses = 0;
+					bemfZcResetTrend();
 					if (eepromBuffer.brake_on_stop) {
 						fullBrake();
 					} else {
@@ -392,6 +397,7 @@ void setInput()
 				if (!escIsDriving()) {
 					old_routine = 1;
 					zero_crosses = 0;
+					bemfZcResetTrend();
 					bad_count = 0;
 					if (eepromBuffer.brake_on_stop > 0) {
 						if (!eepromBuffer.use_sine_start) {
