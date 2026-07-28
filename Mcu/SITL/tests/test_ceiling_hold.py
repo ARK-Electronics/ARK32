@@ -87,6 +87,7 @@ def test_ceiling_hold_engages_on_desync(sitl_factory, state_stream):
         # ceiling being frozen was earned at a real rpm (k_erpm >
         # low_rpm_level), so a stationary or barely-turning rotor is not a
         # valid starting condition for this test.
+        RPM_MIN = 2000.0
         deadline = time.time() + 10.0
         pre = None
         rpm = 0.0
@@ -95,14 +96,23 @@ def test_ceiling_hold_engages_on_desync(sitl_factory, state_stream):
             if s['running'] and not s['old_routine'] and s['zero_crosses'] > 100:
                 # Short sample; poll until the rotor is clearly above idle so
                 # a single slow window on a busy CI host cannot flake out.
+                #
+                # RPM_MIN must clear the hold's own ARM GATE, not just idle.
+                # The gate is k_erpm > low_rpm_level, and low_rpm_level =
+                # motor_kv * poles / 3200 (settings.c) = 900 * 14 / 3200 = 3
+                # for this model, so k_erpm must reach 4. k_erpm is
+                # mech_rpm * pole_pairs / 1000, i.e. ~571 mech rpm - well
+                # above a 300 gate. Injecting the fault below the arm gate
+                # would leave the hold legitimately un-armed and fail the
+                # test against the firmware, so keep ~4x headroom.
                 rpm = rpm_from_state(sim, 0.2)
-                if rpm > 300:
+                if rpm > RPM_MIN:
                     pre = s
                     break
             time.sleep(0.05)
         assert pre is not None, (
-            'never reached established closed loop with rotor turning '
-            '(last rpm=%.0f)\n%s' % (rpm, sitl.log_tail()))
+            'never reached established closed loop above %.0f rpm '
+            '(last rpm=%.0f)\n%s' % (RPM_MIN, rpm, sitl.log_tail()))
         assert pre['dcm_hold_ms'] == 0, 'hold already armed before any desync: %r' % pre
 
         # Suppress comparator edge delivery long enough to force a desync
