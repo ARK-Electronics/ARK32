@@ -102,7 +102,23 @@ def test_advance_hold_engages_on_desync(sitl_factory, state_stream):
         assert pre is not None, (
             'never reached established closed loop with rotor turning '
             '(last rpm=%.0f)\n%s' % (rpm, sitl.log_tail()))
-        assert pre['adv_kerpm_hold_ms'] == 0, 'hold already armed before any desync: %r' % pre
+        # Spool-up on this model legitimately produces a few desyncs, so the
+        # hold may ALREADY be armed here - observed locally as
+        # adv_kerpm_hold_ms=1 with desync_happened=6 at this point. Asserting
+        # it is zero outright is therefore flaky. Wait for it to expire (it
+        # decays at 1 kHz from ADV_ERPM_HOLD_MS) so that arming seen after the
+        # injection below is caused by the injection rather than being a
+        # decaying residual - which also keeps the causal link the mutation
+        # check relies on.
+        settle = time.time() + 2.0
+        while time.time() < settle:
+            pre = _zc_stats(ctl)
+            if pre['adv_kerpm_hold_ms'] == 0:
+                break
+            time.sleep(0.01)
+        assert pre['adv_kerpm_hold_ms'] == 0, (
+            'hold never expired before injection, so a later nonzero reading '
+            'could be residual rather than caused: %r\n%s' % (pre, sitl.log_tail()))
 
         ci_us = max(pre['commutation_interval'] // 2, 100)
         seen_hold = 0
