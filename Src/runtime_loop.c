@@ -134,6 +134,13 @@ void runtimeProcessDesyncCheck(void)
 			// accounting is established-runs-only.
 			if (zc_at_desync > 100) {
 				faultDesyncEpisodeCharge(DESYNC_EPISODE_JUMP);
+			} else {
+				// Acquisition-regime desyncs are not charged directly
+				// (that is what the gate above exists to prevent), but
+				// they must not be free either: without this the loop
+				// can desync forever below zc 100 with every rail and
+				// counter reading zero. See faultNoteEarlyDesync.
+				faultNoteEarlyDesync();
 			}
 			if ((!eepromBuffer.bi_direction && (input > 47)) || commutation_interval > 1000) {
 				running = 0;

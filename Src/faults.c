@@ -30,6 +30,9 @@ extern void resetInputCaptureTimer(void);
 /* See the comments on the declarations in faults.h. */
 volatile uint32_t fault_stall_trips = 0;
 
+/* Acquisition-rail early-desync count (see faultNoteEarlyDesync). */
+static uint8_t acq_fail_desyncs;
+
 uint32_t faultErrorCount(void)
 {
 	return desync_happened + fault_stall_trips;
@@ -40,6 +43,7 @@ void faultErrorCountReset(void)
 	/* Per-arm cycle (DSDL: error_count resets when the motor restarts). */
 	fault_stall_trips = 0;
 	desync_happened = 0;
+	acq_fail_desyncs = 0;
 }
 
 uint8_t faultHandleStuckRotorIfNeeded(void)
@@ -118,8 +122,14 @@ void faultUpdateBemfTimeoutPolicy(void)
 		// zero_crosses > 1000 - a bad-tune cycle that respins fast between
 		// desyncs must keep accumulating (that reset defeating the stuck
 		// latch is one of the gaps this rail exists to close).
+		//
+		// Also clear the acquisition-rail partial batch: otherwise 19 early
+		// desyncs, a pilot cut, then one more early desync on the next blip
+		// would fire a JUMP-sized charge (and permanent ramp-halve) as if
+		// the cut never happened. Match episode-bucket pilot semantics.
 		desync_episode_bucket = 0;
 		desync_restart_holdoff_ms = 0;
+		acq_fail_desyncs = 0;
 	}
 	if (zero_crosses > 100 && adjusted_input < 200) {
 		bemf_timeout_happened = 0;
@@ -167,6 +177,29 @@ void faultUpdateBemfTimeoutPolicy(void)
 #define DESYNC_BACKOFF_BASE_MS 100
 #define DESYNC_BACKOFF_STEP_MS 25
 #define DESYNC_BACKOFF_MAX_MS 500
+/*
+ * Acquisition rail (see faultNoteEarlyDesync in faults.h).
+ *
+ * 20 early desyncs with no successful acquisition in between buy one
+ * JUMP-sized charge. Deliberately conservative: a healthy hard start spends
+ * 2-4 rough desyncs acquiring, so 20 is unambiguously abnormal, while at the
+ * ~20/s rate a genuinely stuck loop produces it still charges once a second.
+ * The point of this rail is to make the failure VISIBLE to the escalation
+ * machinery (bucket, holdoff, latch), not to be the fastest path to the latch.
+ * The side effect that most helps a too-fast tune finally clear acquisition is
+ * the permanent ramp back-off inside faultDesyncEpisodeCharge; established-run
+ * rails (blind/grind/stall) still need zero_crosses > 100 and only help once
+ * the loop actually gets past that gate.
+ *
+ * This constant is a starting point from SITL and wants bench calibration
+ * against real hard starts before release.
+ *
+ * ACQ_FAIL_CLEAR_ZC is deliberately well above the 100 that arms blind
+ * stepping: the count must only be forgiven by an acquisition that actually
+ * held, not by one that reached the gate and immediately lost sync again.
+ */
+#define ACQ_FAIL_DESYNC_LIMIT 20
+#define ACQ_FAIL_CLEAR_ZC 500
 
 /*
  * Blind-GRIND rail. The episode rail above only sees DISCRETE failures
@@ -223,7 +256,10 @@ void faultDesyncEpisodeCharge(desync_episode_kind_t kind)
 {
 #ifndef BRUSHED_MODE
 	uint8_t inc = DESYNC_EPISODE_CHARGE_STALL;
-	if (kind == DESYNC_EPISODE_JUMP) {
+	if (kind == DESYNC_EPISODE_JUMP || kind == DESYNC_EPISODE_ACQ_FAIL) {
+		/* The acquisition rail has already required ACQ_FAIL_DESYNC_LIMIT
+		 * events before getting here, so one charge per batch is the same
+		 * weight as a single established-run jump. */
 		inc = DESYNC_EPISODE_CHARGE_JUMP;
 	}
 	if ((uint16_t)desync_episode_bucket + inc > 255) {
@@ -269,9 +305,25 @@ void faultDesyncEpisodeCharge(desync_episode_kind_t kind)
 #endif
 }
 
+void faultNoteEarlyDesync(void)
+{
+#ifndef BRUSHED_MODE
+	if (++acq_fail_desyncs < ACQ_FAIL_DESYNC_LIMIT) {
+		return;
+	}
+	acq_fail_desyncs = 0;
+	faultDesyncEpisodeCharge(DESYNC_EPISODE_ACQ_FAIL);
+#endif
+}
+
 void faultDesyncEpisodeTick1kHz(void)
 {
 #ifndef BRUSHED_MODE
+	/* A loop that got solidly established did acquire, whatever roughness
+	 * it passed through on the way - forgive the whole batch. */
+	if (zero_crosses > ACQ_FAIL_CLEAR_ZC) {
+		acq_fail_desyncs = 0;
+	}
 	if (desync_restart_holdoff_ms > 0) {
 		desync_restart_holdoff_ms--;
 	}
