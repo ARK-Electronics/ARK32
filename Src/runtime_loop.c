@@ -43,6 +43,20 @@
 #	define ZC_FILTER_FAST 2
 #endif
 
+/*
+ * Post-desync hold for the low-rpm throttle ceiling (runtimeMotorModeTick).
+ * Scoped to the window where the rpm ESTIMATE is known-invalid rather than
+ * applied as a general fall-rate limit: outside that window a falling
+ * k_erpm is real and the ceiling collapsing with it is the protection
+ * working, not a pathology. 50 ms covers the estimate's recovery without
+ * carrying authority into a genuine rotor slowdown.
+ */
+#define DCM_HOLD_MS 50
+/* Non-static so the SITL ZC_STATS port can observe engagement; see the
+ * declaration comment in runtime_loop.h. No other TU writes these. */
+uint16_t dcm_hold_value;
+uint8_t dcm_hold_ms;
+
 void runtimeUpdateVariablePwm(uint16_t *last_tim1_arr)
 {
 	uint16_t next_tim1_arr = tim1_arr;    // unchanged unless variable_pwm recomputes it below
@@ -121,6 +135,16 @@ void runtimeProcessDesyncCheck(void)
 		if (desynced) {
 			slow_avg_revs = 0;
 			const uint32_t zc_at_desync = zero_crosses;
+			// Freeze the throttle ceiling briefly: k_erpm is about to
+			// collapse because the ESTIMATE died, not because the rotor
+			// did, and re-deriving the ceiling from the collapsed
+			// reading caps duty during exactly the re-acquisition that
+			// needs authority. Armed only when the ceiling being held
+			// was earned at a real rpm.
+			if (k_erpm > low_rpm_level) {
+				dcm_hold_value = duty_cycle_maximum;
+				dcm_hold_ms = DCM_HOLD_MS;
+			}
 			zero_crosses = 0;
 			desync_happened++;
 			// Same established-run gate as the stall rail (see
@@ -385,6 +409,10 @@ void runtimeProcessAdcAndProtections(void)
 			escToFaultLvc();
 		}
 
+		if (dcm_hold_ms) {
+			dcm_hold_ms--;
+		}
+
 		PROCESS_ADC_FLAG = 0;
 #ifdef USE_ADC_INPUT
 		if (ADC_raw_input < 10) {
@@ -423,6 +451,7 @@ void runtimeMotorModeTick(void)
 		// running rpm for up to the whole holdoff.
 		e_rpm = 0;
 		k_erpm = 0;
+		dcm_hold_ms = 0; // a coast must not carry a stale ceiling into the restart
 		return;
 	}
 	if (!escInSineStart()) {
@@ -437,6 +466,36 @@ void runtimeMotorModeTick(void)
 						 throttle_max_at_high_rpm); // for more performance lower the
 									    // high_rpm_level, set to a
 									    // consvervative number in source.
+			/*
+			 * Post-desync hold (armed in runtimeProcessDesyncCheck).
+			 * The map above is a pure function of the LIVE k_erpm, so a
+			 * desync - which collapses the rpm ESTIMATE in one
+			 * main-loop pass while the rotor is still turning -
+			 * collapses the throttle ceiling with it, during exactly
+			 * the re-acquisition that needs authority. Measured on the
+			 * SITL racer_5inch model: duty_cycle_maximum drops
+			 * 1700 -> 600 the instant sync is lost, capping the
+			 * setpoint at 440 while the loop tries to re-acquire,
+			 * which weakens the re-acquisition and feeds the next
+			 * desync.
+			 *
+			 * The hold value is the ceiling the rotor had already
+			 * earned at a real rpm one pass earlier, so this can never
+			 * exceed what the live estimate would have allowed had it
+			 * survived; and it expires after DCM_HOLD_MS whether or not
+			 * the loop re-acquires. Deliberately NOT a general
+			 * fall-rate limit on duty_cycle_maximum: outside the
+			 * invalid-estimate window a falling k_erpm is real, and the
+			 * ceiling following it down is the protection working.
+			 *
+			 * Not a protection bypass: the current limit, the BEMF
+			 * headroom ceiling and the blind/demag power cut are all
+			 * applied to duty_cycle_setpoint AFTER this clamp in
+			 * setInput(), and none of them read duty_cycle_maximum.
+			 */
+			if (dcm_hold_ms && duty_cycle_maximum < dcm_hold_value) {
+				duty_cycle_maximum = dcm_hold_value;
+			}
 		} else {
 			duty_cycle_maximum = 2000;
 		}

@@ -37,4 +37,20 @@ void runtimeProcessAdcAndProtections(void);
  */
 void runtimeMotorModeTick(void);
 
+/*
+ * Post-desync throttle-ceiling hold state, exposed for observability rather
+ * than for use by other translation units. Nothing outside runtime_loop.c
+ * writes these; the SITL ZC_STATS control port reads them so a test can
+ * assert the hold actually ENGAGES.
+ *
+ * That assertion is the gate this change originally shipped without: the
+ * first revision declared these, ticked them, cleared them and read them but
+ * never assigned them, and the resulting no-op passed compilation, cppcheck,
+ * the size gate, the full SITL suite and a complete HWCI hardware suite.
+ * Internal state that no test can observe is internal state that can silently
+ * stop working.
+ */
+extern uint16_t dcm_hold_value;
+extern uint8_t dcm_hold_ms;
+
 #endif /* RUNTIME_LOOP_H_ */

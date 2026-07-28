@@ -28,16 +28,21 @@
   SITL -> client:
     u16 magic 0x5354, u8 version=1, u8 count, count * sample
     u16 magic 0x5355, u8 ok, u8 pad, message   (LOAD_MODEL reply)
-    u16 magic 0x5356, u8 version=1, u8 pad, u32 zero_crosses,
+    u16 magic 0x5356, u8 version=2, u8 pad, u32 zero_crosses,
       u32 commutation_interval, u32 dropped_edges, u32 desync_happened,
       u8 old_routine, u8 running, u8 armed, u8 zc_blind_steps,
-      u8 zc_miss_bucket, u8 zc_deadline_armed  (ZC_STATS reply)
+      u8 zc_miss_bucket, u8 zc_deadline_armed,
+      u8 dcm_hold_ms, u8 pad2, u16 dcm_hold_value  (ZC_STATS reply)
+      Fields are only ever APPENDED and the version is bumped; clients that
+      unpack a shorter prefix keep working unchanged (they length-check with
+      >=), which is why v1 readers such as test_blind_step.py need no edit.
 */
 
 #include "sitl.h"
 #include "sitl_config.h"
 #include "motor.h"
 #include "motor_runtime.h"
+#include "runtime_loop.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -225,9 +230,15 @@ void sitl_state_poll(void)
 			uint8_t zc_blind_steps;
 			uint8_t zc_miss_bucket;
 			uint8_t zc_deadline_armed;
+			/* v2: post-desync throttle-ceiling hold (PR #62). Present so a
+			 * test can assert the hold ENGAGES - the first revision of that
+			 * change never armed it and the no-op passed every other gate. */
+			uint8_t dcm_hold_ms;
+			uint8_t pad2;
+			uint16_t dcm_hold_value;
 		} reply = {
 			.magic = 0x5356,
-			.version = 1,
+			.version = 2,
 			.zero_crosses = zero_crosses,
 			.commutation_interval = commutation_interval,
 			.dropped_edges = motor_zc_dropped(),
@@ -238,6 +249,8 @@ void sitl_state_poll(void)
 			.zc_blind_steps = zc_blind_steps,
 			.zc_miss_bucket = zc_miss_bucket,
 			.zc_deadline_armed = zc_deadline_armed,
+			.dcm_hold_ms = dcm_hold_ms,
+			.dcm_hold_value = dcm_hold_value,
 		};
 		sendto(fd, &reply, sizeof(reply), 0, (struct sockaddr *)&src, sizeof(src));
 	}
