@@ -66,9 +66,38 @@ void faultHandleBemfIntervalStall(void);
 typedef enum {
 	DESYNC_EPISODE_JUMP = 0,
 	DESYNC_EPISODE_STALL_RAIL,
+	DESYNC_EPISODE_ACQ_FAIL,
 } desync_episode_kind_t;
 
 void faultDesyncEpisodeCharge(desync_episode_kind_t kind);
+
+/*
+ * Acquisition-phase desync rail.
+ *
+ * Every other rail in the ZC path is gated on an ESTABLISHED loop: the
+ * blind-step deadline needs zero_crosses >= 100 (bemf_zc.c), the BEMF
+ * headroom governor needs > 150 (runtime_loop.c), the grind detector and
+ * miss bucket both need blind steps to exist at all, and the episode charge
+ * itself needs zc_at_desync > 100 (runtimeProcessDesyncCheck). A loop that
+ * desyncs BEFORE acquisition completes therefore accumulates no state
+ * anywhere - it restarts, reaches zc 20..50, desyncs, and repeats
+ * indefinitely with every counter reading zero.
+ *
+ * Measured on the SITL racer_5inch model at HEAD (dshot 700): ~20 desyncs
+ * per second sustained, zero_crosses never past 48, desync_episode_bucket
+ * flat at 0 after 38 desyncs, so neither the restart backoff nor the latch
+ * ever engages and the rotor limit-cycles at ~2.9k rpm indefinitely.
+ *
+ * The established-run gate is still correct for the JUMP charge - a few
+ * interval jumps while acquiring are normal startup roughness on light
+ * motors, and charging them stacks holdoff onto honest starts (the reason
+ * for that gate, see faultDesyncEpisodeCharge). What was missing is a rail
+ * scoped to the acquisition regime itself. Count early desyncs; a handful
+ * is roughness and is forgiven the moment the loop genuinely acquires,
+ * while a sustained inability to get past acquisition charges the SAME
+ * episode bucket and so inherits the existing backoff and latch.
+ */
+void faultNoteEarlyDesync(void);
 /* 1 kHz: drain bucket when closed-loop is healthy; tick restart holdoff. */
 void faultDesyncEpisodeTick1kHz(void);
 /* True while a post-desync coast is mandatory (caller must not re-start). */
