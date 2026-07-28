@@ -4,6 +4,7 @@
 
 #include "commutation.h"
 #include "motor_runtime.h"
+#include "bemf_zc.h"
 #include "main.h"
 #include "common.h"
 #include "comparator.h"
@@ -209,6 +210,9 @@ void zcfoundroutine()
 		zc_deadline_armed = 0;
 		zc_blind_steps = 0;
 		zc_miss_bucket = 0;
+		// Fresh closed loop: the interval trend from a previous run (or
+		// from the poll ramp) is not a measurement of this one.
+		bemfZcResetTrend();
 		// Seed the pre-level flag: the main-loop sampler only runs in
 		// interrupt mode, so the first closed-loop window has no dwell
 		// history yet and must not read as demag-late.

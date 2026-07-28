@@ -62,6 +62,39 @@
  */
 #define ZC_DEADLINE_MIN_ZC 100
 
+/*
+ * Acceleration-aware commutation point.
+ *
+ * commutation_interval is a two-pole lag over the last two measured
+ * intervals: the pair is averaged, then blended 50/50 with the previous
+ * estimate. Under constant angular acceleration a lag filter has constant
+ * error, so the estimate trails the true interval by an amount proportional
+ * to the acceleration - and waitTime = CI/2 - advance is computed from that
+ * trailing value, which puts the commutation systematically late through
+ * every spool-up. Late drive raises current, and more current lengthens
+ * demag, which is the same spiral the demag-late detector exists to break
+ * (see interruptRoutine).
+ *
+ * Track the per-interval trend and commutate against the interval the loop
+ * is about to see rather than the one it just averaged. zc_trend is an EMA
+ * (tau = 4 intervals) of thiszctime - lastzctime, so a steady acceleration
+ * produces a steady correction while single-interval jitter is smoothed.
+ *
+ * commutation_interval itself is deliberately NOT changed: it feeds the
+ * stall threshold, the ZC filter schedule, variable PWM, the DShot priority
+ * flip and telemetry, none of which want a predicted value. Only the
+ * advance/waitTime pair moves onto the prediction.
+ *
+ * Bounds: the correction is clamped to +-50% of the current estimate, so a
+ * corrupted trend can never move the commutation point further than a
+ * single missed crossing already does.
+ *
+ * Blind steps do not feed the trend - thiszctime is the deadline's inflated
+ * 1.5x value there, not a measurement.
+ */
+#define ZC_TREND_MIN_ZC 20
+static int32_t zc_trend;
+
 RAM_FUNC void PeriodElapsedCallback()
 {
 	uint8_t blind = 0;
@@ -130,12 +163,29 @@ RAM_FUNC void PeriodElapsedCallback()
 	}
 	commutate();
 	commutation_interval = ((commutation_interval) + ((lastzctime + thiszctime) >> 1)) >> 1;
-	if (!eepromBuffer.auto_advance) {
-		advance = (commutation_interval * temp_advance) >> 6; // 60 divde 64 0.9375 degree increments
-	} else {
-		advance = (commutation_interval * auto_advance_level) >> 6; // 60 divde 64 0.9375 degree increments
+	/* See zc_trend: predict the interval about to be timed, not the lagging
+	 * average of the ones already measured. */
+	uint32_t predicted = commutation_interval;
+	if (!blind) {
+		const int32_t step = (int32_t)thiszctime - (int32_t)lastzctime;
+		zc_trend += (step - zc_trend) >> 2;
 	}
-	waitTime = (commutation_interval >> 1) - advance;
+	if (zero_crosses >= ZC_TREND_MIN_ZC) {
+		const int32_t limit = (int32_t)(commutation_interval >> 1);
+		int32_t corr = zc_trend;
+		if (corr > limit) {
+			corr = limit;
+		} else if (corr < -limit) {
+			corr = -limit;
+		}
+		predicted = (uint32_t)((int32_t)commutation_interval + corr);
+	}
+	if (!eepromBuffer.auto_advance) {
+		advance = (predicted * temp_advance) >> 6; // 60 divde 64 0.9375 degree increments
+	} else {
+		advance = (predicted * auto_advance_level) >> 6; // 60 divde 64 0.9375 degree increments
+	}
+	waitTime = (predicted >> 1) - advance;
 	if (!old_routine) {
 		enableCompInterrupts(); // enable comp interrupt
 		if (zero_crosses >= ZC_DEADLINE_MIN_ZC) {
@@ -338,6 +388,11 @@ RAM_FUNC void interruptRoutine()
 	HWCI_PERF_ZC_PHASE_COMMIT(); // accepted edge: bin its PWM phase
 }
 
+void bemfZcResetTrend(void)
+{
+	zc_trend = 0;
+}
+
 void startMotor()
 {
 	if (running == 0) {
@@ -346,6 +401,7 @@ void startMotor()
 		zc_blind_steps = 0;
 		zc_miss_bucket = 0;
 		zc_blind_window_count = 0;
+		zc_trend = 0; // no interval history across a stop
 		zc_pre_seen = 1;
 		zc_demag_run = 0;
 		commutate();
