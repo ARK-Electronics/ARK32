@@ -103,12 +103,45 @@ RAM_FUNC void PeriodElapsedCallback()
 			zc_blind_window_count++; // grind-rate window (faults.c, 1 kHz)
 		}
 		HWCI_PERF_BLIND_STEP();
-		// Take the full elapsed time as the (late) crossing measurement
-		// and commutate now. The inflated interval feeds the average so
+		// Take the elapsed time as the (late) crossing measurement and
+		// commutate now. The inflated interval feeds the average so
 		// timing hunts slower - the safe direction for a decelerating
 		// rotor - and the next accepted crossing resyncs immediately.
+		//
+		// The deadline fires at ~1.5x the believed interval by
+		// construction, so taking the raw elapsed value injects a fixed
+		// +50% sample and inflates the running average ~12.5% on EVERY
+		// miss, regardless of how well the loop was tracking. That is
+		// the right reflex when position is genuinely unknown, but it
+		// also means an isolated dropout in an otherwise healthy loop
+		// costs the same timing excursion as a real deceleration, and
+		// the loop then has to hunt back down.
+		//
+		// Cap the injected inflation at +25% of the current estimate,
+		// halving the excursion an isolated miss costs to ~6.25% of the
+		// average.
+		//
+		// This is a deliberate REDUCTION of a safety margin, not a free
+		// win. A miss still moves the average toward longer intervals,
+		// never shorter, so the sign of the reflex is unchanged - but
+		// the margin against a rotor genuinely decelerating faster than
+		// the estimate tracks is now half what it was, and recovery
+		// from such a deceleration takes more crossings. The trade is
+		// worth making only if the common case (isolated dropout in an
+		// otherwise healthy loop) dominates the rare one on real
+		// hardware, which is a bench question, not a code one.
+		//
+		// The consecutive-miss and miss-rate rails are unchanged: they
+		// count events, not interval growth, so bounding the inflation
+		// does not slow the handoff to the stall rail. A sustained
+		// deceleration that really is outrunning the estimate still
+		// reaches the same place, just over more crossings.
 		maskPhaseInterrupts();
 		uint32_t elapsed = INTERVAL_TIMER_COUNT;
+		const uint32_t elapsed_cap = commutation_interval + (commutation_interval >> 2);
+		if (elapsed > elapsed_cap) {
+			elapsed = elapsed_cap;
+		}
 		if (elapsed > 65535u) {
 			elapsed = 65535u;
 		}
