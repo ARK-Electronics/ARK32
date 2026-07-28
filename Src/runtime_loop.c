@@ -57,6 +57,33 @@
 uint16_t dcm_hold_value;
 uint8_t dcm_hold_ms;
 
+/*
+ * Advance-schedule rpm hold across a desync.
+ *
+ * The auto-advance curve is keyed on k_erpm (dcc655) because commutation lag
+ * is a function of speed. A desync destroys the rpm ESTIMATE in one
+ * main-loop pass while the rotor keeps turning at very nearly its previous
+ * speed, so the schedule drops straight to its bottom (level 13) at the
+ * moment the loop is trying to re-acquire against a fast-spinning rotor -
+ * under-advancing precisely where the true lag is highest.
+ *
+ * Hold the last valid k_erpm for the schedule only, for as long as the
+ * estimate is untrustworthy. Rotor speed cannot change much in this window
+ * (it is bounded by prop inertia, not by the ESC), so the held value is a
+ * far better estimate of true speed than the collapsed reading it replaces.
+ *
+ * Deliberately scoped to the advance schedule. e_rpm itself is NOT touched:
+ * it is the telemetry value (DroneCAN / KISS) and must keep reporting what
+ * the ESC actually measured. The BEMF-headroom governor also reads e_rpm but
+ * needs no equivalent, since it disarms below zero_crosses > 150 and so is
+ * already inert throughout re-acquisition.
+ */
+#define ADV_ERPM_HOLD_MS 50
+/* Non-static so the SITL ZC_STATS port can observe engagement; see the
+ * declaration comment in runtime_loop.h. No other TU writes these. */
+uint16_t adv_kerpm_hold;
+uint8_t adv_kerpm_hold_ms;
+
 void runtimeUpdateVariablePwm(uint16_t *last_tim1_arr)
 {
 	uint16_t next_tim1_arr = tim1_arr;    // unchanged unless variable_pwm recomputes it below
@@ -144,6 +171,13 @@ void runtimeProcessDesyncCheck(void)
 			if (k_erpm > low_rpm_level) {
 				dcm_hold_value = duty_cycle_maximum;
 				dcm_hold_ms = DCM_HOLD_MS;
+			}
+			// k_erpm is about to collapse because the estimate died,
+			// not the rotor - keep the advance schedule on the last
+			// real speed for a bounded window.
+			if (k_erpm > 0) {
+				adv_kerpm_hold = k_erpm;
+				adv_kerpm_hold_ms = ADV_ERPM_HOLD_MS;
 			}
 			zero_crosses = 0;
 			desync_happened++;
@@ -412,6 +446,9 @@ void runtimeProcessAdcAndProtections(void)
 		if (dcm_hold_ms) {
 			dcm_hold_ms--;
 		}
+		if (adv_kerpm_hold_ms) {
+			adv_kerpm_hold_ms--;
+		}
 
 		PROCESS_ADC_FLAG = 0;
 #ifdef USE_ADC_INPUT
@@ -451,7 +488,8 @@ void runtimeMotorModeTick(void)
 		// running rpm for up to the whole holdoff.
 		e_rpm = 0;
 		k_erpm = 0;
-		dcm_hold_ms = 0; // a coast must not carry a stale ceiling into the restart
+		dcm_hold_ms = 0;       // a coast must not carry a stale ceiling into the restart
+		adv_kerpm_hold_ms = 0; // a coast is a real slowdown, not a dead estimate
 		return;
 	}
 	if (!escInSineStart()) {
@@ -594,8 +632,14 @@ void runtimeMotorModeTick(void)
 				}
 				adv_max_kerpm = (uint16_t)(((uint32_t)advance_erpm_scale_q12 * advance_pack_v_cv) >> 12);
 			}
-			if (adv_max_kerpm > 8 && k_erpm <= (uint16_t)(adv_max_kerpm + (adv_max_kerpm >> 2))) {
-				auto_advance_level = map(k_erpm, adv_max_kerpm >> 4, adv_max_kerpm, 13, 23);
+			/* See adv_kerpm_hold: use the last trustworthy speed while
+			 * the live estimate is invalid. */
+			uint16_t adv_kerpm = k_erpm;
+			if (adv_kerpm_hold_ms && adv_kerpm_hold > adv_kerpm) {
+				adv_kerpm = adv_kerpm_hold;
+			}
+			if (adv_max_kerpm > 8 && adv_kerpm <= (uint16_t)(adv_max_kerpm + (adv_max_kerpm >> 2))) {
+				auto_advance_level = map(adv_kerpm, adv_max_kerpm >> 4, adv_max_kerpm, 13, 23);
 			} else {
 				auto_advance_level = map(duty_cycle, 100, 2000, 13, 23);
 			}
