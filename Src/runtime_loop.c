@@ -170,6 +170,13 @@ void runtimeProcessDesyncCheck(void)
 				dcm_hold_value = duty_cycle_maximum;
 				dcm_hold_ms = DCM_HOLD_MS;
 			}
+			// k_erpm is about to collapse because the estimate died,
+			// not the rotor - keep the advance schedule on the last
+			// real speed for a bounded window.
+			if (k_erpm > 0) {
+				adv_kerpm_hold = k_erpm;
+				adv_kerpm_hold_ms = ADV_ERPM_HOLD_MS;
+			}
 			zero_crosses = 0;
 			desync_happened++;
 			// Same established-run gate as the stall rail (see
