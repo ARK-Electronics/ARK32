@@ -133,6 +133,16 @@ void runtimeProcessDesyncCheck(void)
 		if (desynced) {
 			slow_avg_revs = 0;
 			const uint32_t zc_at_desync = zero_crosses;
+			// Freeze the throttle ceiling briefly: k_erpm is about to
+			// collapse because the ESTIMATE died, not because the rotor
+			// did, and re-deriving the ceiling from the collapsed
+			// reading caps duty during exactly the re-acquisition that
+			// needs authority. Armed only when the ceiling being held
+			// was earned at a real rpm.
+			if (k_erpm > low_rpm_level) {
+				dcm_hold_value = duty_cycle_maximum;
+				dcm_hold_ms = DCM_HOLD_MS;
+			}
 			zero_crosses = 0;
 			desync_happened++;
 			// Same established-run gate as the stall rail (see
