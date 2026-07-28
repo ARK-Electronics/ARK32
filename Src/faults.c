@@ -122,8 +122,14 @@ void faultUpdateBemfTimeoutPolicy(void)
 		// zero_crosses > 1000 - a bad-tune cycle that respins fast between
 		// desyncs must keep accumulating (that reset defeating the stuck
 		// latch is one of the gaps this rail exists to close).
+		//
+		// Also clear the acquisition-rail partial batch: otherwise 19 early
+		// desyncs, a pilot cut, then one more early desync on the next blip
+		// would fire a JUMP-sized charge (and permanent ramp-halve) as if
+		// the cut never happened. Match episode-bucket pilot semantics.
 		desync_episode_bucket = 0;
 		desync_restart_holdoff_ms = 0;
+		acq_fail_desyncs = 0;
 	}
 	if (zero_crosses > 100 && adjusted_input < 200) {
 		bemf_timeout_happened = 0;
@@ -179,10 +185,11 @@ void faultUpdateBemfTimeoutPolicy(void)
  * 2-4 rough desyncs acquiring, so 20 is unambiguously abnormal, while at the
  * ~20/s rate a genuinely stuck loop produces it still charges once a second.
  * The point of this rail is to make the failure VISIBLE to the escalation
- * machinery, not to be the fastest path to the latch - once the first charge
- * lands, the ramp back-off in faultDesyncEpisodeCharge starts working the
- * actual cause and the established-run rails (which need zero_crosses > 100
- * and so were previously unreachable) take over.
+ * machinery (bucket, holdoff, latch), not to be the fastest path to the latch.
+ * The side effect that most helps a too-fast tune finally clear acquisition is
+ * the permanent ramp back-off inside faultDesyncEpisodeCharge; established-run
+ * rails (blind/grind/stall) still need zero_crosses > 100 and only help once
+ * the loop actually gets past that gate.
  *
  * This constant is a starting point from SITL and wants bench calibration
  * against real hard starts before release.
