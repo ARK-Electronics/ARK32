@@ -79,8 +79,10 @@ uint8_t dcm_hold_ms;
  * already inert throughout re-acquisition.
  */
 #define ADV_ERPM_HOLD_MS 50
-static uint16_t adv_kerpm_hold;
-static uint8_t adv_kerpm_hold_ms;
+/* Non-static so the SITL ZC_STATS port can observe engagement; see the
+ * declaration comment in runtime_loop.h. No other TU writes these. */
+uint16_t adv_kerpm_hold;
+uint8_t adv_kerpm_hold_ms;
 
 void runtimeUpdateVariablePwm(uint16_t *last_tim1_arr)
 {
