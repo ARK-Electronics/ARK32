@@ -20,6 +20,10 @@ MODELS = os.path.join(SITL_DIR, 'models')
     'default_7inch.json',
     'heavy_13inch.json',
     'unloaded.json',
+    # Hardware-calibrated plants (see data/*/expected.json + test_bench_models)
+    'ark_900kv_noprop.json',
+    'ark_900kv_10inch.json',
+    'ark_2807_1300kv_noprop.json',
 ])
 def test_load_stock_model(sitl_factory, state_stream, model):
     path = os.path.join(MODELS, model)
