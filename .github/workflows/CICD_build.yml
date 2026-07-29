@@ -3,18 +3,18 @@ name: CI Build Linux
 # Build all MCU targets and publish .hex assets for the ARK32 configurator
 # and production line (see ARK-Electronics/ARK32#67).
 #
-# - Push/PR on ark-release (and main for compatibility): build + artifact.
+# - Push/PR on ark-release: build + artifact.
 # - Version tags (vMAJOR.MINOR[-suffix]): GitHub Release with obj/*.hex.
 # - schedule / optional dispatch: rolling `nightly` prerelease (assets replaced).
 
 on:
   push:
-    branches: ["main", "ark-release"]
+    branches: ["ark-release"]
     tags:
       # Matches v3.0, v3.0-ark, v3.0-ark-rc1, etc. (glob, not full regex).
       - "v[0-9]*.[0-9]*"
   pull_request:
-    branches: ["main", "ark-release"]
+    branches: ["ark-release"]
   schedule:
     # Rolling nightly at 06:00 UTC on the default branch (ark-release).
     - cron: "0 6 * * *"
