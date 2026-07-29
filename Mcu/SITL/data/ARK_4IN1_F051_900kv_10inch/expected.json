@@ -1,0 +1,37 @@
+{
+  "comment": "Real-hardware reference: ARK 4IN1 F051 + 900KV 14-pole + HQProp 10x5x3, 6S ~24.9 V, Flight Stand optical RPM. Steady levels = mid-hold means from HWCI suite50 run pr65-aa42860-900kv-20260729_111732 (best EEPROM aa0). SITL model: models/ark_900kv_10inch.json. Gate only sitl_gate levels — higher stick is desync-prone in the first-order plant.",
+  "setup": {
+    "esc": "ARK_4IN1_F051",
+    "motor_kv": 900,
+    "poles": 14,
+    "prop": "HQProp 10x5x3",
+    "voltage_v": 24.9,
+    "eeprom": "max_ramp1 min_duty10 advance20 vpwm aa0",
+    "command": "flightstand_dshot",
+    "hwci_run": "hwci/runs/pr65-aa42860-900kv-20260729_111732/suite50"
+  },
+  "steady": {
+    "levels": {
+      "0.10": 2837,
+      "0.20": 4693,
+      "0.30": 6419,
+      "0.40": 7975,
+      "0.50": 9214
+    },
+    "tolerance_pct": 15.0
+  },
+  "sitl_gate": {
+    "model": "ark_900kv_10inch.json",
+    "levels": ["0.10", "0.20", "0.30"],
+    "tolerance_pct": 15.0,
+    "settle_s": 2.2,
+    "min_running_rpm": 1500
+  },
+  "startup": {
+    "attempts": 10,
+    "max_failures": 0,
+    "note": "from startup_reliability profile on same plant; not asserted in SITL yet"
+  },
+  "desync_budget": 40,
+  "snap50_peak_current_a": 20.0
+}

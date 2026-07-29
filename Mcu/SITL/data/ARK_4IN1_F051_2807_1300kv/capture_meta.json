@@ -1,0 +1,26 @@
+{
+  "motor": "JS Technology 2807 1300KV",
+  "prop": null,
+  "prop_note": "noprop free-run (Gemfan 7035-3 removed for this session)",
+  "poles": 14,
+  "pole_pairs": 7,
+  "esc": "ARK_4IN1_F051",
+  "esc_channel": 1,
+  "firmware": "AM32 ARK fork",
+  "command": "flightstand_dshot",
+  "dshot_map": {"zero": 0, "min": 48, "max": 2047},
+  "stand": "Tyto Flight Stand 50",
+  "stand_host": "192.168.7.22",
+  "rpm_source": "optical",
+  "voltage_start_v": 24.9,
+  "supply": "6S LiPo",
+  "profiles": ["first_spin", "sweep", "square", "chirp"],
+  "files": {
+    "first_spin": "first_spin_010.jsonl",
+    "sweep": "sweep1.jsonl",
+    "square": "square1.jsonl",
+    "chirp": "chirp_120s.jsonl"
+  },
+  "timestamp": "2026-07-20",
+  "contact": "ARK Electronics"
+}

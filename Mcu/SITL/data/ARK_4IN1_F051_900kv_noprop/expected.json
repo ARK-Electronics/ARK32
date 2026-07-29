@@ -1,0 +1,53 @@
+{
+  "comment": "Real-hardware reference: ARK 4IN1 F051 + 900KV 14-pole noprop, 6S ~24.7V, Flight Stand optical RPM + HV V/I, uni DShot, variable_pwm=1. Captured 2026-07-20.",
+  "setup": {
+    "esc": "ARK_4IN1_F051",
+    "motor_kv": 900,
+    "poles": 14,
+    "prop": null,
+    "voltage_v": 24.7,
+    "variable_pwm": 1,
+    "pwm_frequency_khz": 48,
+    "command": "flightstand_dshot"
+  },
+  "steady": {
+    "levels": {
+      "0.10": 2328,
+      "0.20": 4648,
+      "0.30": 6901,
+      "0.40": 9197,
+      "0.50": 11550
+    },
+    "tolerance_pct": 5.0
+  },
+  "square": {
+    "down_ms": {
+      "0.060": 46,
+      "0.090": 29,
+      "0.120": 33,
+      "0.150": 49,
+      "0.180": 33,
+      "0.210": 47,
+      "0.240": 65
+    },
+    "down_tolerance_ms": 40,
+    "down_tolerance_pct": 40,
+    "up_flat_ms": [15, 55]
+  },
+  "chirp": {
+    "accel_3db_hz": 7.92,
+    "brake_3db_hz": 8.71,
+    "tolerance_pct": 25
+  },
+  "desync_budget": 20,
+  "chirp_start_retries": 2,
+  "sitl_gate": {
+    "model": "ark_900kv_noprop.json",
+    "levels": ["0.10", "0.20", "0.30", "0.40"],
+    "tolerance_pct": 15.0,
+    "settle_s": 1.8,
+    "min_running_rpm": 1500,
+    "note": "0.50 omitted: first-order SITL plant desyncs near half stick noprop"
+  }
+}
+

@@ -1,0 +1,21 @@
+{
+  "motor": "900KV",
+  "motor_kv": 900,
+  "prop": "HQProp 10x5x3",
+  "poles": 14,
+  "pole_pairs": 7,
+  "esc": "ARK_4IN1_F051",
+  "firmware": "AM32 ARK fork (post #65)",
+  "command": "flightstand_dshot",
+  "stand": "Tyto Flight Stand 50",
+  "rpm_source": "optical",
+  "voltage_start_v": 24.9,
+  "supply": "6S LiPo",
+  "source_run": "hwci/runs/pr65-aa42860-900kv-20260729_111732",
+  "files": {
+    "suite50_ref": "suite50_ref.jsonl",
+    "expected": "expected.json"
+  },
+  "timestamp": "2026-07-29",
+  "contact": "ARK Electronics"
+}

@@ -1,0 +1,34 @@
+{
+  "motor": "900KV",
+  "motor_kv": 900,
+  "prop": null,
+  "prop_note": "noprop free-run",
+  "poles": 14,
+  "pole_pairs": 7,
+  "esc": "ARK_4IN1_F051",
+  "esc_channel": 1,
+  "firmware": "AM32 ARK fork",
+  "eeprom": {
+    "motor_kv_byte": 22,
+    "motor_kv_actual": 900,
+    "motor_poles": 14,
+    "variable_pwm": 1,
+    "pwm_frequency_khz": 48,
+    "advance_level": 18
+  },
+  "command": "flightstand_dshot",
+  "dshot_map": {"zero": 0, "min": 48, "max": 2047},
+  "stand": "Tyto Flight Stand 50",
+  "rpm_source": "optical",
+  "voltage_start_v": 24.7,
+  "supply": "6S LiPo",
+  "profiles": ["first_spin", "sweep", "square", "chirp"],
+  "files": {
+    "first_spin": "first_spin_010.jsonl",
+    "sweep": "sweep1.jsonl",
+    "square": "square1.jsonl",
+    "chirp": "chirp_120s.jsonl"
+  },
+  "timestamp": "2026-07-20",
+  "contact": "ARK Electronics"
+}

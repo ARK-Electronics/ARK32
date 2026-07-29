@@ -1,0 +1,51 @@
+{
+  "comment": "Real-hardware reference from ARK 4IN1 F051 + JS 2807 1300KV noprop, 6S ~24.9V, Flight Stand optical RPM + HV V/I, uni DShot. Captured 2026-07-20. Tolerances for future SITL model gates only — not a claim that a model is already fitted.",
+  "setup": {
+    "esc": "ARK_4IN1_F051",
+    "motor": "JS Technology 2807 1300KV",
+    "poles": 14,
+    "prop": null,
+    "voltage_v": 24.9,
+    "command": "flightstand_dshot"
+  },
+  "steady": {
+    "levels": {
+      "0.10": 3296,
+      "0.20": 6539,
+      "0.30": 9681,
+      "0.40": 12849,
+      "0.50": 15929
+    },
+    "tolerance_pct": 5.0
+  },
+  "square": {
+    "down_ms": {
+      "0.060": 21,
+      "0.090": 27,
+      "0.120": 30,
+      "0.150": 48,
+      "0.180": 30,
+      "0.210": 64,
+      "0.240": 46
+    },
+    "down_tolerance_ms": 40,
+    "down_tolerance_pct": 40,
+    "up_flat_ms": [15, 60]
+  },
+  "chirp": {
+    "accel_3db_hz": 9.46,
+    "brake_3db_hz": 4.97,
+    "tolerance_pct": 25
+  },
+  "desync_budget": 20,
+  "chirp_start_retries": 2,
+  "sitl_gate": {
+    "model": "ark_2807_1300kv_noprop.json",
+    "levels": ["0.10", "0.20"],
+    "tolerance_pct": 20.0,
+    "settle_s": 1.8,
+    "min_running_rpm": 2000,
+    "note": "High stick desync-prone on SITL; gate low-mid map only"
+  }
+}
+
