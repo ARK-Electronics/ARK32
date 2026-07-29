@@ -50,8 +50,7 @@ static void Filter2P_setup(float sample_freq, float cutoff_freq)
  */
 void Filter2P_reset(const float value)
 {
-	filter._delay_element_1 = filter._delay_element_2 =
-		value * (1.0f / (1 + filter.a1 + filter.a2));
+	filter._delay_element_1 = filter._delay_element_2 = value * (1.0f / (1 + filter.a1 + filter.a2));
 }
 
 float Filter2P_apply(const float sample, float cutoff_freq, float sample_freq)
