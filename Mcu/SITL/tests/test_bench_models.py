@@ -60,17 +60,31 @@ def _wait_model(sim, token: str, timeout: float = 3.0) -> str:
     return status
 
 
-def _steady_rpm(sim, settle_s: float) -> float:
+def _steady_rpm(sim, settle_s: float, min_rpm: float = 500.0) -> float:
+    '''Return a stable post-settle RPM, not a single desync-recovery sample.
+
+    CI hosts occasionally return a mid-ramp or post-desync window if we take
+    the first average above min_rpm. Require three consecutive 0.35s windows
+    that agree within 5% (or 200 rpm), then return their median.
+    '''
     time.sleep(settle_s)
-    # Prefer a short average once spun; retry if a brief desync dips the window.
-    deadline = time.time() + 3.0
+    deadline = time.time() + 5.0
     best = 0.0
+    window: list[float] = []
     while time.time() < deadline:
         rpm = rpm_from_state(sim, 0.35)
         best = max(best, rpm)
-        if rpm > 500:
-            return rpm
-        time.sleep(0.15)
+        if rpm < min_rpm:
+            window.clear()
+            time.sleep(0.1)
+            continue
+        window.append(rpm)
+        if len(window) >= 3:
+            trio = window[-3:]
+            lo, hi = min(trio), max(trio)
+            if (hi - lo) <= max(200.0, 0.05 * hi):
+                return sorted(trio)[1]
+        time.sleep(0.1)
     return best
 
 
@@ -166,31 +180,42 @@ def test_bench_900kv_10inch_mid_stick_current_band(sitl_factory, state_stream):
     '''Prop plant should not free-run like noprop at 30% (load is the point).'''
     noprop = os.path.join(MODELS, 'ark_900kv_noprop.json')
     prop = os.path.join(MODELS, 'ark_900kv_10inch.json')
-    sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
-    sim = state_stream(sitl)
-    assert wait_for_state(sim), sitl.log_tail()
 
-    def spin(model_path: str) -> float:
+    # Fresh SITL per model: load_model only swaps plant coeffs and does not
+    # reset rotor state, and a shared ESC session can leave noprop mid-desync
+    # on a loaded CI runner (seen as prop > noprop at 30%). Close each instance
+    # before the next so the eeprom file lock is released.
+    def spin(model_path: str, eeprom: str) -> tuple[float, str]:
+        sitl = sitl_factory(
+            extra_args=['--input-type', '1', '--eeprom', eeprom, '--node-id', '100'],
+            can_uri='none')
+        sim = state_stream(sitl)
+        assert wait_for_state(sim), sitl.log_tail()
         sim.load_model(model_path)
         _wait_model(sim, 'ark_900')
         tx = Sender('127.0.0.1', sitl.input_port, sd.TYPE_DSHOT600)
         try:
             time.sleep(2.2)
             tx.value = _dshot_for_throttle(0.30)
-            return _steady_rpm(sim, 2.2)
+            # Longer settle than the map gate: noprop free-runs high and can
+            # take a beat longer to lock a clean average under CI load.
+            rpm = _steady_rpm(sim, 2.8, min_rpm=1500.0)
+            return rpm, sitl.log_tail()
         finally:
             tx.value = 0
-            time.sleep(0.5)
+            time.sleep(0.2)
             tx.stop()
+            sitl.close()
 
-    rpm_noprop = spin(noprop)
-    rpm_prop = spin(prop)
+    rpm_noprop, log_np = spin(noprop, 'bench_noprop_eeprom.bin')
+    rpm_prop, log_p = spin(prop, 'bench_prop_eeprom.bin')
     # Prop load must pull RPM down vs noprop at the same stick (bench ~6419 vs ~6901;
     # SITL first-order only needs a clear ordering / separation).
+    log = log_np + '\n---\n' + log_p
     assert rpm_noprop > 5000 and rpm_prop > 3000, (
         'unexpected spin: noprop=%.0f prop=%.0f\n%s'
-        % (rpm_noprop, rpm_prop, sitl.log_tail()))
+        % (rpm_noprop, rpm_prop, log))
     assert rpm_prop < rpm_noprop * 0.98, (
         '10inch model is not heavier than noprop at 30%%: '
         'prop=%.0f noprop=%.0f\n%s'
-        % (rpm_prop, rpm_noprop, sitl.log_tail()))
+        % (rpm_prop, rpm_noprop, log))
