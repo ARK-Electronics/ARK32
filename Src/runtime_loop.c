@@ -515,8 +515,9 @@ void runtimeGovForceForTest(uint16_t slope_q10, uint16_t conf)
 	gov_release_ceil = 0;
 	gov_prev_erpm = 0;
 	/* Hold the inject long enough for GOV_STUCK_MS + margin: freezes the
-	 * estimator and advances stuck as limited+flat (see tick). */
-	gov_force_hold_ms = 1200;
+	 * estimator and advances stuck as limited+flat (see tick). Extra headroom
+	 * covers slow CI hosts where wall time outruns sim ticks briefly. */
+	gov_force_hold_ms = 2500;
 	if (conf >= 300 /* GOV_CONF_ARM */) {
 		gov_duty_ceiling = 700; /* bind mid/full stick without starving SITL */
 	}

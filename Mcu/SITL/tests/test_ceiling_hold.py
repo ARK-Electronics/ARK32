@@ -88,7 +88,7 @@ def test_ceiling_hold_engages_on_desync(sitl_factory, state_stream):
         # low_rpm_level), so a stationary or barely-turning rotor is not a
         # valid starting condition for this test.
         RPM_MIN = 2000.0
-        deadline = time.time() + 10.0
+        deadline = time.time() + 12.0
         pre = None
         rpm = 0.0
         while time.time() < deadline:
@@ -107,12 +107,17 @@ def test_ceiling_hold_engages_on_desync(sitl_factory, state_stream):
                 # test against the firmware, so keep ~4x headroom.
                 rpm = rpm_from_state(sim, 0.2)
                 if rpm > RPM_MIN:
-                    pre = s
-                    break
-            time.sleep(0.05)
+                    # Spin-up desyncs (common on loaded CI) arm the hold for
+                    # DCM_HOLD_MS (~50 ms). Wait until it expires so the
+                    # injected-fault arming is unambiguous.
+                    if s['dcm_hold_ms'] == 0:
+                        pre = s
+                        break
+            time.sleep(0.02)
         assert pre is not None, (
-            'never reached established closed loop above %.0f rpm '
-            '(last rpm=%.0f)\n%s' % (RPM_MIN, rpm, sitl.log_tail()))
+            'never reached established closed loop above %.0f rpm with '
+            'hold clear (last rpm=%.0f, last=%r)\n%s'
+            % (RPM_MIN, rpm, _zc_stats(ctl), sitl.log_tail()))
         assert pre['dcm_hold_ms'] == 0, 'hold already armed before any desync: %r' % pre
 
         # Suppress comparator edge delivery long enough to force a desync
