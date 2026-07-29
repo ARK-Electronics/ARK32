@@ -113,15 +113,32 @@ def test_gov_unlatch_engages_when_slope_too_low(sitl_factory, state_stream):
         saw_stuck = 0
         saw_soft = False
         unlatch_n = unlatch0
-        t_end = time.time() + 2.5
+        # Wall budget >> GOV_STUCK_MS: under CI CPU contention SITL can run well
+        # under 1x realtime (busy-wait pacing), so a fixed 2.5s window has been
+        # seen to expire with stuck_ms ~886 and unlatch never fired.
+        t_end = time.time() + 15.0
+        last_stuck = -1
+        stalled_since = None
         while time.time() < t_end:
             s = _zc_stats(ctl)
-            saw_stuck = max(saw_stuck, int(s['gov_stuck_ms']))
+            stuck = int(s['gov_stuck_ms'])
+            saw_stuck = max(saw_stuck, stuck)
             unlatch_n = max(unlatch_n, int(s['gov_unlatch_count']))
             if s['gov_release_ceil'] > 0:
                 saw_soft = True
             if unlatch_n > unlatch0 and (saw_soft or s['gov_conf'] < GOV_CONF_ARM):
                 break
+            # Re-arm inject if stuck stopped advancing before the threshold
+            # (force hold expired mid-window on a lagging sim).
+            if stuck == last_stuck and stuck < GOV_STUCK_MS and unlatch_n == unlatch0:
+                if stalled_since is None:
+                    stalled_since = time.time()
+                elif time.time() - stalled_since > 0.4:
+                    _gov_force(ctl, low_slope, GOV_CONF_ARM)
+                    stalled_since = time.time()
+            else:
+                stalled_since = None
+            last_stuck = stuck
             time.sleep(0.015)
 
         assert saw_stuck >= GOV_STUCK_MS // 2, (
