@@ -337,6 +337,35 @@ void runtimeSendTelemetryIfNeeded(void)
 #	define GOV_HEADROOM_CV 300   /* 3.0 V of slip headroom above the BEMF line */
 #	define GOV_CEIL_FLOOR 350    /* ceiling never below this (nor min_startup_duty+100) */
 #	define GOV_CONF_ARM 300
+/*
+ * Un-latch window (see (b2)). Continuously ceiling-limited running with
+ * rolling-flat eRPM (per-tick gain ≤ GOV_STUCK_ERPM_EPS) for GOV_STUCK_MS
+ * means the ceiling is setting an operating point rather than shaping a
+ * transient. A real heavy-prop spool gains more than the epsilon every
+ * millisecond-scale step, so it never trips. EPS includes margin for e_rpm
+ * quantisation and residual jitter (e_rpm units are tens of electrical RPM).
+ */
+#	define GOV_STUCK_MS 1000
+#	define GOV_STUCK_ERPM_EPS 8
+/* Soft release after un-latch: duty units per 1 kHz tick toward 2000.
+ * 8 ≈ 0.4 %/ms → full authority in ≤250 ms instead of a single-tick step. */
+#	define GOV_RELEASE_SLEW 8
+
+static uint16_t gov_prev_erpm;
+/* Test inject: while >0, freeze estimator and treat as ceiling-limited so the
+ * un-latch window can complete without a desync/re-seed race (SITL/HWCI). */
+static uint16_t gov_force_hold_ms;
+
+static void runtimeGovClearState(void)
+{
+	gov_slope_q10 = 0;
+	gov_conf = 0;
+	gov_stuck_ms = 0;
+	gov_prev_erpm = 0;
+	gov_release_ceil = 0;
+	gov_force_hold_ms = 0;
+	gov_duty_ceiling = 2000;
+}
 
 __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 {
@@ -345,8 +374,6 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 	// - no live-voltage term in the ceiling. Sag/pack-swap staleness errs
 	// conservative (V drop -> true equilibrium duty rises -> stale ceiling
 	// is low) and the estimator re-tracks in ~30 ms of steady running.
-	static uint16_t gov_slope_q10;
-	static uint16_t gov_conf;
 	// One volatile read each; everything below works on locals (M0: every
 	// volatile re-read is a literal-pool load + ldr, and this function is
 	// flash-budget critical).
@@ -374,10 +401,17 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 	r = (uint16_t)((max_ramp_high_rpm * scale_q8) >> 8);
 	max_ramp_high_rpm_vcomp = r ? (uint8_t)r : 1;
 
-	// (b) slope estimator, steady trusted closed loop only (slew settled,
-	// no blind/demag/grind, not riding the ceiling - riding it would drag
-	// the estimate down and under-spool)
-	if (closed && duty > 250 && last_duty_cycle == duty_cycle_setpoint && duty_cycle_setpoint < gov_duty_ceiling &&
+	// Coast / poll / not yet established: wipe slope state so a previous
+	// run's latch cannot re-bind on the next start. Ramp vcomp above still
+	// applied. Test inject (gov_force_hold_ms) survives brief !closed so a
+	// desync mid-inject cannot abort the engagement check.
+	if (!closed && !gov_force_hold_ms) {
+		runtimeGovClearState();
+		return;
+	}
+
+	// (b) slope estimator — frozen during test inject.
+	if (!gov_force_hold_ms && duty > 250 && last_duty_cycle == duty_cycle_setpoint && duty_cycle_setpoint < gov_duty_ceiling &&
 	    zc_blind_steps == 0 && zc_demag_run == 0 && zc_grind_hold_ms == 0 && erpm > 32) {
 		uint32_t obs = (duty << 10) / erpm; // erpm > 32 keeps this in uint16
 		if (gov_conf == 0) {
@@ -390,6 +424,47 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 		}
 	}
 
+	/*
+	 * (b2) Un-latch. Rolling flatness: each tick compares eRPM to the
+	 * previous sample. Still climbing resets the stuck timer; flat
+	 * (gain ≤ EPS) accumulates toward GOV_STUCK_MS.
+	 *
+	 * Test inject (gov_force_hold_ms): treat as limited+flat so the window
+	 * completes deterministically without depending on plant spin.
+	 */
+	const uint8_t gov_limited = gov_force_hold_ms || (closed && gov_conf >= GOV_CONF_ARM && duty_cycle_setpoint >= gov_duty_ceiling &&
+							  zc_blind_steps == 0 && zc_demag_run == 0 && zc_grind_hold_ms == 0);
+	if (gov_force_hold_ms) {
+		gov_force_hold_ms--;
+		if (gov_stuck_ms < GOV_STUCK_MS) {
+			gov_stuck_ms++;
+		}
+		if (gov_stuck_ms >= GOV_STUCK_MS) {
+			gov_release_ceil = gov_duty_ceiling ? gov_duty_ceiling : (uint16_t)GOV_CEIL_FLOOR;
+			gov_conf = 0;
+			gov_stuck_ms = 0;
+			gov_force_hold_ms = 0;
+			if (gov_unlatch_count < 0xFFFF) {
+				gov_unlatch_count++;
+			}
+		}
+	} else if (!gov_limited) {
+		gov_stuck_ms = 0;
+	} else if (erpm > (uint32_t)gov_prev_erpm + GOV_STUCK_ERPM_EPS) {
+		gov_stuck_ms = 0; // still accelerating: the ceiling is doing its job
+	} else if (gov_stuck_ms < GOV_STUCK_MS) {
+		gov_stuck_ms++;
+		if (gov_stuck_ms >= GOV_STUCK_MS) {
+			gov_release_ceil = gov_duty_ceiling ? gov_duty_ceiling : (uint16_t)GOV_CEIL_FLOOR;
+			gov_conf = 0;
+			gov_stuck_ms = 0;
+			if (gov_unlatch_count < 0xFFFF) {
+				gov_unlatch_count++;
+			}
+		}
+	}
+	gov_prev_erpm = (uint16_t)erpm;
+
 	// (c) BEMF-headroom ceiling from the live eRPM: equilibrium duty via
 	// the slope (multiply, no divide) plus headroom in duty units.
 	// headroom = HEADROOM_CV*2000/Vbat, folded into scale_q8
@@ -400,7 +475,7 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 	// the cliff is dV/dt, not level; that is the learned ramp back-off's
 	// job, faultDesyncEpisodeCharge).
 	uint16_t ceiling = 2000;
-	if (closed && gov_conf >= GOV_CONF_ARM) {
+	if (gov_conf >= GOV_CONF_ARM) {
 		uint32_t c = ((erpm * gov_slope_q10) >> 10) + ((scale_q8 * 405u) >> 8);
 		if (c < GOV_CEIL_FLOOR) {
 			c = GOV_CEIL_FLOOR;
@@ -408,10 +483,48 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 		if (c < 2000) {
 			ceiling = (uint16_t)c;
 		}
+		gov_release_ceil = 0; // re-armed: cancel any soft release
+	} else if (gov_release_ceil) {
+		// Soft raise toward full authority after un-latch.
+		uint32_t next = (uint32_t)gov_release_ceil + GOV_RELEASE_SLEW;
+		if (next >= 2000u) {
+			gov_release_ceil = 0;
+			ceiling = 2000;
+		} else {
+			gov_release_ceil = (uint16_t)next;
+			ceiling = gov_release_ceil;
+		}
 	}
 	gov_duty_ceiling = ceiling;
 }
+#endif /* !BRUSHED_MODE */
+
+/* Always defined so every target links runtime_loop.h exports. */
+uint16_t gov_slope_q10;
+uint16_t gov_conf;
+uint16_t gov_stuck_ms;
+uint16_t gov_release_ceil;
+uint16_t gov_unlatch_count;
+
+void runtimeGovForceForTest(uint16_t slope_q10, uint16_t conf)
+{
+#ifndef BRUSHED_MODE
+	gov_slope_q10 = slope_q10;
+	gov_conf = conf;
+	gov_stuck_ms = 0;
+	gov_release_ceil = 0;
+	gov_prev_erpm = 0;
+	/* Hold the inject long enough for GOV_STUCK_MS + margin: freezes the
+	 * estimator and advances stuck as limited+flat (see tick). */
+	gov_force_hold_ms = 1200;
+	if (conf >= 300 /* GOV_CONF_ARM */) {
+		gov_duty_ceiling = 700; /* bind mid/full stick without starving SITL */
+	}
+#else
+	(void)slope_q10;
+	(void)conf;
 #endif
+}
 
 void runtimeProcessAdcAndProtections(void)
 {
