@@ -41,11 +41,11 @@
   "chirp_start_retries": 2,
   "sitl_gate": {
     "model": "ark_2807_1300kv_noprop.json",
-    "levels": ["0.10", "0.20"],
+    "levels": ["0.10"],
     "tolerance_pct": 20.0,
-    "settle_s": 1.8,
+    "settle_s": 2.0,
     "min_running_rpm": 2000,
-    "note": "High stick desync-prone on SITL; gate low-mid map only"
+    "note": "0.20+ desync-prone on first-order SITL (free-run collapses mid-hold); gate 0.10 only. Bench map still records 0.20–0.50 for hardware."
   }
 }
 
