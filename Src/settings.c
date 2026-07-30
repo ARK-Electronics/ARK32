@@ -286,8 +286,8 @@ void __attribute__((noinline)) checkDeviceInfo(void)
 	FLASH_API->flash_get_property(&s_flashDriver, kFLASH_PropertyPflashSectorSize, &pflashSectorSize);
 	FLASH_API->flash_get_property(&s_flashDriver, kFLASH_PropertyPflashTotalSize, &pflashTotalSize);
 #else
-#define DEVINFO_MAGIC1 0x5925e3da
-#define DEVINFO_MAGIC2 0x4eb863d9
+#	define DEVINFO_MAGIC1 0x5925e3da
+#	define DEVINFO_MAGIC2 0x4eb863d9
 
 	// Fixed bootloader address; GCC 12+ -Warray-bounds needs care.
 	struct devinfo {
@@ -296,17 +296,17 @@ void __attribute__((noinline)) checkDeviceInfo(void)
 		uint8_t deviceInfo[9];
 	};
 	volatile const struct devinfo *devinfo = (volatile const struct devinfo *)(uintptr_t)(0x1000u - 32u);
-#if defined(__GNUC__) && (__GNUC__ >= 12)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Warray-bounds"
-#pragma GCC diagnostic ignored "-Wstringop-overread"
-#endif
+#	if defined(__GNUC__) && (__GNUC__ >= 12)
+#		pragma GCC diagnostic push
+#		pragma GCC diagnostic ignored "-Warray-bounds"
+#		pragma GCC diagnostic ignored "-Wstringop-overread"
+#	endif
 	const uint32_t magic1 = devinfo->magic1;
 	const uint32_t magic2 = devinfo->magic2;
 	const uint8_t eeprom_code = devinfo->deviceInfo[4];
-#if defined(__GNUC__) && (__GNUC__ >= 12)
-#pragma GCC diagnostic pop
-#endif
+#	if defined(__GNUC__) && (__GNUC__ >= 12)
+#		pragma GCC diagnostic pop
+#	endif
 	if (magic1 != DEVINFO_MAGIC1 || magic2 != DEVINFO_MAGIC2) {
 		// bootloader does not support this feature, nothing to do
 		return;
