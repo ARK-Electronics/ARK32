@@ -62,6 +62,15 @@
  */
 #define ZC_DEADLINE_MIN_ZC 100
 
+/* Duty-slew history for turn-on-grid compensation (interruptRoutine).
+ * File-scope so bemfZcResetTrend() can clear it on reverse/stop. */
+static uint16_t zc_prev_duty;
+
+void bemfZcResetTrend(void)
+{
+	zc_prev_duty = 0;
+}
+
 RAM_FUNC void PeriodElapsedCallback()
 {
 	uint8_t blind = 0;
@@ -178,18 +187,6 @@ RAM_FUNC void interruptRoutine()
 	// finally accepted.
 	uint16_t zc_pwm_cnt = (uint16_t)TIM1->CNT;
 #endif
-	//   if (average_interval > 125) {
-	//        if ((INTERVAL_TIMER_COUNT < 125) && (duty_cycle < 600) && (zero_crosses < 500)) { // should be impossible, desync?exit anyway
-	//           return;
-	//        }
-	//        stuckcounter++; // stuck at 100 interrupts before the main loop happens
-	//                        // again.
-	//        if (stuckcounter > 100) {
-	//            maskPhaseInterrupts();
-	//            zero_crosses = 0;
-	//            return;
-	//        }
-	//    }
 	// Zero-cross confirm: reject unless the window's reads hold the
 	// post-crossing level. Loop speed sets the sampling window: inlining
 	// getCompOutputLevel removes the per-sample call overhead, and with the
@@ -276,7 +273,6 @@ RAM_FUNC void interruptRoutine()
 #	endif
 	uint16_t zc_grid_comp = 0;
 	{
-		static uint16_t zc_prev_duty;
 		const uint16_t zc_arr = tim1_arr;
 		const uint16_t zc_duty = adjusted_duty_cycle;
 		const uint16_t zc_slew =
@@ -363,6 +359,7 @@ void startMotor()
 		zc_blind_window_count = 0;
 		zc_pre_seen = 1;
 		zc_demag_run = 0;
+		bemfZcResetTrend();
 		commutate();
 		commutation_interval = 10000;
 		SET_INTERVAL_TIMER_COUNT(5000);
