@@ -5,6 +5,13 @@
 #ifndef EEPROM_H_
 #	define EEPROM_H_
 
+/*
+ * limits.current sentinel meaning "current limiting off", written by factory
+ * 4IN1 images (factory/ARK_4IN1_F051_eeprom_defaults.json) and honoured by
+ * loadEEpromSettings(). Kept out of the usable range on every target.
+ */
+#	define CURRENT_LIMIT_DISABLED 102
+
 typedef union EEprom_u {
 	struct {
 		uint8_t reserved_0;	//0

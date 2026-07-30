@@ -469,7 +469,19 @@ void setInput()
 			 */
 			if (use_current_limit && eepromBuffer.limits.current > 0) {
 				const int32_t limit_ca = (int32_t)eepromBuffer.limits.current * 200;
-				if (actual_current > (limit_ca + (limit_ca >> 2))) {
+				/*
+				 * actual_current is int16_t centiamps and saturates at
+				 * INT16_MAX (327.67 A, see Src/adc_app.c), so a raw 1.25x
+				 * trip is unreachable for limits above 131 (262 A) - the
+				 * ARK_G431_CAN 300 A default among them. Cap the trip at
+				 * what the sensor can actually report so the clamp still
+				 * arms; it just fires closer to 1.0x on those targets.
+				 */
+				int32_t trip_ca = limit_ca + (limit_ca >> 2);
+				if (trip_ca > INT16_MAX) {
+					trip_ca = INT16_MAX;
+				}
+				if (actual_current > trip_ca) {
 					const uint16_t hard_cap = (uint16_t)(minimum_duty_cycle + 100);
 					if (duty_cycle_setpoint > hard_cap) {
 						duty_cycle_setpoint = hard_cap;

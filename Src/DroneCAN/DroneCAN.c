@@ -126,6 +126,20 @@ extern void loadEEpromSettings(void);
 static void set_input(uint16_t input);
 
 /*
+  CURRENT_LIMIT is presented over DroneCAN in amps; eeprom limits.current
+  stores amps/2 (see the halving in load_settings() / handle_param_GetSet()).
+  Targets with a dedicated per-motor shunt measure well past the 200 A shared-
+  shunt ceiling, so raise the presented maximum for them - the factory default
+  for ARK_G431_CAN is 300 A (eeprom 150) and load_settings() would otherwise
+  reject it as out of range and reset it to the default.
+*/
+#	ifdef USE_CURRENT_SENSE
+#		define CURRENT_LIMIT_MAX_AMPS 300
+#	else
+#		define CURRENT_LIMIT_MAX_AMPS 200
+#	endif
+
+/*
   the set of parameters to present to the user over DroneCAN
 */
 static const struct parameter {
@@ -167,7 +181,7 @@ static const struct parameter {
 	{"ADVANCE_LEVEL", T_UINT8, 0, 30, 26, &eepromBuffer.advance_level},
 	{"AUTO_ADVANCE", T_BOOL, 0, 1, 0, &eepromBuffer.auto_advance},
 	{"STARTUP_POWER", T_UINT8, 50, 150, 10, &eepromBuffer.startup_power},
-	{"CURRENT_LIMIT", T_UINT8, 0, 200, 0, &eepromBuffer.limits.current},
+	{"CURRENT_LIMIT", T_UINT8, 0, CURRENT_LIMIT_MAX_AMPS, 0, &eepromBuffer.limits.current},
 	{"TEMPERATURE_LIMIT", T_UINT8, 70, 255, 255, &eepromBuffer.limits.temperature},
 	{"LOW_VOLTAGE_CUTOFF", T_BOOL, 0, 1, 0, &eepromBuffer.low_voltage_cut_off},
 	{"CELL_VOLTAGE_THRESHOLD", T_UINT16, 250, 350, 300, &low_cell_volt_cutoff},
@@ -202,7 +216,10 @@ static void load_settings(void)
 			case T_BOOL:
 			case T_UINT8: {
 				uint8_t *pvalue = (uint8_t *)p->ptr;
-				uint8_t max_value = p->max_value;
+				/* uint16_t, not uint8_t: CURRENT_LIMIT_MAX_AMPS can exceed 255
+				 * before the halving below, and truncating here would clamp
+				 * the eeprom value far under the target's real limit. */
+				uint16_t max_value = p->max_value;
 				if (pvalue == &eepromBuffer.limits.current) {
 					max_value = max_value / 2;
 				}
@@ -366,7 +383,16 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 			case T_UINT8: {
 				uint8_t *ptr8 = (uint8_t *)p->ptr;
 				if (ptr8 == &eepromBuffer.limits.current) {
-					*ptr8 = req.value.integer_value / 2;
+					/* Clamp to the advertised max before halving: an
+					 * out-of-range set would otherwise wrap the uint8 and
+					 * install a nonsense limit until the next boot. */
+					int64_t amps = req.value.integer_value;
+					if (amps < 0) {
+						amps = 0;
+					} else if (amps > CURRENT_LIMIT_MAX_AMPS) {
+						amps = CURRENT_LIMIT_MAX_AMPS;
+					}
+					*ptr8 = (uint8_t)(amps / 2);
 				} else {
 					*ptr8 = req.value.integer_value;
 				}

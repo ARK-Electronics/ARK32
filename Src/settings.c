@@ -124,13 +124,24 @@ void loadEEpromSettings(void)
 
 		/*
 		 * Current limit enable. EEPROM limits.current is in 2 A steps of the
-		 * PID target (target_centiamps = limits.current * 2 * 100). Legacy
-		 * capped enable at 100 (200 A). Dedicated-shunt targets (e.g.
-		 * ARK_G431_CAN 12S) need up to 300 A, so accept the full uint8 range
-		 * 1..255. Value 0 (and the historical 102 "disabled" sentinel used
-		 * by factory 4IN1 images) leaves the limit off.
+		 * PID target (target_centiamps = limits.current * 2 * 100).
+		 *
+		 * Shared-shunt targets keep the historical 1..100 (2..200 A) window:
+		 * anything above that was "disabled" for them and widening it here
+		 * would silently arm a limiter on every existing target, including
+		 * on a blank eeprom (0xFF = 255 -> a 510 A target).
+		 *
+		 * Dedicated-shunt targets (USE_CURRENT_SENSE, e.g. ARK_G431_CAN 12S)
+		 * need up to 300 A, so they accept 1..255 except the sentinel that
+		 * factory 4IN1 images ship to mean "off".
 		 */
-		if (eepromBuffer.limits.current > 0 && eepromBuffer.limits.current != 102) {
+#ifdef USE_CURRENT_SENSE
+		const uint8_t current_limit_max = 255;
+#else
+		const uint8_t current_limit_max = 100;
+#endif
+		if (eepromBuffer.limits.current > 0 && eepromBuffer.limits.current <= current_limit_max &&
+		    eepromBuffer.limits.current != CURRENT_LIMIT_DISABLED) {
 			use_current_limit = 1;
 		} else {
 			use_current_limit = 0;
