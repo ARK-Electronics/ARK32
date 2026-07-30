@@ -99,6 +99,8 @@ jobs:
   factory-image:
     name: factory image (ARK 4IN1 + G431 CAN)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -132,6 +134,8 @@ jobs:
   build-ark-g431-can:
     name: build ARK_G431_CAN
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
