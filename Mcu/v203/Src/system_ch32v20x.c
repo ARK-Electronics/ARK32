@@ -270,7 +270,7 @@ static void SetSysClockToHSE(void)
      *  CH32V20x_D8 (HSE=32MHZ)
      *  CH32V20x_D8W (HSE=32MHZ)
      */
-		RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_SW));
+		RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_SW));
 		RCC->CFGR0 |= (uint32_t)RCC_SW_HSE;
 
 		/* Wait till HSE is used as system clock source */
@@ -320,7 +320,7 @@ static void SetSysClockTo48_HSE(void)
      *  CH32V20x_D8-PLL configuration: PLLCLK = HSE/4 * 6 = 48 MHz (HSE=32MHZ)
      *  CH32V20x_D8W-PLL configuration: PLLCLK = HSE/4 * 6 = 48 MHz (HSE=32MHZ)
      */
-		RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
+		RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
 
 		RCC->CFGR0 |= (uint32_t)(RCC_PLLSRC_HSE | RCC_PLLXTPRE_HSE | RCC_PLLMULL6);
 
@@ -329,7 +329,7 @@ static void SetSysClockTo48_HSE(void)
 		/* Wait till PLL is ready */
 		while ((RCC->CTLR & RCC_PLLRDY) == 0) {}
 		/* Select PLL as system clock source */
-		RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_SW));
+		RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_SW));
 		RCC->CFGR0 |= (uint32_t)RCC_SW_PLL;
 		/* Wait till PLL is used as system clock source */
 		while ((RCC->CFGR0 & (uint32_t)RCC_SWS) != (uint32_t)0x08) {}
@@ -380,7 +380,7 @@ static void SetSysClockTo56_HSE(void)
      *  CH32V20x_D8-PLL configuration: PLLCLK = HSE/4 * 7 = 56 MHz (HSE=32MHZ)
      *  CH32V20x_D8W-PLL configuration: PLLCLK = HSE/4 * 7 = 56 MHz (HSE=32MHZ)
      */
-		RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
+		RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
 
 		RCC->CFGR0 |= (uint32_t)(RCC_PLLSRC_HSE | RCC_PLLXTPRE_HSE | RCC_PLLMULL7);
 
@@ -390,7 +390,7 @@ static void SetSysClockTo56_HSE(void)
 		while ((RCC->CTLR & RCC_PLLRDY) == 0) {}
 
 		/* Select PLL as system clock source */
-		RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_SW));
+		RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_SW));
 		RCC->CFGR0 |= (uint32_t)RCC_SW_PLL;
 		/* Wait till PLL is used as system clock source */
 		while ((RCC->CFGR0 & (uint32_t)RCC_SWS) != (uint32_t)0x08) {}
@@ -441,7 +441,7 @@ static void SetSysClockTo72_HSE(void)
      *  CH32V20x_D8-PLL configuration: PLLCLK = HSE/4 * 9 = 72 MHz (HSE=32MHZ)
      *  CH32V20x_D8W-PLL configuration: PLLCLK = HSE/4 * 9 = 72 MHz (HSE=32MHZ)
      */
-		RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
+		RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
 
 		RCC->CFGR0 |= (uint32_t)(RCC_PLLSRC_HSE | RCC_PLLXTPRE_HSE | RCC_PLLMULL9);
 
@@ -450,7 +450,7 @@ static void SetSysClockTo72_HSE(void)
 		/* Wait till PLL is ready */
 		while ((RCC->CTLR & RCC_PLLRDY) == 0) {}
 		/* Select PLL as system clock source */
-		RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_SW));
+		RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_SW));
 		RCC->CFGR0 |= (uint32_t)RCC_SW_PLL;
 		/* Wait till PLL is used as system clock source */
 		while ((RCC->CFGR0 & (uint32_t)RCC_SWS) != (uint32_t)0x08) {}
@@ -501,7 +501,7 @@ static void SetSysClockTo96_HSE(void)
      *  CH32V20x_D8-PLL configuration: PLLCLK = HSE/4 * 12 = 96 MHz (HSE=32MHZ)
      *  CH32V20x_D8W-PLL configuration: PLLCLK = HSE/4 * 12 = 96 MHz (HSE=32MHZ)
      */
-		RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
+		RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
 
 		RCC->CFGR0 |= (uint32_t)(RCC_PLLSRC_HSE | RCC_PLLXTPRE_HSE | RCC_PLLMULL12);
 
@@ -510,7 +510,7 @@ static void SetSysClockTo96_HSE(void)
 		/* Wait till PLL is ready */
 		while ((RCC->CTLR & RCC_PLLRDY) == 0) {}
 		/* Select PLL as system clock source */
-		RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_SW));
+		RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_SW));
 		RCC->CFGR0 |= (uint32_t)RCC_SW_PLL;
 		/* Wait till PLL is used as system clock source */
 		while ((RCC->CFGR0 & (uint32_t)RCC_SWS) != (uint32_t)0x08) {}
@@ -567,7 +567,7 @@ static void SetSysClockTo120_HSE(void)
          *  CH32V20x_D8-PLL configuration: PLLCLK = HSE/4 * 15 = 120 MHz (HSE=32MHZ)
          *  CH32V20x_D8W-PLL configuration: PLLCLK = HSE/2 * 15 = 240 MHz (HSE=32MHZ)
          */
-		RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
+		RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
 
 		RCC->CFGR0 |= (uint32_t)(RCC_PLLSRC_HSE | RCC_PLLXTPRE_HSE | RCC_PLLMULL15);
 
@@ -576,7 +576,7 @@ static void SetSysClockTo120_HSE(void)
 		/* Wait till PLL is ready */
 		while ((RCC->CTLR & RCC_PLLRDY) == 0) {}
 		/* Select PLL as system clock source */
-		RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_SW));
+		RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_SW));
 		RCC->CFGR0 |= (uint32_t)RCC_SW_PLL;
 		/* Wait till PLL is used as system clock source */
 		while ((RCC->CFGR0 & (uint32_t)RCC_SWS) != (uint32_t)0x08) {}
@@ -626,7 +626,7 @@ static void SetSysClockTo144_HSE(void)
      *  CH32V20x_D8-PLL configuration: PLLCLK = HSE/4 * 18 = 144 MHz (HSE=32MHZ)
      *  CH32V20x_D8W-PLL configuration: PLLCLK = HSE/4 * 18 = 144 MHz (HSE=32MHZ)
      */
-		RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
+		RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
 
 		RCC->CFGR0 |= (uint32_t)(RCC_PLLSRC_HSE | RCC_PLLXTPRE_HSE | RCC_PLLMULL18);
 
@@ -635,7 +635,7 @@ static void SetSysClockTo144_HSE(void)
 		/* Wait till PLL is ready */
 		while ((RCC->CTLR & RCC_PLLRDY) == 0) {}
 		/* Select PLL as system clock source */
-		RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_SW));
+		RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_SW));
 		RCC->CFGR0 |= (uint32_t)RCC_SW_PLL;
 		/* Wait till PLL is used as system clock source */
 		while ((RCC->CFGR0 & (uint32_t)RCC_SWS) != (uint32_t)0x08) {}
@@ -668,7 +668,7 @@ static void SetSysClockTo48_HSI(void)
 	RCC->CFGR0 |= (uint32_t)RCC_PPRE1_DIV2;
 
 	/*  PLL configuration: PLLCLK = HSI * 6 = 48 MHz */
-	RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
+	RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
 
 	RCC->CFGR0 |= (uint32_t)(RCC_PLLSRC_HSI_Div2 | RCC_PLLMULL6);
 
@@ -677,7 +677,7 @@ static void SetSysClockTo48_HSI(void)
 	/* Wait till PLL is ready */
 	while ((RCC->CTLR & RCC_PLLRDY) == 0) {}
 	/* Select PLL as system clock source */
-	RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_SW));
+	RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_SW));
 	RCC->CFGR0 |= (uint32_t)RCC_SW_PLL;
 	/* Wait till PLL is used as system clock source */
 	while ((RCC->CFGR0 & (uint32_t)RCC_SWS) != (uint32_t)0x08) {}
@@ -704,7 +704,7 @@ static void SetSysClockTo56_HSI(void)
 	RCC->CFGR0 |= (uint32_t)RCC_PPRE1_DIV2;
 
 	/*  PLL configuration: PLLCLK = HSI * 7 = 48 MHz */
-	RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
+	RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
 
 	RCC->CFGR0 |= (uint32_t)(RCC_PLLSRC_HSI_Div2 | RCC_PLLMULL7);
 
@@ -713,7 +713,7 @@ static void SetSysClockTo56_HSI(void)
 	/* Wait till PLL is ready */
 	while ((RCC->CTLR & RCC_PLLRDY) == 0) {}
 	/* Select PLL as system clock source */
-	RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_SW));
+	RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_SW));
 	RCC->CFGR0 |= (uint32_t)RCC_SW_PLL;
 	/* Wait till PLL is used as system clock source */
 	while ((RCC->CFGR0 & (uint32_t)RCC_SWS) != (uint32_t)0x08) {}
@@ -740,7 +740,7 @@ static void SetSysClockTo72_HSI(void)
 	RCC->CFGR0 |= (uint32_t)RCC_PPRE1_DIV2;
 
 	/*  PLL configuration: PLLCLK = HSI * 9 = 72 MHz */
-	RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
+	RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
 
 	RCC->CFGR0 |= (uint32_t)(RCC_PLLSRC_HSI_Div2 | RCC_PLLMULL9);
 
@@ -749,7 +749,7 @@ static void SetSysClockTo72_HSI(void)
 	/* Wait till PLL is ready */
 	while ((RCC->CTLR & RCC_PLLRDY) == 0) {}
 	/* Select PLL as system clock source */
-	RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_SW));
+	RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_SW));
 	RCC->CFGR0 |= (uint32_t)RCC_SW_PLL;
 	/* Wait till PLL is used as system clock source */
 	while ((RCC->CFGR0 & (uint32_t)RCC_SWS) != (uint32_t)0x08) {}
@@ -776,7 +776,7 @@ static void SetSysClockTo96_HSI(void)
 	RCC->CFGR0 |= (uint32_t)RCC_PPRE1_DIV4;
 
 	/*  PLL configuration: PLLCLK = HSI * 12 = 96 MHz */
-	RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
+	RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
 
 	RCC->CFGR0 |= (uint32_t)(RCC_PLLSRC_HSI_Div2 | RCC_PLLMULL12);
 
@@ -785,7 +785,7 @@ static void SetSysClockTo96_HSI(void)
 	/* Wait till PLL is ready */
 	while ((RCC->CTLR & RCC_PLLRDY) == 0) {}
 	/* Select PLL as system clock source */
-	RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_SW));
+	RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_SW));
 	RCC->CFGR0 |= (uint32_t)RCC_SW_PLL;
 	/* Wait till PLL is used as system clock source */
 	while ((RCC->CFGR0 & (uint32_t)RCC_SWS) != (uint32_t)0x08) {}
@@ -812,7 +812,7 @@ static void SetSysClockTo120_HSI(void)
 	RCC->CFGR0 |= (uint32_t)RCC_PPRE1_DIV2;
 
 	/*  PLL configuration: PLLCLK = HSI * 15 = 120 MHz */
-	RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
+	RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
 
 	RCC->CFGR0 |= (uint32_t)(RCC_PLLSRC_HSI_Div2 | RCC_PLLMULL15);
 
@@ -821,7 +821,7 @@ static void SetSysClockTo120_HSI(void)
 	/* Wait till PLL is ready */
 	while ((RCC->CTLR & RCC_PLLRDY) == 0) {}
 	/* Select PLL as system clock source */
-	RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_SW));
+	RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_SW));
 	RCC->CFGR0 |= (uint32_t)RCC_SW_PLL;
 	/* Wait till PLL is used as system clock source */
 	while ((RCC->CFGR0 & (uint32_t)RCC_SWS) != (uint32_t)0x08) {}
@@ -847,7 +847,7 @@ static void SetSysClockTo144_HSI(void)
 	RCC->CFGR0 |= (uint32_t)RCC_PPRE1_DIV2;
 
 	/*  PLL configuration: PLLCLK = HSI * 18 = 144 MHz */
-	RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
+	RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_PLLSRC | RCC_PLLXTPRE | RCC_PLLMULL));
 
 	RCC->CFGR0 |= (uint32_t)(RCC_PLLSRC_HSI_Div2 | RCC_PLLMULL18);
 
@@ -856,7 +856,7 @@ static void SetSysClockTo144_HSI(void)
 	/* Wait till PLL is ready */
 	while ((RCC->CTLR & RCC_PLLRDY) == 0) {}
 	/* Select PLL as system clock source */
-	RCC->CFGR0 &= (uint32_t)((uint32_t) ~(RCC_SW));
+	RCC->CFGR0 &= (uint32_t)((uint32_t)~(RCC_SW));
 	RCC->CFGR0 |= (uint32_t)RCC_SW_PLL;
 	/* Wait till PLL is used as system clock source */
 	while ((RCC->CFGR0 & (uint32_t)RCC_SWS) != (uint32_t)0x08) {}

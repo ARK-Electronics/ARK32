@@ -34,11 +34,10 @@ void initCorePeripherals(void)
 	MX_COMP2_Init();
 	MX_TIM1_Init();
 	MX_TIM2_Init();
+	MX_TIM16_Init();
 #ifdef USE_TIMER_16_CHANNEL_1
-	MX_TIM16_Init();
+	/* TIM16 is the input-capture timer here, so COM moves to TIM7. */
 	MX_TIM7_Init();
-#else
-	MX_TIM16_Init();
 #endif
 	MX_COMP1_Init();
 	MX_TIM17_Init();
@@ -77,7 +76,7 @@ void SystemClock_Config(void)
 		;
 
 #ifdef USE_HSE
-		// setup to use HSE
+	// setup to use HSE
 #	if defined(USE_HSE_BYPASS) && (USE_HSE_BYPASS == 0)
 	LL_RCC_HSE_DisableBypass(); // Use crystal mode
 #	else
