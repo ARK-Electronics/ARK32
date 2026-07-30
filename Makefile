@@ -318,6 +318,7 @@ factory-image-check: factory-image
 	$(QUIET)FACTORY_PRODUCT=$(FACTORY_G431_PRODUCT) \
 		FACTORY_DEFAULTS=$(FACTORY_G431_DEFAULTS) \
 		BL_IMAGE="$(BL_IMAGE_G431_CAN)" \
+		ALLOW_EMPTY_BL=$(if $(BL_IMAGE_G431_CAN),0,1) \
 		bash scripts/check-factory-image-ark.sh
 
 # Code formatting (clang-format ≈ PX4 astyle/Linux look; see .clang-format).

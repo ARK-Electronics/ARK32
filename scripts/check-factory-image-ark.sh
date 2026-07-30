@@ -5,7 +5,8 @@
 # Env overrides (or defaults for ARK_4IN1_F051):
 #   FACTORY_PRODUCT   e.g. ARK_4IN1_F051 or ARK_G431_CAN
 #   FACTORY_DEFAULTS  path to factory/*_eeprom_defaults.json
-#   BL_IMAGE          optional bootloader .bin (omit / empty = allow 0xFF BL)
+#   BL_IMAGE          bootloader .bin; empty only with ALLOW_EMPTY_BL=1
+#   ALLOW_EMPTY_BL    1 = permit a 0xFF bootloader region (NOT SHIPPABLE)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -53,7 +54,7 @@ fi
 FACTORY="${factory_bins[0]}"
 APP="${app_bins[0]}"
 
-python3 - "$FACTORY" "$APP" "$DEFAULTS_JSON" "${BL:-}" <<'PY'
+python3 - "$FACTORY" "$APP" "$DEFAULTS_JSON" "${BL:-}" "${ALLOW_EMPTY_BL:-0}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -62,6 +63,7 @@ factory_path = Path(sys.argv[1])
 app_path = Path(sys.argv[2])
 defaults_path = Path(sys.argv[3])
 bl_path = Path(sys.argv[4]) if sys.argv[4] else None
+allow_empty_bl = sys.argv[5] == "1"
 
 defaults = json.loads(defaults_path.read_text(encoding="utf-8"))
 s = defaults["settings"]
@@ -112,6 +114,14 @@ if bl:
         errors.append("bootloader region does not match Bootloaders/*.bin")
     if any(b != 0xFF for b in img[BL_OFFSET + len(bl) : APP_OFFSET]):
         errors.append("gap between bootloader and app is not 0xFF-padded")
+elif not allow_empty_bl:
+    # A full-flash image with a blank BL region will not boot. Never let a
+    # product silently regress into shipping one - require the opt-in.
+    errors.append(
+        "bootloader region is empty and ALLOW_EMPTY_BL is not set "
+        "(pass BL_IMAGE=<bootloader .bin>, or ALLOW_EMPTY_BL=1 to accept a "
+        "non-bootable image)"
+    )
 else:
     if any(b != 0xFF for b in img[BL_OFFSET:APP_OFFSET]):
         errors.append("empty-bootloader mode: BL region is not all 0xFF")
@@ -147,8 +157,26 @@ expect(23, adv_level, "advance_level")
 expect(26, kv_byte, "motor_kv")
 expect(32, servo_lo, "servo_low")
 expect(33, servo_hi, "servo_high")
+expect(44, int(s["current_limit"]), "current_limit")
 expect(46, int(s["input_type"]), "input_type")
 expect(47, int(s["auto_advance"]), "auto_advance")
+
+# DRONECAN_IN products run every eeprom byte through DroneCAN load_settings()
+# at boot, which resets out-of-range values to the parameter default. A
+# current_limit above the CURRENT_LIMIT parameter maximum is therefore silently
+# zeroed while use_current_limit stays armed - the ESC ends up PID-limited to
+# 0 A. Keep the shipped default inside the range the firmware advertises
+# (Src/DroneCAN/DroneCAN.c CURRENT_LIMIT_MAX_AMPS).
+DRONECAN_IN = 5
+if int(s["input_type"]) == DRONECAN_IN:
+    max_amps = int(defaults.get("dronecan_current_limit_max_amps", 200))
+    limit_amps = int(s["current_limit"]) * 2
+    if limit_amps > max_amps:
+        errors.append(
+            f"current_limit {s['current_limit']} ({limit_amps} A) exceeds the "
+            f"DroneCAN CURRENT_LIMIT maximum of {max_amps} A; load_settings() "
+            f"would reset it to 0 at boot"
+        )
 
 if any(b != 0xFF for b in ee[192:]):
     errors.append(f"eeprom page bytes 192..{EEPROM_PAGE - 1} are not 0xFF")
@@ -160,6 +188,8 @@ if errors:
     sys.exit(1)
 
 print(f"OK {factory_path} ({len(img)} bytes)")
+if not bl:
+    print("  WARNING: bootloader region is 0xFF - NOT SHIPPABLE, flash a BL first")
 print(
     f"  bl={len(bl)}B/{BL_REGION}B app={len(app)}B/{APP_REGION}B "
     f"eeprom@0x{EEPROM_OFFSET:04X} page={EEPROM_PAGE}"

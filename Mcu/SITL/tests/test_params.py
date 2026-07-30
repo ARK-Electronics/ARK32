@@ -66,6 +66,20 @@ def _set_param(node, target, name, value, attempts=5):
     return None
 
 
+def _set_param_raw(node, target, name, value, attempts=5):
+    '''set without asserting the echo matches — for out-of-range values that
+    the firmware is expected to clamp.'''
+    for _ in range(attempts):
+        req = dronecan.uavcan.protocol.param.GetSet.Request()
+        req.name = name
+        req.value = dronecan.uavcan.protocol.param.Value(integer_value=int(value))
+        rsp = _request_wait(node, target, req)
+        if rsp is not None and str(rsp.name):
+            return rsp
+        time.sleep(0.3)
+    return None
+
+
 def _require_mcast_node(sitl, sim, mcast_uri, our_id=110):
     if not wait_for_state(sim, timeout=5.0):
         pytest.skip('multicast/state unavailable\n' + sitl.log_tail())
@@ -113,6 +127,40 @@ def test_param_set_telem_rate(sitl_can_factory, state_stream, mcast_uri):
         rsp = _get_param(node, 10, 'TELEM_RATE')
         assert rsp is not None
         assert int(rsp.value.integer_value) == new_rate
+    finally:
+        node.close()
+
+
+def test_param_current_limit_max_roundtrips(sitl_can_factory, state_stream, mcast_uri):
+    '''CURRENT_LIMIT is presented in amps but stored as amps/2, and boot-time
+    load_settings() resets anything above the advertised max to the default.
+    A max that the two halves disagree about silently zeroes the limit while
+    use_current_limit stays armed, which PID-limits the ESC to 0 A. Pin the
+    round trip: the advertised max must be settable and must read back.'''
+    sitl = sitl_can_factory(
+        extra_args=['--node-id', '10'],
+        can_uri=mcast_uri,
+        wait_s=1.0)
+    sim = state_stream(sitl)
+    node, found = _require_mcast_node(sitl, sim, mcast_uri, our_id=113)
+    try:
+        rsp = _get_param(node, 10, 'CURRENT_LIMIT')
+        assert rsp is not None, 'GetSet failed for CURRENT_LIMIT\n' + sitl.log_tail()
+        max_amps = int(rsp.max_value.integer_value)
+        assert max_amps > 0, rsp.max_value
+        # amps/2 must be storable in the uint8 eeprom byte
+        assert max_amps % 2 == 0 and max_amps // 2 <= 255, max_amps
+
+        assert _set_param(node, 10, 'CURRENT_LIMIT', max_amps) is not None, (
+            'set CURRENT_LIMIT=%d failed\n%s' % (max_amps, sitl.log_tail()))
+        rsp = _get_param(node, 10, 'CURRENT_LIMIT')
+        assert rsp is not None
+        assert int(rsp.value.integer_value) == max_amps, rsp.value
+
+        # Above the max the firmware must clamp, not wrap the uint8 store.
+        rsp = _set_param_raw(node, 10, 'CURRENT_LIMIT', max_amps + 200)
+        assert rsp is not None, 'over-range set got no reply\n' + sitl.log_tail()
+        assert int(rsp.value.integer_value) == max_amps, rsp.value
     finally:
         node.close()
 

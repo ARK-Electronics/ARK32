@@ -2,6 +2,8 @@
   "_comment": "ARK G431 12S CAN production EEPROM defaults. Same ARK vehicle policy as ARK_4IN1_F051 (2%/ms ramp, 1020 kV, 15° fixed, PWM-by-RPM) with input_type=DRONECAN_IN. Dedicated per-motor shunt enables a real 300 A current limit (current_limit eeprom 150 → PID target 30000 centiamps). Encoded by scripts/build_factory_image.py into the EEprom_t page (Inc/eeprom.h).",
   "product": "ARK_G431_CAN",
   "eeprom_version": 3,
+  "dronecan_current_limit_max_amps": 300,
+  "dronecan_current_limit_max_amps_comment": "Must match CURRENT_LIMIT_MAX_AMPS in Src/DroneCAN/DroneCAN.c. DroneCAN load_settings() resets limits.current to 0 at boot if it exceeds this, which would leave use_current_limit armed with a 0 A target.",
   "flash_map": {
     "_comment": "STM32G431 CAN map (Mcu/g431/ldscript_CAN.ld): 16 KiB BL, app @ 0x08004000, 2 KiB EEPROM @ 0x0801F800, 128 KiB total flash",
     "flash_size": 131072,
