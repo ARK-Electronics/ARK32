@@ -9,10 +9,10 @@
 void PeriodElapsedCallback(void);
 void interruptRoutine(void);
 void startMotor(void);
-/* Clear the acceleration trend used for the commutation point (bemf_zc.c).
- * Call next to every zero_crosses = 0 so a desync/coast cannot leave a
- * stale EMA that would bias the next closed-loop run once ZC_TREND_MIN_ZC
- * re-arms. */
+/* Clear the acceleration trend and the duty-slew (turn-on-grid) history used
+ * for the commutation point (bemf_zc.c). Call next to every zero_crosses = 0
+ * so a desync/coast/reverse cannot leave stale state that would bias the next
+ * closed-loop run once ZC_TREND_MIN_ZC re-arms. */
 void bemfZcResetTrend(void);
 /* SITL / debug snapshots of the predictor consumer path. */
 int32_t bemfZcGetTrend(void);

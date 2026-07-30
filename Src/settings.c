@@ -122,8 +122,18 @@ void loadEEpromSettings(void)
 			eepromBuffer.limits.temperature = 255;
 		}
 
-		if (eepromBuffer.limits.current > 0 && eepromBuffer.limits.current <= 100) {
+		/*
+		 * Current limit enable. EEPROM limits.current is in 2 A steps of the
+		 * PID target (target_centiamps = limits.current * 2 * 100). Legacy
+		 * capped enable at 100 (200 A). Dedicated-shunt targets (e.g.
+		 * ARK_G431_CAN 12S) need up to 300 A, so accept the full uint8 range
+		 * 1..255. Value 0 (and the historical 102 "disabled" sentinel used
+		 * by factory 4IN1 images) leaves the limit off.
+		 */
+		if (eepromBuffer.limits.current > 0 && eepromBuffer.limits.current != 102) {
 			use_current_limit = 1;
+		} else {
+			use_current_limit = 0;
 		}
 
 		currentPid.Kp = eepromBuffer.current_P * 2;

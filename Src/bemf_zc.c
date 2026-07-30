@@ -96,6 +96,9 @@
 static int32_t zc_trend;
 /* Last predicted interval used for advance/waitTime (observability + SITL). */
 static uint32_t zc_predicted;
+/* Duty-slew history for turn-on-grid compensation (interruptRoutine).
+ * File-scope so bemfZcResetTrend() can clear it on reverse/stop. */
+static uint16_t zc_prev_duty;
 
 int32_t bemfZcGetTrend(void)
 {
@@ -234,7 +237,9 @@ RAM_FUNC void PeriodElapsedCallback()
 RAM_FUNC void interruptRoutine()
 {
 	HWCI_PERF_ZC_PHASE_CAPTURE(); // TIM1 phase at ISR entry, pre-confirm
-#ifdef MCU_F051
+#if defined(MCU_F051) || defined(MCU_G431)
+	// ARK F051 + G431: glitch-tolerant confirm + turn-on-grid compensation
+	// (ported from the ARK_4IN1_F051 bench work). Other MCUs keep stock.
 	// PWM phase (TIM1 CNT) at the edge, sampled before the confirm loop's
 	// wall-clock window advances it: the turn-on-pileup compensation below
 	// keys off where the comparator edge actually appeared, not where it was
@@ -259,9 +264,9 @@ RAM_FUNC void interruptRoutine()
 	// companion RAM-execution change the loop is faster still; filter_level
 	// is scaled (42/10/7 on F051) to keep the same wall-clock window as the
 	// stock ~56-cycle sampling cadence.
-#ifdef MCU_F051
-	// Glitch-tolerant variant: the ~16-cycle cadence lands on a brief
-	// comparator glitch ~3x more often than stock sampling, and a strict
+#if defined(MCU_F051) || defined(MCU_G431)
+	// Glitch-tolerant variant: a fast sampling cadence lands on a brief
+	// comparator glitch more often than stock, and a strict
 	// all-samples-must-agree confirm defers detection to the NEXT
 	// comparator edge - up to a PWM period late. Bench-measured on the
 	// ARK 4IN1: 2-3x higher commutation jitter at 15-20 kHz commutation
@@ -270,6 +275,7 @@ RAM_FUNC void interruptRoutine()
 	// through isolated glitches while a genuinely un-crossed level still
 	// rejects via the early-out; the full window length (and so the
 	// sustained-noise immunity of the filter_level retune) is unchanged.
+	// Same path on ARK_G431_CAN (MCU_G431) so the 12S CAN ESC gets the fix.
 	{
 		int bad = 0;
 		const int tolerance = filter_level >> 2;
@@ -294,7 +300,7 @@ RAM_FUNC void interruptRoutine()
 		}
 	}
 #endif
-#ifdef MCU_F051
+#if defined(MCU_F051) || defined(MCU_G431)
 	// Turn-on-pileup timestamp compensation. A zero-cross that physically
 	// occurs during the PWM off-window (freewheel) is invisible to the
 	// comparator and is only registered at the next turn-on, quantizing the
@@ -321,12 +327,23 @@ RAM_FUNC void interruptRoutine()
 	//    interval dwarfs the PWM period, there is no hunting to break, and the
 	//    correction only adds variance
 	//  - clamp to interval/8 as a backstop against any degenerate state
-	// Units: INTERVAL_TIMER (TIM2) is 2 MHz and TIM1 is 48 MHz, so one INTERVAL
-	// tick is 24 TIM1 ticks; half an off-window of N TIM1 ticks is N/48 INTERVAL
-	// ticks, computed as (N * 1365) >> 16 to keep a soft divide out of the ISR.
+	//
+	// Clocking (INTERVAL_TIMER TIM2 is 2 MHz on both ARK targets):
+	//  - F051: TIM1 @ 48 MHz => 24 TIM1 ticks / INTERVAL tick; half off-window
+	//    of N TIM1 ticks is N/48 INTERVAL ticks => (N * 1365) >> 16 (~1/48 Q16).
+	//    Hump band: ci < 2 * pwm_period => ci * 12 < arr.
+	//  - G431: TIM1 @ 160 MHz => 80 TIM1 ticks / INTERVAL tick; half off-window
+	//    is N/160 INTERVAL ticks => (N * 409) >> 16 (~1/160 Q16).
+	//    Hump band: ci * 40 < arr.
+#	ifdef MCU_G431
+	const uint32_t zc_hump_mult = 40u;
+	const uint32_t zc_half_off_q16 = 409u;
+#	else
+	const uint32_t zc_hump_mult = 12u;
+	const uint32_t zc_half_off_q16 = 1365u;
+#	endif
 	uint16_t zc_grid_comp = 0;
 	{
-		static uint16_t zc_prev_duty;
 		const uint16_t zc_arr = tim1_arr;
 		const uint16_t zc_duty = adjusted_duty_cycle;
 		const uint16_t zc_slew =
@@ -336,9 +353,9 @@ RAM_FUNC void interruptRoutine()
 		if (zero_crosses >= 100 && zc_duty < zc_arr					  /* off-window exists */
 		    && zc_pwm_cnt >= (uint16_t)(zc_arr >> 5)					  /* pile-up bins 1-3 */
 		    && zc_pwm_cnt < (uint16_t)(zc_arr >> 3) && zc_slew <= (uint16_t)(zc_arr >> 8) /* duty steady */
-		    && (zc_ci * 12u) < (uint32_t)zc_arr + 1u					  /* hump band only */
+		    && (zc_ci * zc_hump_mult) < (uint32_t)zc_arr + 1u				  /* hump band only */
 		) {
-			uint32_t comp = ((uint32_t)(zc_arr - zc_duty) * 1365u) >> 16;
+			uint32_t comp = ((uint32_t)(zc_arr - zc_duty) * zc_half_off_q16) >> 16;
 			const uint32_t cap = zc_ci >> 3;
 			if (comp > cap) {
 				comp = cap;
@@ -392,7 +409,7 @@ RAM_FUNC void interruptRoutine()
 		zc_miss_bucket--; // accepted crossing drains the miss-rate bucket
 	}
 	lastzctime = thiszctime;
-#ifdef MCU_F051
+#if defined(MCU_F051) || defined(MCU_G431)
 	thiszctime = (uint16_t)(INTERVAL_TIMER_COUNT - zc_grid_comp);
 #else
 	thiszctime = INTERVAL_TIMER_COUNT;
@@ -407,6 +424,7 @@ void bemfZcResetTrend(void)
 {
 	zc_trend = 0;
 	zc_predicted = 0;
+	zc_prev_duty = 0;
 }
 
 void startMotor()

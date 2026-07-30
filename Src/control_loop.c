@@ -458,6 +458,31 @@ void setInput()
 					duty_cycle_setpoint = use_current_limit_adjust;
 				}
 			}
+#	ifdef USE_CURRENT_SENSE
+			/*
+			 * Hard overcurrent clamp (dedicated shunt only). The current
+			 * PID runs at 1 kHz; if measured current already exceeds
+			 * 1.25x the programmed limit, cut duty immediately and pull
+			 * last_duty_cycle so the 20 kHz slew cannot re-ramp into the
+			 * spike. Target is limits.current * 200 centiamps (same unit
+			 * as the PID / actual_current).
+			 */
+			if (use_current_limit && eepromBuffer.limits.current > 0) {
+				const int32_t limit_ca = (int32_t)eepromBuffer.limits.current * 200;
+				if (actual_current > (limit_ca + (limit_ca >> 2))) {
+					const uint16_t hard_cap = (uint16_t)(minimum_duty_cycle + 100);
+					if (duty_cycle_setpoint > hard_cap) {
+						duty_cycle_setpoint = hard_cap;
+					}
+					if (last_duty_cycle > hard_cap) {
+						last_duty_cycle = hard_cap;
+					}
+					if (use_current_limit_adjust > (int16_t)hard_cap) {
+						use_current_limit_adjust = (int16_t)hard_cap;
+					}
+				}
+			}
+#	endif
 
 			if (stall_protection_adjust > 0 && input > 47) {
 				duty_cycle_setpoint = duty_cycle_setpoint + (uint16_t)(stall_protection_adjust / 10000);
