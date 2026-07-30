@@ -130,6 +130,7 @@ void setInput()
 						    escInSineStart()) {
 							forward = 1 - eepromBuffer.dir_reversed;
 							zero_crosses = 0;
+							bemfZcResetTrend();
 							old_routine = 1;
 							maskPhaseInterrupts();
 							brushed_direction_set = 0;
@@ -144,6 +145,7 @@ void setInput()
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
 							zero_crosses = 0;
+							bemfZcResetTrend();
 							old_routine = 1;
 							forward = eepromBuffer.dir_reversed;
 							maskPhaseInterrupts();
@@ -207,6 +209,7 @@ void setInput()
 						    escInSineStart()) {
 							forward = 1 - eepromBuffer.dir_reversed;
 							zero_crosses = 0;
+							bemfZcResetTrend();
 							old_routine = 1;
 							maskPhaseInterrupts();
 							brushed_direction_set = 0;
@@ -221,6 +224,7 @@ void setInput()
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
 							zero_crosses = 0;
+							bemfZcResetTrend();
 							old_routine = 1;
 							forward = eepromBuffer.dir_reversed;
 							maskPhaseInterrupts();
@@ -362,6 +366,7 @@ void setInput()
 				if (!escIsDriving()) {
 					old_routine = 1;
 					zero_crosses = 0;
+					bemfZcResetTrend();
 					if (eepromBuffer.brake_on_stop) {
 						fullBrake();
 					} else {
@@ -392,6 +397,7 @@ void setInput()
 				if (!escIsDriving()) {
 					old_routine = 1;
 					zero_crosses = 0;
+					bemfZcResetTrend();
 					bad_count = 0;
 					if (eepromBuffer.brake_on_stop > 0) {
 						if (!eepromBuffer.use_sine_start) {
@@ -452,6 +458,31 @@ void setInput()
 					duty_cycle_setpoint = use_current_limit_adjust;
 				}
 			}
+#ifdef USE_CURRENT_SENSE
+			/*
+			 * Hard overcurrent clamp (dedicated shunt only). The current
+			 * PID runs at 1 kHz; if measured current already exceeds
+			 * 1.25x the programmed limit, cut duty immediately and pull
+			 * last_duty_cycle so the 20 kHz slew cannot re-ramp into the
+			 * spike. Target is limits.current * 200 centiamps (same unit
+			 * as the PID / actual_current).
+			 */
+			if (use_current_limit && eepromBuffer.limits.current > 0) {
+				const int32_t limit_ca = (int32_t)eepromBuffer.limits.current * 200;
+				if (actual_current > (limit_ca + (limit_ca >> 2))) {
+					const uint16_t hard_cap = (uint16_t)(minimum_duty_cycle + 100);
+					if (duty_cycle_setpoint > hard_cap) {
+						duty_cycle_setpoint = hard_cap;
+					}
+					if (last_duty_cycle > hard_cap) {
+						last_duty_cycle = hard_cap;
+					}
+					if (use_current_limit_adjust > (int16_t)hard_cap) {
+						use_current_limit_adjust = (int16_t)hard_cap;
+					}
+				}
+			}
+#endif
 
 			if (stall_protection_adjust > 0 && input > 47) {
 				duty_cycle_setpoint = duty_cycle_setpoint + (uint16_t)(stall_protection_adjust / 10000);
