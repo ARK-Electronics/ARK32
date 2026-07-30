@@ -122,7 +122,13 @@ void loadEEpromSettings(void)
 			eepromBuffer.limits.temperature = 255;
 		}
 
-		if (eepromBuffer.limits.current > 0 && eepromBuffer.limits.current <= 100) {
+		/* Current limit enable.
+		 * Storage is 2 A per count; PID target = limits.current * 2 * 100
+		 * centiamps (see control_loop.c). Historical ceiling was 100
+		 * (200 A). Dedicated-shunt targets (ARK_G431_CAN) need up to
+		 * 150 (300 A). 0 and the factory "disabled" sentinel 102 leave
+		 * limiting off so shared-shunt builds (F051 4IN1) stay unchanged. */
+		if (eepromBuffer.limits.current > 0 && eepromBuffer.limits.current != 102) {
 			use_current_limit = 1;
 		}
 
