@@ -122,14 +122,18 @@ void loadEEpromSettings(void)
 			eepromBuffer.limits.temperature = 255;
 		}
 
-		/* Current limit enable.
-		 * Storage is 2 A per count; PID target = limits.current * 2 * 100
-		 * centiamps (see control_loop.c). Historical ceiling was 100
-		 * (200 A). Dedicated-shunt targets (ARK_G431_CAN) need up to
-		 * 150 (300 A). 0 and the factory "disabled" sentinel 102 leave
-		 * limiting off so shared-shunt builds (F051 4IN1) stay unchanged. */
+		/*
+		 * Current limit enable. EEPROM limits.current is in 2 A steps of the
+		 * PID target (target_centiamps = limits.current * 2 * 100). Legacy
+		 * capped enable at 100 (200 A). Dedicated-shunt targets (e.g.
+		 * ARK_G431_CAN 12S) need up to 300 A, so accept the full uint8 range
+		 * 1..255. Value 0 (and the historical 102 "disabled" sentinel used
+		 * by factory 4IN1 images) leaves the limit off.
+		 */
 		if (eepromBuffer.limits.current > 0 && eepromBuffer.limits.current != 102) {
 			use_current_limit = 1;
+		} else {
+			use_current_limit = 0;
 		}
 
 		currentPid.Kp = eepromBuffer.current_P * 2;
@@ -294,7 +298,7 @@ void __attribute__((noinline)) checkDeviceInfo(void)
 	volatile const struct devinfo *devinfo = (volatile const struct devinfo *)(uintptr_t)(0x1000u - 32u);
 #	if defined(__GNUC__) && (__GNUC__ >= 12)
 #		pragma GCC diagnostic push
-#		pragma GCC diagnostic ignored "-Warray-bounds"
+#		#pragma GCC diagnostic ignored "-Warray-bounds"
 #		pragma GCC diagnostic ignored "-Wstringop-overread"
 #	endif
 	const uint32_t magic1 = devinfo->magic1;

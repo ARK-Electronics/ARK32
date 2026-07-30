@@ -1,5 +1,5 @@
 {
-  "_comment": "ARK G431 12S CAN production EEPROM defaults. Same ARK vehicle policy as ARK_4IN1_F051 (2%/ms ramp, 1020 kV, 15° fixed, PWM-by-RPM) with input_type=DRONECAN_IN. Dedicated shunt enables current limit: storage is 2 A/count so 150 → 300 A. Encoded by scripts/build_factory_image.py into the EEprom_t page (Inc/eeprom.h).",
+  "_comment": "ARK G431 12S CAN production EEPROM defaults. Same ARK vehicle policy as ARK_4IN1_F051 (2%/ms ramp, 1020 kV, 15° fixed, PWM-by-RPM) with input_type=DRONECAN_IN. Dedicated per-motor shunt enables a real 300 A current limit (current_limit eeprom 150 → PID target 30000 centiamps). Encoded by scripts/build_factory_image.py into the EEprom_t page (Inc/eeprom.h).",
   "product": "ARK_G431_CAN",
   "eeprom_version": 3,
   "flash_map": {
@@ -49,7 +49,7 @@
     "driving_brake_strength": 10,
     "temperature_limit": 141,
     "current_limit": 150,
-    "current_limit_meaning": "2 A/count → 300 A (dedicated shunt); 102 = disabled",
+    "current_limit_meaning": "150 → 300 A (PID target = limits.current * 2 * 100 centiamps). Requires USE_CURRENT_SENSE / dedicated shunt.",
     "sine_mode_power": 6,
     "absolute_voltage_cutoff": 10,
     "current_P": 100,
