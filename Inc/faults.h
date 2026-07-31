@@ -116,6 +116,38 @@ uint8_t faultDesyncRestartHoldoffActive(void);
 extern volatile uint32_t fault_stall_trips;
 
 /*
+ * Ramp-attribution state (owned by faults.c; see faultDesyncEpisodeCharge
+ * and the witness sampler in faultDesyncEpisodeTick1kHz).
+ *
+ *  - fault_ramp_slew_witness_ms: nonzero while duty has recently been
+ *    RISING at >= 75% of the active ramp regime's limit. An episode charge
+ *    only halves the learned ramp while this is armed - a desync at steady
+ *    duty cannot have been caused by the ramp, so it must not be allowed
+ *    to store "ramp too fast" for the rest of the power cycle (a mowed
+ *    lawn's worth of prop obstruction was doing exactly that).
+ *  - fault_ramp_halves: learned ramp halvings applied this power cycle.
+ *  - fault_acq_resist_events: acquisition-rail episode charges this power
+ *    cycle ("start resisted": batches of early desyncs that never reached
+ *    acquisition). Surfaced over FlexDebug so the FC can see a resisted
+ *    ground spool BEFORE takeoff - the learned/soften state below is
+ *    otherwise invisible while every self-healing counter reads clean.
+ *  - fault_acq_soften: acquisition-scoped startup-ramp soften (right-shift
+ *    applied to max_ramp_startup_vcomp only, capped). Unlike the learned
+ *    halve this is FORGIVABLE - cleared by a genuine acquisition or pilot
+ *    zero throttle - because a start that cannot complete is at least as
+ *    likely mechanically resisted (grass, debris) as mis-tuned, and the
+ *    right response to the former ends when the obstruction does.
+ *
+ * Counters are monotonic per power cycle (not cleared on arm) so a
+ * pre-takeoff event history survives to be read. volatile: written in ISR
+ * context (1 kHz tick / main-loop charge), read from telemetry.
+ */
+extern volatile uint8_t fault_ramp_slew_witness_ms;
+extern volatile uint8_t fault_ramp_halves;
+extern volatile uint8_t fault_acq_resist_events;
+extern volatile uint8_t fault_acq_soften;
+
+/*
  * Total hard-error events this arm cycle, for uavcan.equipment.esc.Status
  * error_count (DSDL: "Resets when the motor restarts").
  *

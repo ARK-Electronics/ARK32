@@ -96,13 +96,19 @@ static struct PACKED {
 	uint16_t rxframe_error;
 	int32_t rx_ecode;
 	uint8_t auto_advance_level;
-	// version 2 fields
+	// version 2 fields (upstream am32 / PR#394)
 	uint16_t duty_cycle;	     // demanded duty, 0..2000
 	uint16_t duty_cycle_maximum; // low-rpm/temperature duty clamp
 	uint16_t adjusted_input;     // input after mode mapping, 0..2047
 	uint16_t adc_raw_current;    // current sense ADC counts
 	uint16_t adc_raw_volts;	     // voltage sense ADC counts
 	uint8_t flags;		     // bit0 armed, bit1 running, bit2 stepper_sine
+	/* ARK append-only after upstream v2: ramp-attribution telemetry
+	 * (faults.h). FC-side visibility of a resisted ground spool /
+	 * degraded slew BEFORE takeoff — every other counter self-heals. */
+	uint8_t acq_resist_events;
+	uint8_t ramp_halves;
+	uint8_t acq_soften;
 } debug1;
 
 static void can_printf(const char *fmt, ...);
@@ -1067,6 +1073,9 @@ static void send_FlexDebug(void)
 	debug1.version = 2;
 	debug1.commutation_interval = commutation_interval;
 	debug1.auto_advance_level = auto_advance_level;
+	debug1.acq_resist_events = fault_acq_resist_events;
+	debug1.ramp_halves = fault_ramp_halves;
+	debug1.acq_soften = fault_acq_soften;
 	debug1.num_commands = canstats.total_commands - last.total_commands;
 	debug1.num_input = canstats.num_input - last.num_input;
 	debug1.rx_errors = canstats.rx_errors;

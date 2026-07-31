@@ -395,6 +395,9 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 	}
 	uint16_t r;
 	r = (uint16_t)((max_ramp_startup * scale_q8) >> 8);
+	// Acquisition-scoped startup soften (faults.c): forgivable back-off
+	// while starts keep failing before acquisition, startup regime only.
+	r >>= fault_acq_soften;
 	max_ramp_startup_vcomp = r ? (uint8_t)r : 1;
 	r = (uint16_t)((max_ramp_low_rpm * scale_q8) >> 8);
 	max_ramp_low_rpm_vcomp = r ? (uint8_t)r : 1;
