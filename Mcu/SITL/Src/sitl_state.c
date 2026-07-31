@@ -72,7 +72,7 @@
       u16 gov_stuck_ms, u16 gov_release_ceil, u16 gov_unlatch_count (v5 PR 65)
       u8 max_ramp_startup, u8 max_ramp_low, u8 max_ramp_high,
       u8 ramp_divider, u8 max_ramp_startup_vcomp, u8 ramp_witness_ms,
-      u8 ramp_halves, u8 acq_resist, u8 acq_soften,
+      u8 ramp_halves, u8 acq_resist,
       u8 desync_episode_bucket                       (v6 ramp attribution)
       Fields are only ever APPENDED and the version is bumped; clients
       that unpack a shorter prefix keep working unchanged (they
@@ -608,7 +608,6 @@ void sitl_state_poll(void)
 			uint8_t ramp_witness_ms_v;
 			uint8_t ramp_halves_v;
 			uint8_t acq_resist_v;
-			uint8_t acq_soften_v;
 			uint8_t desync_episode_bucket_v;
 		} reply = {
 			.magic = 0x5356,
@@ -645,7 +644,6 @@ void sitl_state_poll(void)
 			.ramp_witness_ms_v = fault_ramp_slew_witness_ms,
 			.ramp_halves_v = fault_ramp_halves,
 			.acq_resist_v = fault_acq_resist_events,
-			.acq_soften_v = fault_acq_soften,
 			.desync_episode_bucket_v = desync_episode_bucket,
 		};
 		sendto(fd, &reply, sizeof(reply), 0, (struct sockaddr *)&src, sizeof(src));

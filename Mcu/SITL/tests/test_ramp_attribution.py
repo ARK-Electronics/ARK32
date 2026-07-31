@@ -14,8 +14,9 @@ Three engagement assertions, each a mutation check:
      halve - remove the halve (or break the witness arming) and it fails.
   2. A desync at steady duty (witness 0) does NOT halve but still charges
      the episode bucket - remove the witness gate and it fails.
-  3. Acquisition-rail charges take the forgivable startup soften, not the
-     permanent halve - visible as acq_resist/acq_soften in ZC_STATS v6.
+  3. Acquisition-rail charges never touch the ramp at all - they surface as
+     acq_resist in ZC_STATS v6 and escalate through bucket/holdoff/latch,
+     which is what test_acq_desync_rail.py already covers.
 
 CI is the authority for this file: the local SITL harness in the dev
 container does not spin the motor at all (test_dshot fails with rpm=0), so
@@ -46,9 +47,8 @@ STATS_FIELDS = ('zero_crosses', 'commutation_interval', 'dropped_edges',
                 'gov_stuck_ms', 'gov_release_ceil', 'gov_unlatch_count',
                 'max_ramp_startup', 'max_ramp_low', 'max_ramp_high',
                 'ramp_divider', 'max_ramp_startup_vcomp', 'ramp_witness_ms',
-                'ramp_halves', 'acq_resist', 'acq_soften',
-                'desync_episode_bucket')
-STATS_FMT = '<HBBIIIIBBBBBBBBHBBHiIHHHHHHHHBBBBBBBBBB'
+                'ramp_halves', 'acq_resist', 'desync_episode_bucket')
+STATS_FMT = '<HBBIIIIBBBBBBBBHBBHiIHHHHHHHHBBBBBBBBB'
 
 
 def _open_ctl(sitl):
@@ -104,7 +104,23 @@ def _spool_established(sitl, sim, ctl, tx, value=900, rpm_min=2000.0,
 
 
 def test_halve_engages_on_slew_attributed_desync(sitl_factory, state_stream):
-    '''Desync during a max-rate upward slew must halve the learned ramp.'''
+    '''An episode charged while duty slews at the ramp limit must halve.
+
+    Choreography (learned from the first CI run of this file): inject the
+    edge suppression from ESTABLISHED STEADY state - the exact recipe the
+    ceiling-hold test proves in CI - and then keep the throttle toggling
+    whenever the charge lands. The toggling is load-bearing for BOTH witness
+    conditions: each up-leg makes the limiter bind (applied duty rising at
+    the regime rate) AND moves the setpoint, which is what separates a
+    commanded ramp from the ESC's own post-desync re-slew.
+
+    Do not condition on desync_happened: a suppression bridged by
+    blind steps resolves through the blind-limit -> stall-rail handoff,
+    which by design does NOT increment desync_happened (see the error_count
+    comment in faults.h) but still charges the episode bucket, and a
+    STALL_RAIL charge with the witness armed is an equally legitimate halve.
+    The charge signal is desync_episode_bucket (v6).
+    '''
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     sim = state_stream(sitl)
     assert wait_for_state(sim), sitl.log_tail()
@@ -115,52 +131,61 @@ def test_halve_engages_on_slew_attributed_desync(sitl_factory, state_stream):
     ctl = _open_ctl(sitl)
     try:
         time.sleep(2.2)
-        pre = _spool_established(sitl, sim, ctl, tx, value=700)
+        pre = _spool_established(sitl, sim, ctl, tx, value=900)
         halves0 = int(pre['ramp_halves'])
         low0 = int(pre['max_ramp_low'])
 
-        ci_us = max(pre['commutation_interval'] // 2, 100)
         seen = None
+        saw_charge = False
+        witness_at_charge = -1
         saw_desync = False
-        saw_witness = 0
         for _ in range(6):
-            # Snap first so duty is slewing at the limit (witness arms
-            # within a few ms), then suppress comparator edges so the loop
-            # breaks while the witness is armed.
-            tx.value = 1900
-            time.sleep(0.02)
+            s0 = _zc_stats(ctl)
+            ci_us = max(s0['commutation_interval'] // 2, 100)
+            bucket0 = int(s0['desync_episode_bucket'])
+            d0 = int(s0['desync_happened'])
             _zc_fault(ctl, mode=1, duration_us=60 * ci_us)
-            probe_end = time.time() + 0.4
+            # Toggle every 50 ms: each up-leg re-arms the 100 ms witness,
+            # so it is armed at whatever moment the charge processes.
+            hi = True
+            last_toggle = 0.0
+            probe_end = time.time() + 0.5
             while time.time() < probe_end:
+                now = time.time()
+                if now - last_toggle > 0.05:
+                    tx.value = 1900 if hi else 1100
+                    hi = not hi
+                    last_toggle = now
                 s = _zc_stats(ctl)
-                saw_witness = max(saw_witness, s['ramp_witness_ms'])
-                if s['desync_happened'] > pre['desync_happened']:
+                if s['desync_happened'] > d0:
                     saw_desync = True
                 if s['ramp_halves'] > halves0:
                     seen = s
                     break
-                # tight poll: the charge is synchronous with the desync
+                if s['desync_episode_bucket'] > bucket0 and not saw_charge:
+                    saw_charge = True
+                    witness_at_charge = int(s['ramp_witness_ms'])
             if seen:
                 break
             # Recover for another attempt.
             _zc_fault(ctl, mode=0, duration_us=0)
-            tx.value = 700
+            tx.value = 900
             try:
-                pre = _spool_established(sitl, sim, ctl, tx, value=700,
-                                         budget=8.0)
+                _spool_established(sitl, sim, ctl, tx, value=900, budget=8.0)
             except AssertionError:
-                break
-            halves0 = min(halves0, int(pre['ramp_halves']))
+                continue
 
-        assert saw_desync, (
-            'fault injection never produced a desync; the halve was never '
-            'given a chance to engage\n' + sitl.log_tail())
+        assert saw_charge or saw_desync or seen is not None, (
+            'fault injection never charged the episode machinery at all - '
+            'the halve was never given a chance to engage\n'
+            + sitl.log_tail())
         assert seen is not None, (
-            'THE ATTRIBUTED HALVE NEVER ENGAGED: desyncs occurred during a '
-            'max-rate slew but ramp_halves stayed %d (peak witness_ms=%d). '
-            'Check the witness arming in faultDesyncEpisodeTick1kHz and the '
-            'witness-gated halve in faultDesyncEpisodeCharge.\n%s'
-            % (halves0, saw_witness, sitl.log_tail()))
+            'THE ATTRIBUTED HALVE NEVER ENGAGED: episodes charged during a '
+            'max-rate slew but ramp_halves stayed %d (saw_desync=%s, '
+            'witness at first observed charge=%d ms; witness 0 there means '
+            'test timing, nonzero means the witness-gated halve in '
+            'faultDesyncEpisodeCharge is broken).\n%s'
+            % (halves0, saw_desync, witness_at_charge, sitl.log_tail()))
         assert seen['max_ramp_low'] <= max(low0 // 2, 1), (
             'ramp_halves incremented but max_ramp_low did not fall: %r'
             % seen)
@@ -241,19 +266,20 @@ def test_no_halve_on_steady_duty_desync(sitl_factory, state_stream):
         ctl.close()
 
 
-def test_acq_rail_takes_soften_not_permanent_halve(sitl_factory,
-                                                   state_stream):
-    '''racer_5inch hard spool: acq charges must soften, not halve.
+def test_acq_rail_surfaces_resist_without_touching_ramp(sitl_factory,
+                                                        state_stream):
+    '''racer_5inch hard spool: acq charges must surface, not tune.
 
     The racer model desyncs ~20/s below acquisition (see
-    test_acq_desync_rail.py). Each 20-event batch must now surface as
-    acq_resist (the "start resisted" telemetry) and step the forgivable
-    startup soften. The batches themselves must never increment the
-    permanent halve counter - on this model the loop occasionally peaks
-    past zc 100 and can take a legitimate witness-armed JUMP halve, so the
-    permanent-halve assertion here is on attribution bookkeeping
-    (acq_resist vs ramp_halves motion in the same sample window), not a
-    blanket ramp_halves==0.
+    test_acq_desync_rail.py). Each 20-event batch must surface as
+    acq_resist - the "start resisted" telemetry that lets an FC refuse
+    takeoff - while the ramp is left alone.
+
+    Not asserted here: a blanket ramp_halves == 0. On this model the loop
+    occasionally peaks past zc 100 and can then take a legitimate
+    witness-armed JUMP halve, which is correct behaviour and would make
+    such an assertion flaky. What this pins is that the acquisition rail
+    itself reports, and that the escalation path (bucket) still charges.
     '''
     path = os.path.join(MODELS, 'racer_5inch.json')
     assert os.path.isfile(path), path
@@ -276,7 +302,7 @@ def test_acq_rail_takes_soften_not_permanent_halve(sitl_factory,
         tx.value = 700
 
         acq_seen = 0
-        soften_seen = 0
+        bucket_seen = 0
         end = None
         t0 = time.time()
         while time.time() - t0 < 15.0:
@@ -286,13 +312,12 @@ def test_acq_rail_takes_soften_not_permanent_halve(sitl_factory,
                 time.sleep(0.05)
                 continue
             acq_seen = max(acq_seen, s['acq_resist'])
-            soften_seen = max(soften_seen, s['acq_soften'])
+            bucket_seen = max(bucket_seen, s['desync_episode_bucket'])
             end = s
-            if acq_seen > 0 and soften_seen > 0:
+            if acq_seen > 0 and bucket_seen > 0:
                 break
-            # The rail may instead resolve the episode: acquisition (which
-            # forgives the soften) or the stuck latch. Both are terminal
-            # for this probe.
+            # The rail may instead resolve the episode: acquisition, or the
+            # stuck latch. Both are terminal for this probe.
             if s['zero_crosses'] > 500:
                 break
             time.sleep(0.05)
@@ -304,10 +329,11 @@ def test_acq_rail_takes_soften_not_permanent_halve(sitl_factory,
             'acquired: acq_resist=%d end=%r\n%s'
             % (acq_seen, end, sitl.log_tail()))
         if acq_seen > 0:
-            assert soften_seen > 0, (
-                'acq_resist charged (%d) but the startup soften never '
-                'stepped - ACQ_FAIL episodes must take fault_acq_soften: '
-                '%r\n%s' % (acq_seen, end, sitl.log_tail()))
+            assert bucket_seen > 0, (
+                'acq_resist charged (%d) but the episode bucket never moved '
+                '- ACQ_FAIL must still escalate through the always-on '
+                'protection path: %r\n%s'
+                % (acq_seen, end, sitl.log_tail()))
     finally:
         tx.value = 0
         time.sleep(0.5)

@@ -38,9 +38,10 @@ static uint8_t acq_fail_desyncs;
 volatile uint8_t fault_ramp_slew_witness_ms;
 volatile uint8_t fault_ramp_halves;
 volatile uint8_t fault_acq_resist_events;
-volatile uint8_t fault_acq_soften;
-/* Previous 1 kHz duty sample for the slew witness. */
+/* Previous 1 kHz samples for the slew witness (applied duty / setpoint). */
 static uint16_t ramp_witness_prev_duty;
+static uint16_t ramp_witness_prev_sp;
+static uint8_t ramp_witness_demand_ms;
 
 uint32_t faultErrorCount(void)
 {
@@ -134,14 +135,11 @@ void faultUpdateBemfTimeoutPolicy(void)
 		//
 		// Also clear the acquisition-rail partial batch: otherwise 19 early
 		// desyncs, a pilot cut, then one more early desync on the next blip
-		// would fire a JUMP-sized charge (and another startup-soften step)
-		// as if the cut never happened. Match episode-bucket pilot
-		// semantics - and forgive the soften itself: zero throttle is the
-		// pilot dealing with whatever was resisting the start.
+		// would fire a JUMP-sized charge as if the cut never happened.
+		// Match episode-bucket pilot semantics.
 		desync_episode_bucket = 0;
 		desync_restart_holdoff_ms = 0;
 		acq_fail_desyncs = 0;
-		fault_acq_soften = 0;
 	}
 	if (zero_crosses > 100 && adjusted_input < 200) {
 		bemf_timeout_happened = 0;
@@ -229,8 +227,13 @@ void faultUpdateBemfTimeoutPolicy(void)
  * 100 ms so a load-dragged desync at cruise reads witness 0.
  */
 #define RAMP_ATTR_WITNESS_MS 100
-/* Acquisition soften cap: 3 right-shifts of the startup vcomp (/8). */
-#define ACQ_SOFTEN_MAX 3
+/*
+ * Commanded-demand window (witness condition ii). Covers the lag between a
+ * setpoint step and the applied duty reaching the limiter's max rate, plus
+ * the charge latency, without being so long that a static-setpoint recovery
+ * re-slew falls inside a stale window.
+ */
+#define RAMP_ATTR_DEMAND_MS 60
 
 /*
  * Blind-GRIND rail. The episode rail above only sees DISCRETE failures
@@ -319,15 +322,24 @@ void faultDesyncEpisodeCharge(desync_episode_kind_t kind)
 	// telemetry and every other counter self-healing (crashed a vehicle
 	// taking off after a ground spool in long grass).
 	//
-	// ACQ_FAIL episodes never take the permanent halve: duty is
-	// near-always slewing during a start, so the witness cannot separate
-	// resisted from mis-tuned there. They take fault_acq_soften instead -
-	// a startup-regime-only back-off (consumed in
-	// runtimeTransientGovernorTick) that is forgiven by the first genuine
-	// acquisition (ACQ_FAIL_CLEAR_ZC) or pilot zero throttle - which
-	// preserves the "soften until it finally acquires" escalation for an
-	// honestly bad tune without neutering the session after the
-	// obstruction is gone.
+	// ACQ_FAIL episodes never touch the ramp at all: duty is near-always
+	// slewing during a start, so the witness cannot separate a resisted
+	// start from a mis-tuned one there, and a permanent halve is exactly
+	// the wrong default for the resisted case. They only charge the
+	// episode machinery (bucket -> holdoff -> latch), which already bounds
+	// an unstartable motor, plus the fault_acq_resist_events counter so
+	// the condition is at least visible.
+	//
+	// A startup-only ramp SOFTEN was tried here and removed as
+	// unimplementable in the coarse domain: on the production tune
+	// max_ramp_startup is 2, and the voltage compensation in
+	// runtimeTransientGovernorTick divides it toward the floor on any pack
+	// above 4S (GOV_RAMP_VREF_CV 1480; at 6S scale_q8 = 170, so
+	// (2 * 170) >> 8 = 1). There is no headroom left to shift away either
+	// before or after that scale - a real startup soften has to stretch
+	// ramp_divider instead, which means touching the 20 kHz limiter, and
+	// the bench note at control_loop.c:471 is explicit that adding code
+	// there disturbs F051 startup.
 	//
 	// Halve each attributed episode's regimes (floor 1); once every
 	// regime is at 1, force fine mode (ramp_divider = 9) so the floor is
@@ -337,9 +349,6 @@ void faultDesyncEpisodeCharge(desync_episode_kind_t kind)
 	// loadEEpromSettings and restores the configured values - retuning is
 	// the way back within a session.
 	if (kind == DESYNC_EPISODE_ACQ_FAIL) {
-		if (fault_acq_soften < ACQ_SOFTEN_MAX) {
-			fault_acq_soften++;
-		}
 		if (fault_acq_resist_events < 255) {
 			fault_acq_resist_events++;
 		}
@@ -382,30 +391,53 @@ void faultNoteEarlyDesync(void)
 void faultDesyncEpisodeTick1kHz(void)
 {
 #ifndef BRUSHED_MODE
-	/* Ramp-attribution slew witness: is duty rising at (near) the active
-	 * regime's limit? Sampled here at 1 kHz so the comparison is directly
-	 * per-ms: a regime step of vcomp per (ramp_divider + 1) 20 kHz ticks
-	 * is vcomp * 20 / (ramp_divider + 1) duty units per ms. Arm at >= 75%
-	 * of that (rise * 4 >= budget * 3, integer-robust at the fine floor
-	 * where the budget is 2/ms). Rising only: power cuts and throttle
-	 * chops slew down hard, and the lesson under attribution is about
-	 * upward authority. Regime pick mirrors the 20 kHz slew limiter in
-	 * tenKhzRoutine. A rise below the limit means the ramp was not the
-	 * binding constraint, so a desync then teaches nothing about it. */
+	/* Ramp-attribution slew witness. Two conditions, both required.
+	 *
+	 * (i) The slew limiter was actually BINDING: sample last_duty_cycle -
+	 * the APPLIED, post-clamp duty (control_loop.c:709) - not duty_cycle,
+	 * which at this call site (before the clamp at :651) still holds the
+	 * raw setpoint copy from :527 and so measures demand, not delivery.
+	 * Sampled at 1 kHz the comparison is directly per-ms: a regime step of
+	 * vcomp per (ramp_divider + 1) 20 kHz ticks is vcomp * 20 /
+	 * (ramp_divider + 1) duty units per ms. Arm at >= 75% (rise * 4 >=
+	 * budget * 3, integer-robust at the fine floor where the budget is
+	 * 2/ms). Rising only - power cuts and throttle chops slew down hard,
+	 * and the attribution question is about upward authority. Regime pick
+	 * mirrors the limiter.
+	 *
+	 * (ii) The demand was RISING: the setpoint moved up within the last
+	 * RAMP_ATTR_DEMAND_MS. Condition (i) alone cannot separate a commanded
+	 * ramp from the ESC's own recovery - a desync forces
+	 * last_duty_cycle = min_startup_duty / 2 (runtime_loop.c) and the climb
+	 * back is a max-rate rise against a STATIC setpoint. Without (ii) a
+	 * repeating obstruction cycle (desync -> restart -> re-slew -> desync
+	 * in the grass) would attribute every episode after the first to the
+	 * ramp, which is the exact misattribution this gate exists to stop.
+	 * The blind-step power cut does move the setpoint (setInput caps it,
+	 * then releases), so a grind still re-arms both conditions as intended.
+	 */
 	{
-		const uint16_t d = duty_cycle;
-		const int32_t rise = (int32_t)d - (int32_t)ramp_witness_prev_duty;
-		ramp_witness_prev_duty = d;
-		uint8_t step;
-		if (zero_crosses < 150 || last_duty_cycle < 150) {
-			step = max_ramp_startup_vcomp;
-		} else if (average_interval > 500) {
-			step = max_ramp_low_rpm_vcomp;
-		} else {
-			step = max_ramp_high_rpm_vcomp;
+		const uint16_t applied = last_duty_cycle;
+		const uint16_t sp = duty_cycle_setpoint;
+		const int32_t rise = (int32_t)applied - (int32_t)ramp_witness_prev_duty;
+		ramp_witness_prev_duty = applied;
+		if (sp > ramp_witness_prev_sp) {
+			ramp_witness_demand_ms = RAMP_ATTR_DEMAND_MS;
+		} else if (ramp_witness_demand_ms) {
+			ramp_witness_demand_ms--;
 		}
-		const uint16_t budget = (uint16_t)(((uint16_t)step * 20u) / (uint8_t)(ramp_divider + 1u));
-		if (running && rise > 0 && (uint32_t)rise * 4u >= (uint32_t)budget * 3u) {
+		ramp_witness_prev_sp = sp;
+		/* Per-ms budget from the step the limiter ITSELF last selected
+		 * (control_loop.c:658-666). Reading max_duty_cycle_change rather
+		 * than re-deriving the regime here cannot drift out of sync with
+		 * the limiter, and costs no flash on a target with ~4 B of
+		 * headroom (see size-check-ark). ramp_divider is only ever 0
+		 * (coarse) or 9 (fine 0.1%/ms), so the per-ms rate is the step
+		 * either 20x or 2x - pick the two cases instead of a runtime
+		 * divide on M0. */
+		const uint16_t budget =
+			ramp_divider ? (uint16_t)((uint16_t)max_duty_cycle_change * 2u) : (uint16_t)((uint16_t)max_duty_cycle_change * 20u);
+		if (running && ramp_witness_demand_ms && rise > 0 && (uint32_t)rise * 4u >= (uint32_t)budget * 3u) {
 			fault_ramp_slew_witness_ms = RAMP_ATTR_WITNESS_MS;
 		} else if (fault_ramp_slew_witness_ms) {
 			fault_ramp_slew_witness_ms--;
@@ -413,14 +445,9 @@ void faultDesyncEpisodeTick1kHz(void)
 	}
 
 	/* A loop that got solidly established did acquire, whatever roughness
-	 * it passed through on the way - forgive the whole batch, and the
-	 * acquisition-scoped startup soften with it: whatever was resisting
-	 * the start (or however mis-tuned it looked) is no longer preventing
-	 * acquisition, and startup slew must not stay degraded into the
-	 * flight that follows. */
+	 * it passed through on the way - forgive the whole batch. */
 	if (zero_crosses > ACQ_FAIL_CLEAR_ZC) {
 		acq_fail_desyncs = 0;
-		fault_acq_soften = 0;
 	}
 	if (desync_restart_holdoff_ms > 0) {
 		desync_restart_holdoff_ms--;

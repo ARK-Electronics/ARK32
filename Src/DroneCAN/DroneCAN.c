@@ -108,7 +108,6 @@ static struct PACKED {
 	 * degraded slew BEFORE takeoff — every other counter self-heals. */
 	uint8_t acq_resist_events;
 	uint8_t ramp_halves;
-	uint8_t acq_soften;
 } debug1;
 
 static void can_printf(const char *fmt, ...);
@@ -1075,7 +1074,6 @@ static void send_FlexDebug(void)
 	debug1.auto_advance_level = auto_advance_level;
 	debug1.acq_resist_events = fault_acq_resist_events;
 	debug1.ramp_halves = fault_ramp_halves;
-	debug1.acq_soften = fault_acq_soften;
 	debug1.num_commands = canstats.total_commands - last.total_commands;
 	debug1.num_input = canstats.num_input - last.num_input;
 	debug1.rx_errors = canstats.rx_errors;
