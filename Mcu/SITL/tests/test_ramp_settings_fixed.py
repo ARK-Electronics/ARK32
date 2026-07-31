@@ -1,22 +1,34 @@
-'''Learned ramp back-off attribution (slew witness + acq soften).
+'''The configured ramp is FIXED: no desync episode may ever mutate it.
 
-faultDesyncEpisodeCharge halves the session ramp on desync episodes. That
-lesson ("the configured ramp outran this motor/prop") is only true when the
-ramp was actually in play. Before the attribution gate, EVERY episode
-halved it - including a mechanical obstruction (grass) dragging a healthy
-run down at steady duty - and on the production tune (all regimes at 2) a
-single halve is the fine-rate floor: a silent 20x slew-authority cut for
-the rest of the power cycle, with every other counter self-healing.
+faultDesyncEpisodeCharge used to halve every regime's duty step on a desync
+episode, permanently for the power cycle ("learned ramp back-off"). That is
+per-ESC state the flight controller cannot see, and the mixer assumes
+symmetric actuators - one ESC that has learned a slower ramp than its
+siblings is an asymmetric vehicle with no way to report it. It crashed a
+vehicle taking off after a ground spool in long grass, where obstruction at
+STEADY duty dragged an established run down and the episode was misread as
+"ramp too fast". On the production tune (max_ramp 20 -> all regimes 2) one
+halve already IS the fine-rate floor: a silent 20x slew-authority cut.
 
-Three engagement assertions, each a mutation check:
+An attribution gate (halve only when the slew limiter was demonstrably
+binding on rising demand) was tried and rejected: it narrows the
+misattribution but keeps the architecture. The mechanism is gone instead.
 
-  1. A desync while duty is slewing at the ramp limit (witness armed) DOES
-     halve - remove the halve (or break the witness arming) and it fails.
-  2. A desync at steady duty (witness 0) does NOT halve but still charges
-     the episode bucket - remove the witness gate and it fails.
-  3. Acquisition-rail charges never touch the ramp at all - they surface as
-     acq_resist in ZC_STATS v6 and escalate through bucket/holdoff/latch,
-     which is what test_acq_desync_rail.py already covers.
+Three assertions, each a mutation check against restoring it:
+
+  1. An episode charged while duty slews AT the ramp limit - the exact
+     condition the old gate treated as proof of "ramp too fast", and the
+     one case a re-introduced halve would definitely fire on - leaves the
+     configured ramp untouched.
+  2. The grass case: an episode at steady duty leaves the ramp untouched
+     AND still charges the episode bucket. The always-on protection must
+     not be weakened by removing the learned part.
+  3. Acquisition-rail charges surface as acq_resist (the "start resisted"
+     telemetry an FC can refuse takeoff on) and never touch the ramp.
+
+Ramp fields asserted: the three configured regime steps plus ramp_divider.
+Deliberately NOT max_ramp_startup_vcomp - that is the voltage-compensated
+working copy and moves legitimately with pack sag.
 
 CI is the authority for this file: the local SITL harness in the dev
 container does not spin the motor at all (test_dshot fails with rpm=0), so
@@ -46,9 +58,24 @@ STATS_FIELDS = ('zero_crosses', 'commutation_interval', 'dropped_edges',
                 'gov_conf', 'gov_slope_q10', 'gov_duty_ceiling',
                 'gov_stuck_ms', 'gov_release_ceil', 'gov_unlatch_count',
                 'max_ramp_startup', 'max_ramp_low', 'max_ramp_high',
-                'ramp_divider', 'max_ramp_startup_vcomp', 'ramp_witness_ms',
-                'ramp_halves', 'acq_resist', 'desync_episode_bucket')
-STATS_FMT = '<HBBIIIIBBBBBBBBHBBHiIHHHHHHHHBBBBBBBBB'
+                'ramp_divider', 'max_ramp_startup_vcomp', 'acq_resist',
+                'desync_episode_bucket')
+STATS_FMT = '<HBBIIIIBBBBBBBBHBBHiIHHHHHHHHBBBBBBB'
+
+RAMP_FIELDS = ('max_ramp_startup', 'max_ramp_low', 'max_ramp_high',
+               'ramp_divider')
+
+
+def _ramp(s):
+    return tuple(int(s[f]) for f in RAMP_FIELDS)
+
+
+def _assert_ramp_fixed(base, s, what, sitl):
+    assert _ramp(s) == base, (
+        'THE CONFIGURED RAMP WAS MUTATED (%s): %s went %r -> %r. Nothing in '
+        'the episode machinery may change tuning - the learned halve was '
+        'removed deliberately (see faultDesyncEpisodeCharge).\n%r\n%s'
+        % (what, RAMP_FIELDS, base, _ramp(s), s, sitl.log_tail()))
 
 
 def _open_ctl(sitl):
@@ -70,7 +97,7 @@ def _zc_stats(ctl, retries=8):
             vals = struct.unpack_from(STATS_FMT, pkt)
             if vals[0] == ZC_STATS_MAGIC:
                 assert vals[1] >= 6, (
-                    'ZC_STATS version %d lacks ramp-attribution fields'
+                    'ZC_STATS version %d lacks the ramp/episode fields'
                     % vals[1])
                 return dict(zip(STATS_FIELDS, vals[3:]))
     raise AssertionError('no v6 ZC_STATS reply from SITL state port')
@@ -103,23 +130,23 @@ def _spool_established(sitl, sim, ctl, tx, value=900, rpm_min=2000.0,
         '(last rpm=%.0f)\n%s' % (rpm_min, rpm, sitl.log_tail()))
 
 
-def test_halve_engages_on_slew_attributed_desync(sitl_factory, state_stream):
-    '''An episode charged while duty slews at the ramp limit must halve.
+def test_slew_desync_leaves_ramp_fixed(sitl_factory, state_stream):
+    '''An episode charged during a max-rate slew must not retune the ESC.
+
+    This is the case a re-introduced learned halve would certainly fire on,
+    so it is the load-bearing mutation check: restore the halve in
+    faultDesyncEpisodeCharge and this test fails.
 
     Choreography (learned from the first CI run of this file): inject the
-    edge suppression from ESTABLISHED STEADY state - the exact recipe the
-    ceiling-hold test proves in CI - and then keep the throttle toggling
-    whenever the charge lands. The toggling is load-bearing for BOTH witness
-    conditions: each up-leg makes the limiter bind (applied duty rising at
-    the regime rate) AND moves the setpoint, which is what separates a
-    commanded ramp from the ESC's own post-desync re-slew.
+    edge suppression from ESTABLISHED STEADY state - the recipe the
+    ceiling-hold test proves in CI - then keep the throttle toggling so the
+    limiter is genuinely binding on a rising setpoint when the charge lands.
 
-    Do not condition on desync_happened: a suppression bridged by
-    blind steps resolves through the blind-limit -> stall-rail handoff,
-    which by design does NOT increment desync_happened (see the error_count
-    comment in faults.h) but still charges the episode bucket, and a
-    STALL_RAIL charge with the witness armed is an equally legitimate halve.
-    The charge signal is desync_episode_bucket (v6).
+    Do not condition on desync_happened: a suppression bridged by blind
+    steps resolves through the blind-limit -> stall-rail handoff, which by
+    design does NOT increment desync_happened (see the error_count comment
+    in faults.h) but still charges the episode bucket. The charge signal is
+    desync_episode_bucket (v6).
     '''
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     sim = state_stream(sitl)
@@ -132,12 +159,9 @@ def test_halve_engages_on_slew_attributed_desync(sitl_factory, state_stream):
     try:
         time.sleep(2.2)
         pre = _spool_established(sitl, sim, ctl, tx, value=900)
-        halves0 = int(pre['ramp_halves'])
-        low0 = int(pre['max_ramp_low'])
+        base = _ramp(pre)
 
-        seen = None
         saw_charge = False
-        witness_at_charge = -1
         saw_desync = False
         for _ in range(6):
             s0 = _zc_stats(ctl)
@@ -145,8 +169,8 @@ def test_halve_engages_on_slew_attributed_desync(sitl_factory, state_stream):
             bucket0 = int(s0['desync_episode_bucket'])
             d0 = int(s0['desync_happened'])
             _zc_fault(ctl, mode=1, duration_us=60 * ci_us)
-            # Toggle every 50 ms: each up-leg re-arms the 100 ms witness,
-            # so it is armed at whatever moment the charge processes.
+            # Toggle every 50 ms so the limiter is binding on a RISING
+            # setpoint across the whole window the charge can land in.
             hi = True
             last_toggle = 0.0
             probe_end = time.time() + 0.5
@@ -157,15 +181,12 @@ def test_halve_engages_on_slew_attributed_desync(sitl_factory, state_stream):
                     hi = not hi
                     last_toggle = now
                 s = _zc_stats(ctl)
+                _assert_ramp_fixed(base, s, 'during max-rate slew', sitl)
                 if s['desync_happened'] > d0:
                     saw_desync = True
-                if s['ramp_halves'] > halves0:
-                    seen = s
-                    break
-                if s['desync_episode_bucket'] > bucket0 and not saw_charge:
+                if s['desync_episode_bucket'] > bucket0:
                     saw_charge = True
-                    witness_at_charge = int(s['ramp_witness_ms'])
-            if seen:
+            if saw_charge or saw_desync:
                 break
             # Recover for another attempt.
             _zc_fault(ctl, mode=0, duration_us=0)
@@ -175,20 +196,19 @@ def test_halve_engages_on_slew_attributed_desync(sitl_factory, state_stream):
             except AssertionError:
                 continue
 
-        assert saw_charge or saw_desync or seen is not None, (
-            'fault injection never charged the episode machinery at all - '
-            'the halve was never given a chance to engage\n'
-            + sitl.log_tail())
-        assert seen is not None, (
-            'THE ATTRIBUTED HALVE NEVER ENGAGED: episodes charged during a '
-            'max-rate slew but ramp_halves stayed %d (saw_desync=%s, '
-            'witness at first observed charge=%d ms; witness 0 there means '
-            'test timing, nonzero means the witness-gated halve in '
-            'faultDesyncEpisodeCharge is broken).\n%s'
-            % (halves0, saw_desync, witness_at_charge, sitl.log_tail()))
-        assert seen['max_ramp_low'] <= max(low0 // 2, 1), (
-            'ramp_halves incremented but max_ramp_low did not fall: %r'
-            % seen)
+        assert saw_charge or saw_desync, (
+            'fault injection never charged the episode machinery at all, so '
+            'this test proved nothing - a re-introduced halve would not have '
+            'been given a chance to fire\n' + sitl.log_tail())
+        # Re-check after the dust settles: the post-episode re-spool is
+        # itself a max-rate slew against a static setpoint.
+        tx.value = 900
+        _zc_fault(ctl, mode=0, duration_us=0)
+        settle_end = time.time() + 1.5
+        while time.time() < settle_end:
+            _assert_ramp_fixed(base, _zc_stats(ctl), 'post-episode re-spool',
+                               sitl)
+            time.sleep(0.05)
     finally:
         tx.value = 0
         time.sleep(0.3)
@@ -197,12 +217,13 @@ def test_halve_engages_on_slew_attributed_desync(sitl_factory, state_stream):
         ctl.close()
 
 
-def test_no_halve_on_steady_duty_desync(sitl_factory, state_stream):
-    '''A desync at steady duty (witness 0) charges the bucket, not the ramp.
+def test_steady_duty_desync_leaves_ramp_fixed(sitl_factory, state_stream):
+    '''The grass case: obstruction at steady duty must not retune the ESC.
 
-    This is the grass case: an external load dragging an established run
-    down teaches nothing about the configured ramp. Remove the witness gate
-    in faultDesyncEpisodeCharge and this fails.
+    An external load dragging an established run down teaches nothing about
+    the configured ramp. This is the episode that crashed the vehicle. The
+    bucket must still charge - removing the learned halve must not weaken
+    the always-on escalation path.
     '''
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     sim = state_stream(sitl)
@@ -214,21 +235,14 @@ def test_no_halve_on_steady_duty_desync(sitl_factory, state_stream):
     ctl = _open_ctl(sitl)
     try:
         time.sleep(2.2)
-        pre = _spool_established(sitl, sim, ctl, tx, value=900)
+        _spool_established(sitl, sim, ctl, tx, value=900)
 
-        # Hold steady until the witness has fully decayed: duty is no
-        # longer rising, so a desync now is NOT ramp-attributable.
-        deadline = time.time() + 6.0
-        steady = None
-        while time.time() < deadline:
-            s = _zc_stats(ctl)
-            if s['running'] and s['ramp_witness_ms'] == 0:
-                steady = s
-                break
-            time.sleep(0.05)
-        assert steady is not None, (
-            'witness never decayed at steady throttle: %r\n%s'
-            % (_zc_stats(ctl), sitl.log_tail()))
+        # Hold the stick still so duty is genuinely steady when the fault
+        # lands: no rising demand, nothing the ramp could be blamed for.
+        time.sleep(0.6)
+        steady = _zc_stats(ctl)
+        assert steady['running'], (steady, sitl.log_tail())
+        base = _ramp(steady)
 
         ci_us = max(steady['commutation_interval'] // 2, 100)
         _zc_fault(ctl, mode=1, duration_us=60 * ci_us)
@@ -236,28 +250,17 @@ def test_no_halve_on_steady_duty_desync(sitl_factory, state_stream):
         probe_end = time.time() + 3.0
         while time.time() < probe_end:
             s = _zc_stats(ctl)
+            _assert_ramp_fixed(base, s, 'steady-duty desync', sitl)
             if s['desync_happened'] > steady['desync_happened']:
                 first = s
                 break
         assert first is not None, (
             'fault injection never produced a desync\n' + sitl.log_tail())
-
-        # The charge is synchronous with desync_happened++, so the first
-        # sample that shows the desync already reflects any halve. Sample
-        # THIS one - later samples can see re-spool slews legitimately
-        # arming the witness for subsequent events.
-        assert first['ramp_halves'] == steady['ramp_halves'], (
-            'STEADY-DUTY DESYNC HALVED THE RAMP: witness was 0 at inject '
-            'but ramp_halves went %d->%d. The attribution gate in '
-            'faultDesyncEpisodeCharge is not holding.\n%r\n%s'
-            % (steady['ramp_halves'], first['ramp_halves'], first,
-               sitl.log_tail()))
-        assert first['max_ramp_low'] == steady['max_ramp_low'], first
         assert first['desync_episode_bucket'] > steady[
             'desync_episode_bucket'], (
             'episode bucket did not charge on an established-run desync - '
-            'the gate must only skip the RAMP lesson, never the episode '
-            'accounting: %r' % first)
+            'removing the learned halve must not weaken the always-on '
+            'escalation path: %r' % first)
     finally:
         tx.value = 0
         time.sleep(0.3)
@@ -275,11 +278,10 @@ def test_acq_rail_surfaces_resist_without_touching_ramp(sitl_factory,
     acq_resist - the "start resisted" telemetry that lets an FC refuse
     takeoff - while the ramp is left alone.
 
-    Not asserted here: a blanket ramp_halves == 0. On this model the loop
-    occasionally peaks past zc 100 and can then take a legitimate
-    witness-armed JUMP halve, which is correct behaviour and would make
-    such an assertion flaky. What this pins is that the acquisition rail
-    itself reports, and that the escalation path (bucket) still charges.
+    The ramp assertion here is unconditional, which it could not be while
+    the attribution gate existed: this model occasionally peaks past zc 100
+    and would then take a legitimate witness-armed halve. With no learned
+    state at all, "the ramp never moves" holds for every path.
     '''
     path = os.path.join(MODELS, 'racer_5inch.json')
     assert os.path.isfile(path), path
@@ -299,6 +301,7 @@ def test_acq_rail_surfaces_resist_without_touching_ramp(sitl_factory,
     ctl = _open_ctl(sitl)
     try:
         time.sleep(2.2)
+        base = _ramp(_zc_stats(ctl))
         tx.value = 700
 
         acq_seen = 0
@@ -311,6 +314,7 @@ def test_acq_rail_surfaces_resist_without_touching_ramp(sitl_factory,
             except AssertionError:
                 time.sleep(0.05)
                 continue
+            _assert_ramp_fixed(base, s, 'acquisition rail', sitl)
             acq_seen = max(acq_seen, s['acq_resist'])
             bucket_seen = max(bucket_seen, s['desync_episode_bucket'])
             end = s

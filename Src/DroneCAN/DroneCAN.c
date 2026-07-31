@@ -103,11 +103,10 @@ static struct PACKED {
 	uint16_t adc_raw_current;    // current sense ADC counts
 	uint16_t adc_raw_volts;	     // voltage sense ADC counts
 	uint8_t flags;		     // bit0 armed, bit1 running, bit2 stepper_sine
-	/* ARK append-only after upstream v2: ramp-attribution telemetry
-	 * (faults.h). FC-side visibility of a resisted ground spool /
-	 * degraded slew BEFORE takeoff — every other counter self-heals. */
+	/* ARK append-only after upstream v2: "start resisted" count
+	 * (faults.h). FC-side visibility of a resisted ground spool BEFORE
+	 * takeoff — every other counter in the episode machinery self-heals. */
 	uint8_t acq_resist_events;
-	uint8_t ramp_halves;
 } debug1;
 
 static void can_printf(const char *fmt, ...);
@@ -1073,7 +1072,6 @@ static void send_FlexDebug(void)
 	debug1.commutation_interval = commutation_interval;
 	debug1.auto_advance_level = auto_advance_level;
 	debug1.acq_resist_events = fault_acq_resist_events;
-	debug1.ramp_halves = fault_ramp_halves;
 	debug1.num_commands = canstats.total_commands - last.total_commands;
 	debug1.num_input = canstats.num_input - last.num_input;
 	debug1.rx_errors = canstats.rx_errors;

@@ -34,14 +34,8 @@ volatile uint32_t fault_stall_trips = 0;
 /* Acquisition-rail early-desync count (see faultNoteEarlyDesync). */
 static uint8_t acq_fail_desyncs;
 
-/* Ramp-attribution state (see the declarations in faults.h). */
-volatile uint8_t fault_ramp_slew_witness_ms;
-volatile uint8_t fault_ramp_halves;
+/* "Start resisted" counter (see the declaration in faults.h). */
 volatile uint8_t fault_acq_resist_events;
-/* Previous 1 kHz samples for the slew witness (applied duty / setpoint). */
-static uint16_t ramp_witness_prev_duty;
-static uint16_t ramp_witness_prev_sp;
-static uint8_t ramp_witness_demand_ms;
 
 uint32_t faultErrorCount(void)
 {
@@ -195,17 +189,14 @@ void faultUpdateBemfTimeoutPolicy(void)
  * 2-4 rough desyncs acquiring, so 20 is unambiguously abnormal, while at the
  * ~20/s rate a genuinely stuck loop produces it still charges once a second.
  * The point of this rail is to make the failure VISIBLE to the escalation
- * machinery (bucket, holdoff, latch), not to be the fastest path to the latch.
- * The side effect that most helps a struggling start finally clear
- * acquisition is the startup soften inside faultDesyncEpisodeCharge
- * (fault_acq_soften) - acquisition-scoped and forgiven on success, because a
- * start that cannot complete is at least as likely mechanically resisted
- * (grass, debris) as mis-tuned, and duty is near-always slewing during a
- * start so the slew witness cannot separate the two there. The PERMANENT
- * learned halve is reserved for established-run episodes with the witness
- * armed; established-run rails (blind/grind/stall) still need
- * zero_crosses > 100 and only help once the loop actually gets past that
- * gate.
+ * machinery (bucket, holdoff, latch) and to the fault_acq_resist_events
+ * counter, not to be the fastest path to the latch. It deliberately does
+ * nothing to the ramp: a start that cannot complete is at least as likely
+ * mechanically resisted (grass, debris) as mis-tuned, and duty is
+ * near-always slewing during a start, so there is no signal here that
+ * separates the two - see faultDesyncEpisodeCharge. Established-run rails
+ * (blind/grind/stall) still need zero_crosses > 100 and only engage once
+ * the loop actually gets past that gate.
  *
  * This constant is a starting point from SITL and wants bench calibration
  * against real hard starts before release.
@@ -216,24 +207,6 @@ void faultUpdateBemfTimeoutPolicy(void)
  */
 #define ACQ_FAIL_DESYNC_LIMIT 20
 #define ACQ_FAIL_CLEAR_ZC 500
-
-/*
- * Ramp-attribution slew witness window. From the start of a too-fast
- * transient to its episode charge: ~15 ms electrically silent, the ZC
- * window closes within ~3 commutations, then jump detection and the charge
- * run on the next main pass - tens of ms end to end. 100 ms covers that
- * with margin, and a snap-induced grind keeps re-arming it (every power-cut
- * release re-slews at the limit), while at steady duty it decays to 0 in
- * 100 ms so a load-dragged desync at cruise reads witness 0.
- */
-#define RAMP_ATTR_WITNESS_MS 100
-/*
- * Commanded-demand window (witness condition ii). Covers the lag between a
- * setpoint step and the applied duty reaching the limiter's max rate, plus
- * the charge latency, without being so long that a static-setpoint recovery
- * re-slew falls inside a stale window.
- */
-#define RAMP_ATTR_DEMAND_MS 60
 
 /*
  * Blind-GRIND rail. The episode rail above only sees DISCRETE failures
@@ -304,63 +277,42 @@ void faultDesyncEpisodeCharge(desync_episode_kind_t kind)
 	desync_episode_drain_ms = 0;
 	desync_episode_apply_backoff();
 
-	// Learned ramp back-off, gated on ATTRIBUTION. A desync only teaches
-	// "the configured ramp outran what this motor/prop can follow" when
-	// the ramp was actually in play: the slew witness (sampled in
-	// faultDesyncEpisodeTick1kHz) says duty was rising at >= 75% of the
-	// active regime's limit within the last RAMP_ATTR_WITNESS_MS. A
-	// too-fast transient always charges inside that window (no reactive
-	// signal can catch it earlier - the first ~15 ms are electrically
-	// silent, see the slew-limiter note in control_loop.c), and a
-	// snap-induced grind keeps re-arming it through the power-cut
-	// release/re-slew cycle. What the witness excludes is the
-	// load-not-tune episode: a mechanical obstruction (grass, line wrap)
-	// dragging an established run down at STEADY duty. Halving there
-	// stores a wrong lesson for the whole power cycle - and on the
-	// production tune (max_ramp 20 -> all regimes 2) a single halve IS
-	// the fine-rate floor, a silent 20x slew-authority cut with no
-	// telemetry and every other counter self-healing (crashed a vehicle
-	// taking off after a ground spool in long grass).
+	// NO PERSISTENT LEARNED STATE. An episode charges the escalation
+	// machinery above (bucket -> holdoff -> latch) and nothing else: the
+	// configured ramp, and every other tuning parameter, is left exactly as
+	// loadEEpromSettings set it. This is a deliberate reversal of the
+	// learned ramp back-off that used to live here (each episode halved
+	// every regime's duty step for the rest of the power cycle, flooring at
+	// fine 0.1%/ms).
 	//
-	// ACQ_FAIL episodes never touch the ramp at all: duty is near-always
-	// slewing during a start, so the witness cannot separate a resisted
-	// start from a mis-tuned one there, and a permanent halve is exactly
-	// the wrong default for the resisted case. They only charge the
-	// episode machinery (bucket -> holdoff -> latch), which already bounds
-	// an unstartable motor, plus the fault_acq_resist_events counter so
-	// the condition is at least visible.
+	// Why it is gone, on a multirotor specifically: the halve is per-ESC
+	// state that the flight controller cannot see. The mixer assumes
+	// symmetric actuators, so one ESC that has learned a slower ramp than
+	// its three siblings is an asymmetric vehicle with no way to report it.
+	// That is not a hypothetical - it crashed a vehicle taking off after a
+	// ground spool in long grass, where prop obstruction at STEADY duty
+	// dragged an established run down and the episode was misread as "ramp
+	// too fast". On the production tune (max_ramp 20 -> all regimes 2) one
+	// halve already IS the fine-rate floor: a silent 20x slew-authority cut.
 	//
-	// A startup-only ramp SOFTEN was tried here and removed as
-	// unimplementable in the coarse domain: on the production tune
-	// max_ramp_startup is 2, and the voltage compensation in
-	// runtimeTransientGovernorTick divides it toward the floor on any pack
-	// above 4S (GOV_RAMP_VREF_CV 1480; at 6S scale_q8 = 170, so
-	// (2 * 170) >> 8 = 1). There is no headroom left to shift away either
-	// before or after that scale - a real startup soften has to stretch
-	// ramp_divider instead, which means touching the 20 kHz limiter, and
-	// the bench note at control_loop.c:471 is explicit that adding code
-	// there disturbs F051 startup.
+	// An attribution gate was tried first (a slew witness requiring the
+	// limiter to be binding on rising demand before halving) and it does
+	// narrow the misattribution, but it keeps the architecture: still
+	// per-ESC learned divergence, still invisible to the FC, still one
+	// wrong attribution away from the same asymmetry. The line drawn
+	// instead is TRANSIENT SELF-RECOVERING RESPONSES ONLY - the bucket,
+	// holdoff and latch all converge back to configured settings, so an
+	// ESC either behaves as configured or stops. A too-fast ramp is a
+	// tuning defect and gets fixed by retuning, not by each ESC quietly
+	// deciding its own limit mid-flight. This also keeps us on upstream
+	// AM32's fixed-ramp semantics rather than diverging further.
 	//
-	// Halve each attributed episode's regimes (floor 1); once every
-	// regime is at 1, force fine mode (ramp_divider = 9) so the floor is
-	// the bench-proven 0.1%/ms rate. Deliberately not cleared at zero
-	// throttle (unlike the bucket): re-arming the fast ramp would
-	// re-desync on the next transient. A settings write reruns
-	// loadEEpromSettings and restores the configured values - retuning is
-	// the way back within a session.
+	// ACQ_FAIL episodes additionally bump fault_acq_resist_events, which is
+	// a counter only - see faults.h for why that one has to survive the
+	// self-healing.
 	if (kind == DESYNC_EPISODE_ACQ_FAIL) {
 		if (fault_acq_resist_events < 255) {
 			fault_acq_resist_events++;
-		}
-	} else if (fault_ramp_slew_witness_ms) {
-		max_ramp_startup = max_ramp_startup > 1 ? (uint8_t)(max_ramp_startup / 2) : 1;
-		max_ramp_low_rpm = max_ramp_low_rpm > 1 ? (uint8_t)(max_ramp_low_rpm / 2) : 1;
-		max_ramp_high_rpm = max_ramp_high_rpm > 1 ? (uint8_t)(max_ramp_high_rpm / 2) : 1;
-		if (max_ramp_startup <= 1 && max_ramp_low_rpm <= 1 && max_ramp_high_rpm <= 1) {
-			ramp_divider = 9;
-		}
-		if (fault_ramp_halves < 255) {
-			fault_ramp_halves++;
 		}
 	}
 
@@ -391,59 +343,6 @@ void faultNoteEarlyDesync(void)
 void faultDesyncEpisodeTick1kHz(void)
 {
 #ifndef BRUSHED_MODE
-	/* Ramp-attribution slew witness. Two conditions, both required.
-	 *
-	 * (i) The slew limiter was actually BINDING: sample last_duty_cycle -
-	 * the APPLIED, post-clamp duty (control_loop.c:709) - not duty_cycle,
-	 * which at this call site (before the clamp at :651) still holds the
-	 * raw setpoint copy from :527 and so measures demand, not delivery.
-	 * Sampled at 1 kHz the comparison is directly per-ms: a regime step of
-	 * vcomp per (ramp_divider + 1) 20 kHz ticks is vcomp * 20 /
-	 * (ramp_divider + 1) duty units per ms. Arm at >= 75% (rise * 4 >=
-	 * budget * 3, integer-robust at the fine floor where the budget is
-	 * 2/ms). Rising only - power cuts and throttle chops slew down hard,
-	 * and the attribution question is about upward authority. Regime pick
-	 * mirrors the limiter.
-	 *
-	 * (ii) The demand was RISING: the setpoint moved up within the last
-	 * RAMP_ATTR_DEMAND_MS. Condition (i) alone cannot separate a commanded
-	 * ramp from the ESC's own recovery - a desync forces
-	 * last_duty_cycle = min_startup_duty / 2 (runtime_loop.c) and the climb
-	 * back is a max-rate rise against a STATIC setpoint. Without (ii) a
-	 * repeating obstruction cycle (desync -> restart -> re-slew -> desync
-	 * in the grass) would attribute every episode after the first to the
-	 * ramp, which is the exact misattribution this gate exists to stop.
-	 * The blind-step power cut does move the setpoint (setInput caps it,
-	 * then releases), so a grind still re-arms both conditions as intended.
-	 */
-	{
-		const uint16_t applied = last_duty_cycle;
-		const uint16_t sp = duty_cycle_setpoint;
-		const int32_t rise = (int32_t)applied - (int32_t)ramp_witness_prev_duty;
-		ramp_witness_prev_duty = applied;
-		if (sp > ramp_witness_prev_sp) {
-			ramp_witness_demand_ms = RAMP_ATTR_DEMAND_MS;
-		} else if (ramp_witness_demand_ms) {
-			ramp_witness_demand_ms--;
-		}
-		ramp_witness_prev_sp = sp;
-		/* Per-ms budget from the step the limiter ITSELF last selected
-		 * (control_loop.c:658-666). Reading max_duty_cycle_change rather
-		 * than re-deriving the regime here cannot drift out of sync with
-		 * the limiter, and costs no flash on a target with ~4 B of
-		 * headroom (see size-check-ark). ramp_divider is only ever 0
-		 * (coarse) or 9 (fine 0.1%/ms), so the per-ms rate is the step
-		 * either 20x or 2x - pick the two cases instead of a runtime
-		 * divide on M0. */
-		const uint16_t budget =
-			ramp_divider ? (uint16_t)((uint16_t)max_duty_cycle_change * 2u) : (uint16_t)((uint16_t)max_duty_cycle_change * 20u);
-		if (running && ramp_witness_demand_ms && rise > 0 && (uint32_t)rise * 4u >= (uint32_t)budget * 3u) {
-			fault_ramp_slew_witness_ms = RAMP_ATTR_WITNESS_MS;
-		} else if (fault_ramp_slew_witness_ms) {
-			fault_ramp_slew_witness_ms--;
-		}
-	}
-
 	/* A loop that got solidly established did acquire, whatever roughness
 	 * it passed through on the way - forgive the whole batch. */
 	if (zero_crosses > ACQ_FAIL_CLEAR_ZC) {

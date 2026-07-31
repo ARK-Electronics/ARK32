@@ -116,31 +116,25 @@ uint8_t faultDesyncRestartHoldoffActive(void);
 extern volatile uint32_t fault_stall_trips;
 
 /*
- * Ramp-attribution state (owned by faults.c; see faultDesyncEpisodeCharge
- * and the witness sampler in faultDesyncEpisodeTick1kHz).
+ * Acquisition-rail episode charges this power cycle ("start resisted":
+ * batches of early desyncs that never reached acquisition - see
+ * faultNoteEarlyDesync).
  *
- *  - fault_ramp_slew_witness_ms: nonzero while the slew limiter has
- *    recently been BINDING on a RISING demand (applied duty climbing at
- *    >= 75% of the active regime's limit while the setpoint is moving up).
- *    An episode charge only halves the learned ramp while this is armed -
- *    a desync at steady duty cannot have been caused by the ramp, so it
- *    must not be allowed to store "ramp too fast" for the rest of the
- *    power cycle (a mowed lawn's worth of prop obstruction was doing
- *    exactly that).
- *  - fault_ramp_halves: learned ramp halvings applied this power cycle.
- *  - fault_acq_resist_events: acquisition-rail episode charges this power
- *    cycle ("start resisted": batches of early desyncs that never reached
- *    acquisition). These deliberately do NOT touch the ramp; the counter
- *    exists so a resisted ground spool is visible BEFORE takeoff, since
- *    every other counter in the episode machinery self-heals within
- *    seconds of the obstruction clearing.
+ * This counter exists because it is the ONLY part of the episode machinery
+ * that does not self-heal: bucket, holdoff and latch all converge back to
+ * the configured settings within seconds of an obstruction clearing, so a
+ * ground spool that was fought by grass or debris leaves no trace by the
+ * time the vehicle is armed. A monotonic count lets an FC (or a human
+ * reading telemetry) refuse takeoff on a start that was resisted.
  *
- * Counters are monotonic per power cycle (not cleared on arm) so a
- * pre-takeoff event history survives to be read. volatile: written in ISR
- * context (1 kHz tick / main-loop charge), read from telemetry.
+ * Deliberately does NOT influence control: no episode kind changes the
+ * configured ramp or any other tuning parameter. See the note in
+ * faultDesyncEpisodeCharge for why persistent learned state was removed.
+ *
+ * Monotonic per power cycle (not cleared on arm) so the pre-takeoff history
+ * survives to be read. volatile: written in ISR context (main-loop charge),
+ * read from telemetry.
  */
-extern volatile uint8_t fault_ramp_slew_witness_ms;
-extern volatile uint8_t fault_ramp_halves;
 extern volatile uint8_t fault_acq_resist_events;
 
 /*
