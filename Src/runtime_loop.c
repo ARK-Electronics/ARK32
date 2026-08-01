@@ -187,7 +187,7 @@ void runtimeProcessDesyncCheck(void)
 			// faultHandleBemfIntervalStall): interval jumps while the
 			// loop is still acquiring (zc 11..100) are normal startup
 			// roughness on light motors - charging them stacks holdoff
-			// and ramp back-off onto honest starts until the bucket
+			// onto honest starts until the bucket
 			// latches a motor that never got going (SITL racer model
 			// reproduces this under plain dshot spool). Legacy desync
 			// handling below still restarts; only the episode
@@ -472,8 +472,11 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 	// The headroom bounds slip MAGNITUDE only; it cannot prevent a
 	// too-fast ramp from breaking lock (bench rpmhead-snap-40: even 1 V
 	// applied in 4 ms desyncs where 24 A reached gradually stays locked -
-	// the cliff is dV/dt, not level; that is the learned ramp back-off's
-	// job, faultDesyncEpisodeCharge).
+	// the cliff is dV/dt, not level). Nothing in flight bounds dV/dt
+	// except the configured slew limit itself: the learned back-off that
+	// used to claim that job was removed (faultDesyncEpisodeCharge), and
+	// reactive pacing cannot work at all (control_loop.c). dV/dt is set
+	// by the ramp regime schedule and has to be right by configuration.
 	uint16_t ceiling = 2000;
 	if (gov_conf >= GOV_CONF_ARM) {
 		uint32_t c = ((erpm * gov_slope_q10) >> 10) + ((scale_q8 * 405u) >> 8);
