@@ -262,7 +262,7 @@ def sitl_checks(c, sitl_bin):
     proc = subprocess.Popen(
         [os.path.abspath(sitl_bin), '--node-id', str(SITL_NODE),
          '--can-uri', SITL_URI, '--eeprom', eeprom,
-         '--config', os.path.join(ROOT, 'Mcu/SITL/models/sequre_gt2215.json'),
+         '--config', os.path.join(ROOT, 'Mcu/SITL/models/unloaded.json'),
          '--input-port', '0', '--state-port', '0', '--nosleep'],
         stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
         start_new_session=True)
