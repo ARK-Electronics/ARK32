@@ -23,8 +23,10 @@ Three assertions, each a mutation check against restoring it:
   2. The grass case: an episode at steady duty leaves the ramp untouched
      AND still charges the episode bucket. The always-on protection must
      not be weakened by removing the learned part.
-  3. Acquisition-rail charges surface as acq_resist (the "start resisted"
-     telemetry an FC can refuse takeoff on) and never touch the ramp.
+  3. A racer hard spool charges the episode machinery - via the
+     acquisition rail (acq_resist, the "start resisted" telemetry an FC can
+     refuse takeoff on) or via established-run episodes, whichever this
+     model produces - and never touches the ramp.
 
 Ramp fields asserted: the three configured regime steps plus ramp_divider.
 Deliberately NOT max_ramp_startup_vcomp - that is the voltage-compensated
@@ -278,17 +280,25 @@ def test_steady_duty_desync_leaves_ramp_fixed(sitl_factory, state_stream):
 
 def test_acq_rail_surfaces_resist_without_touching_ramp(sitl_factory,
                                                         state_stream):
-    '''racer_5inch hard spool: acq charges must surface, not tune.
+    '''racer_5inch hard spool: episodes must surface, not tune.
 
-    The racer model desyncs ~20/s below acquisition (see
-    test_acq_desync_rail.py). Each 20-event batch must surface as
-    acq_resist - the "start resisted" telemetry that lets an FC refuse
-    takeoff - while the ramp is left alone.
+    The ramp assertion runs on every sample and is unconditional, which it
+    could not be while the attribution gate existed: this model peaks past
+    zc 100 and would then take a legitimate witness-armed halve. With no
+    learned state at all, "the ramp never moves" holds for every path.
 
-    The ramp assertion here is unconditional, which it could not be while
-    the attribution gate existed: this model occasionally peaks past zc 100
-    and would then take a legitimate witness-armed halve. With no learned
-    state at all, "the ramp never moves" holds for every path.
+    Which rail the model exercises is NOT pinned here, deliberately. Before
+    #77 it desynced ~20/s below acquisition and charged acq_resist; with the
+    upstream SITL update it now acquires and then desyncs at established
+    rpm, so the 20-event acq batch never completes and the bucket charges
+    through the JUMP/STALL path instead. Both are legitimate, and
+    test_acq_desync_rail.py is what pins the acquisition rail's mechanism.
+    What must hold either way is that SOMETHING charged - otherwise a
+    re-introduced halve was never given a chance to fire and this test
+    proves nothing - and that the ramp did not move.
+
+    Bucket motion is the load-bearing case: those established-run episodes
+    are exactly the ones the old halve fired on.
     '''
     path = os.path.join(MODELS, 'racer_5inch.json')
     assert os.path.isfile(path), path
@@ -313,6 +323,10 @@ def test_acq_rail_surfaces_resist_without_touching_ramp(sitl_factory,
 
         acq_seen = 0
         bucket_seen = 0
+        # Peak, NOT the last sample: zero_crosses is reset to 0 by every
+        # desync (runtime_loop.c), so a spool that acquires and is then
+        # dragged back down reads 0 at the end even though it plainly ran.
+        zc_seen = 0
         end = None
         t0 = time.time()
         while time.time() - t0 < 15.0:
@@ -321,24 +335,22 @@ def test_acq_rail_surfaces_resist_without_touching_ramp(sitl_factory,
             except AssertionError:
                 time.sleep(0.05)
                 continue
-            _assert_ramp_fixed(base, s, 'acquisition rail', sitl)
+            _assert_ramp_fixed(base, s, 'hard spool', sitl)
             acq_seen = max(acq_seen, s['acq_resist'])
             bucket_seen = max(bucket_seen, s['desync_episode_bucket'])
+            zc_seen = max(zc_seen, s['zero_crosses'])
             end = s
             if acq_seen > 0 and bucket_seen > 0:
-                break
-            # The rail may instead resolve the episode: acquisition, or the
-            # stuck latch. Both are terminal for this probe.
-            if s['zero_crosses'] > 500:
                 break
             time.sleep(0.05)
 
         assert end is not None, sitl.log_tail()
-        acquired = end['zero_crosses'] > 500
-        assert acq_seen > 0 or acquired, (
-            'racer hard spool never charged the acquisition rail and never '
-            'acquired: acq_resist=%d end=%r\n%s'
-            % (acq_seen, end, sitl.log_tail()))
+        assert acq_seen > 0 or bucket_seen > 0 or zc_seen > 500, (
+            'racer hard spool did nothing observable in 15 s - no episode '
+            'charge, no acquisition - so a re-introduced halve would not '
+            'have been given a chance to fire: acq_resist=%d bucket=%d '
+            'zc_peak=%d end=%r\n%s'
+            % (acq_seen, bucket_seen, zc_seen, end, sitl.log_tail()))
         if acq_seen > 0:
             assert bucket_seen > 0, (
                 'acq_resist charged (%d) but the episode bucket never moved '
