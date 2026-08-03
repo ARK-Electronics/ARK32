@@ -189,7 +189,7 @@ def test_slew_desync_leaves_ramp_fixed(sitl_factory, state_stream):
                     saw_desync = True
                 if s['desync_episode_bucket'] > bucket0:
                     saw_charge = True
-            if saw_charge or saw_desync:
+            if saw_charge:
                 break
             # Recover for another attempt.
             _zc_fault(ctl, mode=0, duration_us=0)
@@ -199,10 +199,14 @@ def test_slew_desync_leaves_ramp_fixed(sitl_factory, state_stream):
             except AssertionError:
                 continue
 
-        assert saw_charge or saw_desync, (
-            'fault injection never charged the episode machinery at all, so '
-            'this test proved nothing - a re-introduced halve would not have '
-            'been given a chance to fire\n' + sitl.log_tail())
+        # Require a real episode charge (bucket motion), not just
+        # desync_happened: the learned halve lived only inside
+        # faultDesyncEpisodeCharge, and some desync paths never call it.
+        assert saw_charge, (
+            'fault injection never charged desync_episode_bucket, so this '
+            'test proved nothing - a re-introduced halve would not have '
+            'been given a chance to fire (saw_desync=%s)\n%s'
+            % (saw_desync, sitl.log_tail()))
         # Re-check after the dust settles: the post-episode re-spool is
         # itself a max-rate slew against a static setpoint.
         tx.value = 900
