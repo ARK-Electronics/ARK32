@@ -9,6 +9,7 @@
 
 #include "peripherals.h"
 
+#include "gate_driver.h"
 #include "serial_telemetry.h"
 #include "targets.h"
 
@@ -590,24 +591,6 @@ void resetInputCaptureTimer()
 	IC_TIMER_REGISTER->CNT = 0;
 }
 
-#ifdef USE_DRV_ENABLE
-static void initDrvEnable(void)
-{
-	LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
-	/* DRV_ENABLE is on GPIOC on ARK_G431_CAN; RGB also uses C but may
-	 * not be built — always clock the port here. */
-	LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOC);
-	GPIO_InitStruct.Pin = DRV_ENABLE_PIN;
-	GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-	GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
-	GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-	GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-	LL_GPIO_Init(DRV_ENABLE_PORT, &GPIO_InitStruct);
-	/* DRV8350H ENABLE high: gate drive active (nSLEEP-equivalent). */
-	DRV_ENABLE_PORT->BSRR = DRV_ENABLE_PIN;
-}
-#endif
-
 #ifdef USE_DRV_NFAULT
 static void initDrvNfault(void)
 {
@@ -653,9 +636,6 @@ void enableCorePeripherals()
 	BLUE_PORT->BSRR = BLUE_PIN;
 #endif
 
-#ifdef USE_DRV_ENABLE
-	initDrvEnable();
-#endif
 #ifdef USE_DRV_NFAULT
 	initDrvNfault();
 #endif
@@ -668,6 +648,10 @@ void enableCorePeripherals()
 #endif
 	LL_TIM_EnableCounter(UTILITY_TIMER);
 	LL_TIM_GenerateEvent_UPDATE(UTILITY_TIMER);
+#if GATE_DRIVER_SLEEP_SUPPORT
+	/* After UTILITY_TIMER: wake timing uses get_timer_us16(). */
+	gateDriverInit();
+#endif
 	//
 	LL_TIM_EnableCounter(INTERVAL_TIMER);
 	LL_TIM_GenerateEvent_UPDATE(INTERVAL_TIMER);
