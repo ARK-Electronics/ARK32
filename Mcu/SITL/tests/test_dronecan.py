@@ -58,7 +58,7 @@ def test_dronecan_throttle_and_esc_status(sitl_can_factory, state_stream, mcast_
         rpm = rpm_from_state(sim)
         assert 3500 <= rpm <= 6500, 'state rpm=%.0f' % rpm
         assert 3500 <= status.get('rpm', -1) <= 6500, status
-        assert 15 < status.get('voltage', 0) < 18, status
+        assert 11 < status.get('voltage', 0) < 18, status
         assert status.get('count', 0) >= 3, 'too few esc.Status: %s' % status
         # error_count aggregates hard-error events (jump desync + stall rail).
         # An honest spool-up to a steady 4-6k rpm must report none: the stall

@@ -16,9 +16,17 @@ endif
 
 HAL_FOLDER_$(MCU) := $(HAL_FOLDER)/$(MCU)
 
-# native build using the host compiler
+# native build using the host compiler. SITL_CROSS=win cross-builds a
+# dependency-free native Windows exe with the MinGW-w64 toolchain, for
+# distributing the SITL GUI to users without a POSIX environment
+ifeq ($(SITL_CROSS),win)
+SITL_CC := x86_64-w64-mingw32-gcc
+SITL_OBJCOPY := x86_64-w64-mingw32-objcopy
+SITL_IS_WIN := 1
+else
 SITL_CC := gcc
 SITL_OBJCOPY := objcopy
+endif
 NATIVE_$(MCU) := 1
 
 MCU_$(MCU) :=
@@ -46,14 +54,45 @@ SITL_GCC_FLAGS := -Wno-unknown-warning-option
 else
 SITL_GCC_FLAGS := -fsingle-precision-constant -Wno-stringop-truncation
 endif
+# optional sanitizers for the native build. SITL_SANITIZE=address builds
+# with AddressSanitizer (also enable LeakSanitizer at run time); other
+# useful values: undefined, thread, address,undefined. Off by default so
+# normal and CI builds are unaffected:
+#   make AM32_SITL_CAN SITL_SANITIZE=address
+# ASan needs the frame pointer and its own optimisation level; a
+# sanitized build is not bit-comparable with a normal one and runs
+# slower, so it is a debugging build, not a release
+ifneq ($(SITL_SANITIZE),)
+SITL_SAN_FLAGS := -fsanitize=$(SITL_SANITIZE) -fno-omit-frame-pointer -O1
+else
+SITL_SAN_FLAGS :=
+endif
+
+# gcov/gcovr code coverage of the firmware under the SITL:
+#   make AM32_SITL_CAN SITL_COVERAGE=1
+# emits .gcno next to the objects and .gcda at run time; kept at the
+# normal -O2 so the instrumented SITL still runs at full speed (gcov
+# maps optimised code fine). A coverage build is not a normal build
+ifeq ($(SITL_COVERAGE),1)
+SITL_COV_FLAGS := --coverage -fno-omit-frame-pointer -DSITL_COVERAGE
+else
+SITL_COV_FLAGS :=
+endif
+
 # -funsigned-char matches the ARM targets, where char is unsigned
 CFLAGS_COMMON_$(MCU) := $(SITL_GCC_FLAGS) -funsigned-char -iquote $(MAIN_INC_DIR) -g3 -O2 \
 	-Wall -Wundef -Wextra -Werror -Wno-unused-parameter \
-	-fno-strict-aliasing -pthread
+	-fno-strict-aliasing -pthread $(SITL_SAN_FLAGS) $(SITL_COV_FLAGS)
 
-LDFLAGS_COMMON_$(MCU) := -pthread
+LDFLAGS_COMMON_$(MCU) := -pthread $(SITL_SAN_FLAGS) $(SITL_COV_FLAGS)
 
 LDLIBS_$(MCU) := -lm
+ifdef SITL_IS_WIN
+# Winsock for the UDP/mcast sockets; static libgcc/libstdc++/winpthread so
+# the exe carries no runtime DLL dependencies for end users
+LDLIBS_$(MCU) += -lws2_32
+LDFLAGS_COMMON_$(MCU) += -static -static-libgcc
+endif
 
 SRC_$(MCU) := $(foreach dir,$(SRC_DIR_$(MCU)),$(wildcard $(dir)/*.c))
 

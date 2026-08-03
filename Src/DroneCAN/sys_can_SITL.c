@@ -16,19 +16,19 @@
 #	include "sys_can.h"
 #	include "sitl.h"
 #	include "sitl_config.h"
+#	include "sitl_net.h"
 
-#	include <arpa/inet.h>
 #	include <errno.h>
-#	include <fcntl.h>
-#	include <net/if.h>
-#	include <netinet/in.h>
-#	include <poll.h>
-#	include <sys/ioctl.h>
 #	include <stdio.h>
 #	include <stdlib.h>
 #	include <string.h>
-#	include <sys/socket.h>
 #	include <unistd.h>
+#	ifndef _WIN32
+#		include <fcntl.h>
+#		include <net/if.h>
+#		include <poll.h>
+#		include <sys/ioctl.h>
+#	endif
 
 #	define MCAST_ADDRESS_BASE "239.65.82.0"
 #	define MCAST_PORT 57732
@@ -46,6 +46,10 @@ struct __attribute__((packed)) mcast_pkt {
 
 static int fd_in = -1;
 static int fd_out = -1;
+// our TX socket source address: multicast loopback delivers our own
+// datagrams back to fd_in, but a real CAN controller never receives
+// its own frames, so RX must drop them
+static struct sockaddr_in tx_addr;
 
 static uint16_t crc16_CCITT(const uint8_t *buf, uint32_t len)
 {
@@ -93,6 +97,7 @@ void sys_can_init(void)
 	if (ifname != NULL) {
 		if (inet_pton(AF_INET, ifname, &if_addr) == 1) {
 			have_if = true;
+#	ifndef _WIN32
 		} else {
 			struct ifreq ifr;
 			memset(&ifr, 0, sizeof(ifr));
@@ -105,6 +110,12 @@ void sys_can_init(void)
 			if_addr = ((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr;
 			close(s);
 			have_if = true;
+#	else
+		} else {
+			// no interface-by-name lookup on Windows; pass an IPv4 address
+			fprintf(stderr, "SITL: interface must be an IPv4 address: %s\n", ifname);
+			exit(1);
+#	endif
 		}
 	}
 	char address[32];
@@ -124,11 +135,11 @@ void sys_can_init(void)
 		exit(1);
 	}
 	const int one = 1;
-	setsockopt(fd_in, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+	setsockopt(fd_in, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof(one));
 #	ifdef SO_REUSEPORT
 	// macOS needs SO_REUSEPORT for multiple SITL instances / pydronecan
 	// on the same mcast group+port
-	setsockopt(fd_in, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
+	setsockopt(fd_in, SOL_SOCKET, SO_REUSEPORT, (const char *)&one, sizeof(one));
 #	endif
 	struct sockaddr_in bind_addr = addr;
 #	if defined(__CYGWIN__) || defined(_WIN32) || defined(__APPLE__)
@@ -146,7 +157,7 @@ void sys_can_init(void)
 	memset(&mreq, 0, sizeof(mreq));
 	mreq.imr_multiaddr = addr.sin_addr;
 	mreq.imr_interface.s_addr = have_if ? if_addr.s_addr : htonl(INADDR_ANY);
-	if (setsockopt(fd_in, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) != 0) {
+	if (setsockopt(fd_in, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const char *)&mreq, sizeof(mreq)) != 0) {
 		perror("SITL: can multicast join");
 		exit(1);
 	}
@@ -162,7 +173,7 @@ void sys_can_init(void)
 		src.sin_family = AF_INET;
 		src.sin_addr = if_addr;
 		if (bind(fd_out, (struct sockaddr *)&src, sizeof(src)) != 0 ||
-		    setsockopt(fd_out, IPPROTO_IP, IP_MULTICAST_IF, &if_addr, sizeof(if_addr)) != 0) {
+		    setsockopt(fd_out, IPPROTO_IP, IP_MULTICAST_IF, (const char *)&if_addr, sizeof(if_addr)) != 0) {
 			perror("SITL: can tx interface");
 			exit(1);
 		}
@@ -190,14 +201,7 @@ void sys_can_init(void)
      */
 	for (int attempt = have_if ? 1 : 0; attempt < 2; attempt++) {
 		uint8_t probe[4] = {0xde, 0xad, 0xbe, 0xef}; // wrong magic, ignored by receivers
-							     // Prefer sendto over a connected send so a dead mcast route does
-							     // not depend on SIGPIPE being ignored (belt-and-braces with
-							     // signal(SIGPIPE, SIG_IGN) / SO_NOSIGPIPE).
-#		if defined(MSG_NOSIGNAL)
-		sendto(fd_out, probe, sizeof(probe), MSG_NOSIGNAL, (struct sockaddr *)&addr, sizeof(addr));
-#		else
-		sendto(fd_out, probe, sizeof(probe), 0, (struct sockaddr *)&addr, sizeof(addr));
-#		endif
+		send(fd_out, probe, sizeof(probe), 0);
 		struct pollfd pfd = {.fd = fd_in, .events = POLLIN, .revents = 0};
 		bool got = false;
 		while (poll(&pfd, 1, 50) == 1) {
@@ -234,6 +238,10 @@ void sys_can_init(void)
 	}
 #	endif
 
+	// after the self test, which may have rebound fd_out
+	socklen_t alen = sizeof(tx_addr);
+	getsockname(fd_out, (struct sockaddr *)&tx_addr, &alen);
+
 	fprintf(stderr, "SITL: CAN on %s (%s:%d)\n", name, address, MCAST_PORT);
 }
 
@@ -248,11 +256,7 @@ int16_t sys_can_transmit(const CanardCANFrame *txf)
 	pkt.message_id = txf->id;
 	memcpy(pkt.data, txf->data, txf->data_len);
 	pkt.crc = crc16_CCITT((const uint8_t *)&pkt.flags, txf->data_len + 6);
-#	if defined(MSG_NOSIGNAL)
-	const ssize_t ret = send(fd_out, &pkt, txf->data_len + MCAST_HDR_LEN, MSG_NOSIGNAL);
-#	else
 	const ssize_t ret = send(fd_out, &pkt, txf->data_len + MCAST_HDR_LEN, 0);
-#	endif
 	if (ret < 0) {
 		return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : -1;
 	}
@@ -266,9 +270,14 @@ int16_t sys_can_receive(CanardCANFrame *rx_frame)
 		return -1;
 	}
 	struct mcast_pkt pkt;
-	const ssize_t ret = recv(fd_in, &pkt, sizeof(pkt), MSG_DONTWAIT);
+	struct sockaddr_in src;
+	socklen_t srclen = sizeof(src);
+	const ssize_t ret = recvfrom(fd_in, &pkt, sizeof(pkt), MSG_DONTWAIT, (struct sockaddr *)&src, &srclen);
 	if (ret < 0) {
 		return (errno == EAGAIN || errno == EWOULDBLOCK) ? 0 : -1;
+	}
+	if (src.sin_port == tx_addr.sin_port && src.sin_addr.s_addr == tx_addr.sin_addr.s_addr) {
+		return 0; // own frame looped back
 	}
 	if (ret < MCAST_HDR_LEN || pkt.magic != MCAST_MAGIC) {
 		canstats.rxframe_error++;
@@ -279,6 +288,7 @@ int16_t sys_can_receive(CanardCANFrame *rx_frame)
 		return 0;
 	}
 	rx_frame->id = pkt.message_id;
+	rx_frame->iface_id = 0; // single simulated interface
 	rx_frame->data_len = ret - MCAST_HDR_LEN;
 	memcpy(rx_frame->data, pkt.data, rx_frame->data_len);
 	return 1;
@@ -360,62 +370,45 @@ void sys_can_getUniqueID(uint8_t id[16])
 }
 
 /*
-  RTC backup survives hardware reset. SITL reboots via execv, so keep the
-  eight words next to the eeprom file (`<eeprom>.rtc`) for warm-boot /
-  FW-update handoff (RTC_BKUP0_BOOTED / SIGNAL / FWUPDATE).
+  RTC backup registers, file backed in <eeprom>.bkup so they survive the
+  execve reset chain like the battery backed domain survives a reset.
+  Carries the DroneCAN firmware-update handoff to the bootloader
  */
-static uint32_t rtc_backup[8];
-static bool rtc_loaded;
-
-static void rtc_backup_path(char *path, size_t pathlen)
+static void bkup_file_path(char *path, size_t len)
 {
-	snprintf(path, pathlen, "%s.rtc", sitl_cfg.eeprom_path);
-}
-
-static void rtc_backup_load(void)
-{
-	if (rtc_loaded) {
-		return;
-	}
-	rtc_loaded = true;
-	char path[512];
-	rtc_backup_path(path, sizeof(path));
-	FILE *f = fopen(path, "rb");
-	if (!f) {
-		return;
-	}
-	if (fread(rtc_backup, 1, sizeof(rtc_backup), f) != sizeof(rtc_backup)) {
-		memset(rtc_backup, 0, sizeof(rtc_backup));
-	}
-	fclose(f);
-}
-
-static void rtc_backup_save(void)
-{
-	char path[512];
-	rtc_backup_path(path, sizeof(path));
-	FILE *f = fopen(path, "wb");
-	if (!f) {
-		perror("SITL: rtc backup open");
-		return;
-	}
-	if (fwrite(rtc_backup, 1, sizeof(rtc_backup), f) != sizeof(rtc_backup)) {
-		perror("SITL: rtc backup write");
-	}
-	fclose(f);
+	snprintf(path, len, "%s.bkup", sitl_cfg.eeprom_path);
 }
 
 uint32_t get_rtc_backup_register(uint8_t idx)
 {
-	rtc_backup_load();
-	return rtc_backup[idx & 7];
+	char path[512];
+	bkup_file_path(path, sizeof(path));
+	uint32_t v = 0;
+	FILE *f = fopen(path, "rb");
+	if (f != NULL) {
+		fseek(f, idx * 4, SEEK_SET);
+		if (fread(&v, 4, 1, f) != 1) {
+			v = 0;
+		}
+		fclose(f);
+	}
+	return v;
 }
 
 void set_rtc_backup_register(uint8_t idx, uint32_t value)
 {
-	rtc_backup_load();
-	rtc_backup[idx & 7] = value;
-	rtc_backup_save();
+	char path[512];
+	bkup_file_path(path, sizeof(path));
+	FILE *f = fopen(path, "r+b");
+	if (f == NULL) {
+		f = fopen(path, "w+b");
+	}
+	if (f == NULL) {
+		return;
+	}
+	fseek(f, idx * 4, SEEK_SET);
+	fwrite(&value, 4, 1, f);
+	fclose(f);
 }
 
 void setup_portpin(uint16_t portpin, bool enable)
