@@ -116,6 +116,28 @@ uint8_t faultDesyncRestartHoldoffActive(void);
 extern volatile uint32_t fault_stall_trips;
 
 /*
+ * Acquisition-rail episode charges this power cycle ("start resisted":
+ * batches of early desyncs that never reached acquisition - see
+ * faultNoteEarlyDesync).
+ *
+ * This counter exists because it is the ONLY part of the episode machinery
+ * that does not self-heal: bucket, holdoff and latch all converge back to
+ * the configured settings within seconds of an obstruction clearing, so a
+ * ground spool that was fought by grass or debris leaves no trace by the
+ * time the vehicle is armed. A monotonic count lets an FC (or a human
+ * reading telemetry) refuse takeoff on a start that was resisted.
+ *
+ * Deliberately does NOT influence control: no episode kind changes the
+ * configured ramp or any other tuning parameter. See the note in
+ * faultDesyncEpisodeCharge for why persistent learned state was removed.
+ *
+ * Monotonic per power cycle (not cleared on arm) so the pre-takeoff history
+ * survives to be read. volatile: written in ISR context (main-loop charge),
+ * read from telemetry.
+ */
+extern volatile uint8_t fault_acq_resist_events;
+
+/*
  * Total hard-error events this arm cycle, for uavcan.equipment.esc.Status
  * error_count (DSDL: "Resets when the motor restarts").
  *

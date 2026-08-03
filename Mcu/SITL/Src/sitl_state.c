@@ -58,6 +58,25 @@
     u16 magic 0x5357, u8 version=1, u8 count, u64 t0_ns (simulated,
         first sample), u32 sample_period_ns, count * float
         (physics audio samples, arbitrary linear units)
+
+  ZC_STATS (cmd 9) reply, magic 0x5356 (shared with tone/eeprom packet
+  tags; distinguished by length + the poller asked for ZC_STATS):
+    u16 magic 0x5356, u8 version=6, u8 pad, u32 zero_crosses,
+      u32 commutation_interval, u32 dropped_edges, u32 desync_happened,
+      u8 old_routine, u8 running, u8 armed, u8 zc_blind_steps,
+      u8 zc_miss_bucket, u8 zc_deadline_armed,
+      u8 dcm_hold_ms, u8 pad2, u16 dcm_hold_value,       (v2 PR 62)
+      u8 adv_kerpm_hold_ms, u8 pad3, u16 adv_kerpm_hold, (v3 PR 63)
+      i32 zc_trend, u32 zc_predicted, u16 waitTime, u16 advance, (v4 PR 64)
+      u16 gov_conf, u16 gov_slope_q10, u16 gov_duty_ceiling,
+      u16 gov_stuck_ms, u16 gov_release_ceil, u16 gov_unlatch_count (v5 PR 65)
+      u8 max_ramp_startup, u8 max_ramp_low, u8 max_ramp_high,
+      u8 ramp_divider, u8 max_ramp_startup_vcomp, u8 acq_resist,
+      u8 desync_episode_bucket                    (v6 ramp settings +
+                                                   episode observability)
+      Fields are only ever APPENDED and the version is bumped; clients
+      that unpack a shorter prefix keep working unchanged (they
+      length-check with >=).
 */
 
 #include "eeprom.h"
@@ -69,6 +88,7 @@
 #include "bemf_zc.h"
 #include "motor_runtime.h"
 #include "runtime_loop.h"
+#include "faults.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -579,9 +599,18 @@ void sitl_state_poll(void)
 			uint16_t gov_stuck_ms_v;
 			uint16_t gov_release_ceil_v;
 			uint16_t gov_unlatch_count_v;
+			/* v6: live ramp settings (so a test can assert the episode
+			 * machinery never mutates them) + episode observability. */
+			uint8_t max_ramp_startup_v;
+			uint8_t max_ramp_low_v;
+			uint8_t max_ramp_high_v;
+			uint8_t ramp_divider_v;
+			uint8_t max_ramp_startup_vcomp_v;
+			uint8_t acq_resist_v;
+			uint8_t desync_episode_bucket_v;
 		} reply = {
 			.magic = 0x5356,
-			.version = 5,
+			.version = 6,
 			.zero_crosses = zero_crosses,
 			.commutation_interval = commutation_interval,
 			.dropped_edges = motor_zc_dropped(),
@@ -606,6 +635,13 @@ void sitl_state_poll(void)
 			.gov_stuck_ms_v = gov_stuck_ms,
 			.gov_release_ceil_v = gov_release_ceil,
 			.gov_unlatch_count_v = gov_unlatch_count,
+			.max_ramp_startup_v = max_ramp_startup,
+			.max_ramp_low_v = max_ramp_low_rpm,
+			.max_ramp_high_v = max_ramp_high_rpm,
+			.ramp_divider_v = ramp_divider,
+			.max_ramp_startup_vcomp_v = max_ramp_startup_vcomp,
+			.acq_resist_v = fault_acq_resist_events,
+			.desync_episode_bucket_v = desync_episode_bucket,
 		};
 		sendto(fd, &reply, sizeof(reply), 0, (struct sockaddr *)&src, sizeof(src));
 	} else if (cmd == 10 && ret >= 8) {

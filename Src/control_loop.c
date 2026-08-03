@@ -672,11 +672,18 @@ RAM_FUNC void tenKhzRoutine()
 			// ~15 ms of a too-fast transient are electrically silent -
 			// no rejects, no demag-late, no misses - and then the ZC
 			// window closes within ~3 commutations, so every observable
-			// distress signal arrives after lock is unrecoverable. The
-			// working alternative is the learned ramp back-off in
-			// faultDesyncEpisodeCharge: each desync episode halves the
-			// configured ramp (floor fine 0.1%/ms) for the rest of the
-			// power cycle.
+			// distress signal arrives after lock is unrecoverable.
+			//
+			// There is therefore NO in-flight mechanism that saves a
+			// too-fast ramp, and deliberately so: a learned back-off here
+			// (each desync episode halving the configured ramp for the
+			// rest of the power cycle) was tried, shipped, and reverted -
+			// per-ESC learned state is invisible to the FC and makes a
+			// multirotor asymmetric. See the note in
+			// faultDesyncEpisodeCharge. These limits are what the eeprom
+			// says and stay that way; a ramp that outruns the motor is a
+			// tuning defect, and repeated desyncs are bounded by the
+			// episode latch, not by quietly slowing this ESC down.
 			if ((duty_cycle - last_duty_cycle) > max_duty_cycle_change) {
 				duty_cycle = last_duty_cycle + max_duty_cycle_change;
 			}

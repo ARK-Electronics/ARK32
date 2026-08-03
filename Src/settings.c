@@ -164,9 +164,16 @@ void loadEEpromSettings(void)
 		}
 
 		// Reset to compile defaults first so this load is idempotent: the
-		// eeprom value below only lowers (min semantics), and the learned
-		// ramp back-off (faultDesyncEpisodeCharge) clamps these at runtime
-		// - a settings write is the documented way to restore them.
+		// eeprom value below only lowers (min semantics). Nothing at
+		// runtime writes these - the ramp an ESC flies is the ramp
+		// configured here (see faultDesyncEpisodeCharge for why the
+		// learned back-off that used to clamp them was removed).
+		//
+		// NOTE the min semantics flatten the graded schedule: max_ramp 20
+		// (the current factory default, 2.0 %/ms) clamps ALL THREE regimes
+		// to 2, so the 2/6/16 startup->low->high progression in targets.h
+		// never engages and the ESC flies the startup rate at cruise.
+		// max_ramp >= 160 is what preserves the full progression.
 		max_ramp_startup = RAMP_SPEED_STARTUP;
 		max_ramp_low_rpm = RAMP_SPEED_LOW_RPM;
 		max_ramp_high_rpm = RAMP_SPEED_HIGH_RPM;

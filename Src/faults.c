@@ -34,6 +34,9 @@ volatile uint32_t fault_stall_trips = 0;
 /* Acquisition-rail early-desync count (see faultNoteEarlyDesync). */
 static uint8_t acq_fail_desyncs;
 
+/* "Start resisted" counter (see the declaration in faults.h). */
+volatile uint8_t fault_acq_resist_events;
+
 uint32_t faultErrorCount(void)
 {
 	return desync_happened + fault_stall_trips;
@@ -126,8 +129,8 @@ void faultUpdateBemfTimeoutPolicy(void)
 		//
 		// Also clear the acquisition-rail partial batch: otherwise 19 early
 		// desyncs, a pilot cut, then one more early desync on the next blip
-		// would fire a JUMP-sized charge (and permanent ramp-halve) as if
-		// the cut never happened. Match episode-bucket pilot semantics.
+		// would fire a JUMP-sized charge as if the cut never happened.
+		// Match episode-bucket pilot semantics.
 		desync_episode_bucket = 0;
 		desync_restart_holdoff_ms = 0;
 		acq_fail_desyncs = 0;
@@ -186,10 +189,13 @@ void faultUpdateBemfTimeoutPolicy(void)
  * 2-4 rough desyncs acquiring, so 20 is unambiguously abnormal, while at the
  * ~20/s rate a genuinely stuck loop produces it still charges once a second.
  * The point of this rail is to make the failure VISIBLE to the escalation
- * machinery (bucket, holdoff, latch), not to be the fastest path to the latch.
- * The side effect that most helps a too-fast tune finally clear acquisition is
- * the permanent ramp back-off inside faultDesyncEpisodeCharge; established-run
- * rails (blind/grind/stall) still need zero_crosses > 100 and only help once
+ * machinery (bucket, holdoff, latch) and to the fault_acq_resist_events
+ * counter, not to be the fastest path to the latch. It deliberately does
+ * nothing to the ramp: a start that cannot complete is at least as likely
+ * mechanically resisted (grass, debris) as mis-tuned, and duty is
+ * near-always slewing during a start, so there is no signal here that
+ * separates the two - see faultDesyncEpisodeCharge. Established-run rails
+ * (blind/grind/stall) still need zero_crosses > 100 and only engage once
  * the loop actually gets past that gate.
  *
  * This constant is a starting point from SITL and wants bench calibration
@@ -271,26 +277,43 @@ void faultDesyncEpisodeCharge(desync_episode_kind_t kind)
 	desync_episode_drain_ms = 0;
 	desync_episode_apply_backoff();
 
-	// Learned ramp back-off: a desync episode means the configured ramp
-	// outran what this motor/prop can follow, and no reactive signal can
-	// catch it in time (the first ~15 ms of a too-fast transient are
-	// electrically silent - see the note at the slew limiter in
-	// control_loop.c). Halve each regime's duty step per episode (floor
-	// 1) instead of slamming to the fine rate on the first charge - a
-	// single fluke desync should not kill stick authority for the rest
-	// of the power cycle, and half may already be enough for many props.
-	// Once every regime is at 1, force fine mode (ramp_divider = 9) so
-	// the floor is the bench-proven 0.1%/ms rate rather than coarse 1
-	// (still ~1 duty unit every control tick). Deliberately not cleared
-	// at zero throttle (unlike the bucket): re-arming the fast ramp
-	// would re-desync on the next transient. A settings write reruns
-	// loadEEpromSettings and restores the configured values - retuning
-	// is the way back within a session.
-	max_ramp_startup = max_ramp_startup > 1 ? (uint8_t)(max_ramp_startup / 2) : 1;
-	max_ramp_low_rpm = max_ramp_low_rpm > 1 ? (uint8_t)(max_ramp_low_rpm / 2) : 1;
-	max_ramp_high_rpm = max_ramp_high_rpm > 1 ? (uint8_t)(max_ramp_high_rpm / 2) : 1;
-	if (max_ramp_startup <= 1 && max_ramp_low_rpm <= 1 && max_ramp_high_rpm <= 1) {
-		ramp_divider = 9;
+	// NO PERSISTENT LEARNED STATE. An episode charges the escalation
+	// machinery above (bucket -> holdoff -> latch) and nothing else: the
+	// configured ramp, and every other tuning parameter, is left exactly as
+	// loadEEpromSettings set it. This is a deliberate reversal of the
+	// learned ramp back-off that used to live here (each episode halved
+	// every regime's duty step for the rest of the power cycle, flooring at
+	// fine 0.1%/ms).
+	//
+	// Why it is gone, on a multirotor specifically: the halve is per-ESC
+	// state that the flight controller cannot see. The mixer assumes
+	// symmetric actuators, so one ESC that has learned a slower ramp than
+	// its three siblings is an asymmetric vehicle with no way to report it.
+	// That is not a hypothetical - it crashed a vehicle taking off after a
+	// ground spool in long grass, where prop obstruction at STEADY duty
+	// dragged an established run down and the episode was misread as "ramp
+	// too fast". On the production tune (max_ramp 20 -> all regimes 2) one
+	// halve already IS the fine-rate floor: a silent 20x slew-authority cut.
+	//
+	// An attribution gate was tried first (a slew witness requiring the
+	// limiter to be binding on rising demand before halving) and it does
+	// narrow the misattribution, but it keeps the architecture: still
+	// per-ESC learned divergence, still invisible to the FC, still one
+	// wrong attribution away from the same asymmetry. The line drawn
+	// instead is TRANSIENT SELF-RECOVERING RESPONSES ONLY - the bucket,
+	// holdoff and latch all converge back to configured settings, so an
+	// ESC either behaves as configured or stops. A too-fast ramp is a
+	// tuning defect and gets fixed by retuning, not by each ESC quietly
+	// deciding its own limit mid-flight. This also keeps us on upstream
+	// AM32's fixed-ramp semantics rather than diverging further.
+	//
+	// ACQ_FAIL episodes additionally bump fault_acq_resist_events, which is
+	// a counter only - see faults.h for why that one has to survive the
+	// self-healing.
+	if (kind == DESYNC_EPISODE_ACQ_FAIL) {
+		if (fault_acq_resist_events < 255) {
+			fault_acq_resist_events++;
+		}
 	}
 
 	if (desync_episode_bucket >= DESYNC_EPISODE_LIMIT) {
