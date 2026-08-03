@@ -590,6 +590,39 @@ void resetInputCaptureTimer()
 	IC_TIMER_REGISTER->CNT = 0;
 }
 
+#ifdef USE_DRV_ENABLE
+static void initDrvEnable(void)
+{
+	LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
+	/* DRV_ENABLE is on GPIOC on ARK_G431_CAN; RGB also uses C but may
+	 * not be built — always clock the port here. */
+	LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOC);
+	GPIO_InitStruct.Pin = DRV_ENABLE_PIN;
+	GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
+	GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
+	GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+	GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+	LL_GPIO_Init(DRV_ENABLE_PORT, &GPIO_InitStruct);
+	/* DRV8350H ENABLE high: gate drive active (nSLEEP-equivalent). */
+	DRV_ENABLE_PORT->BSRR = DRV_ENABLE_PIN;
+}
+#endif
+
+#ifdef USE_DRV_NFAULT
+static void initDrvNfault(void)
+{
+	LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
+	LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOA);
+	GPIO_InitStruct.Pin = NFAULT_PIN;
+	GPIO_InitStruct.Mode = LL_GPIO_MODE_INPUT;
+	GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
+	/* Schematic has 20k to 3.3V; keep weak pull-up as a fail-safe if the
+	 * external network is open. Active low = fault. */
+	GPIO_InitStruct.Pull = LL_GPIO_PULL_UP;
+	LL_GPIO_Init(NFAULT_PORT, &GPIO_InitStruct);
+}
+#endif
+
 void enableCorePeripherals()
 {
 	LL_TIM_CC_EnableChannel(TIM1, LL_TIM_CHANNEL_CH1);
@@ -618,6 +651,13 @@ void enableCorePeripherals()
 	RED_PORT->BRR = RED_PIN; // turn on red
 	GREEN_PORT->BSRR = GREEN_PIN;
 	BLUE_PORT->BSRR = BLUE_PIN;
+#endif
+
+#ifdef USE_DRV_ENABLE
+	initDrvEnable();
+#endif
+#ifdef USE_DRV_NFAULT
+	initDrvNfault();
 #endif
 
 #ifndef BRUSHED_MODE
