@@ -88,7 +88,9 @@ def _open_ctl(sitl):
 def _zc_stats(ctl, retries=8):
     need = struct.calcsize(STATS_FMT)
     for _ in range(retries):
-        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 4, 0))
+        # cmd 9 ZC_STATS (ARK extension; remapped from 4 when upstream
+        # SITL claimed 3/4 for tone/audio subscribe — see #77).
+        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
         try:
             pkt = ctl.recv(96)
         except socket.timeout:
@@ -104,7 +106,8 @@ def _zc_stats(ctl, retries=8):
 
 
 def _zc_fault(ctl, mode, duration_us):
-    ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, 3, mode, duration_us))
+    # cmd 8 ZC_FAULT (ARK extension; remapped from 3 — see #77).
+    ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, 8, mode, duration_us))
 
 
 def _spool_established(sitl, sim, ctl, tx, value=900, rpm_min=2000.0,
