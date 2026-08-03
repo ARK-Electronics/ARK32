@@ -489,6 +489,7 @@ int main(void)
 
 		runtimeUpdateVariablePwm(&last_tim1_arr);
 		faultPollSignalTimeout();
+		faultPollGateDriver();
 #ifdef USE_CUSTOM_LED
 		if ((input >= 47) && (input < 1947)) {
 			if (ledcounter > (2000 >> forward)) {

@@ -466,12 +466,14 @@ void setInput()
 	}
 	// Missed-ZC power cut (BLHeli-style): while commutating blind the
 	// rotor position is unknown - bound the energy driven into a possibly
-	// wrong phase (DRV8328 boards have no VDS trip). Applied here in
-	// setInput (on F051 that is the DShot EXTI IRQ, not the main loop)
-	// rather than inside the O3 RAM_FUNC 20 kHz body (bench bisect showed
-	// adding code there disturbs F051 startup). Pulling last_duty_cycle
-	// down as well makes the cut immediate: the 20 kHz slew limiter ramps
-	// from last_duty_cycle, so capping only the setpoint would let up to
+	// wrong phase. On DRV8328 (F051 4IN1) there is no VDS trip; on
+	// DRV8350H (ARK_G431_CAN) the board has a resistor-set VDS limit and
+	// FAULT_N is polled in faultPollGateDriver. Applied here in setInput
+	// (on F051 that is the DShot EXTI IRQ, not the main loop) rather than
+	// inside the O3 RAM_FUNC 20 kHz body (bench bisect showed adding code
+	// there disturbs F051 startup). Pulling last_duty_cycle down as well
+	// makes the cut immediate: the 20 kHz slew limiter ramps from
+	// last_duty_cycle, so capping only the setpoint would let up to
 	// 37.5 ms of ramp-down stand between a blind step and the cap
 	// (max_ramp_startup while zero_crosses < 150 - live here, since blind
 	// stepping arms at 100). The 20 kHz tick may overwrite last_duty_cycle

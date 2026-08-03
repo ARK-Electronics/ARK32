@@ -103,6 +103,21 @@
 #	define CAN_RX_PIN LL_GPIO_PIN_11
 #	define CAN_RX_PORT GPIOA
 
+/*
+	 * DRV8350H (hardware interface):
+	 *   ENABLE  = PC9  (DRV_ENABLE) — must be high for gate drive
+	 *   nFAULT  = PA12 (FAULT_N) — open-drain, external 20k to 3.3V;
+	 *             asserts on VDS OCP (resistor-set on VDS pin), UVLO, OTW, GDF
+	 * Mode / IDRIVE / VDS thresholds are hardwired on the board; firmware
+	 * only enables the driver and reacts to FAULT_N.
+	 */
+#	define USE_DRV_ENABLE
+#	define DRV_ENABLE_PORT GPIOC
+#	define DRV_ENABLE_PIN LL_GPIO_PIN_9
+#	define USE_DRV_NFAULT
+#	define NFAULT_PORT GPIOA
+#	define NFAULT_PIN LL_GPIO_PIN_12
+
 #	define COM_TIMER TIM7
 #	define COM_TIMER_IRQ TIM7_IRQn
 
