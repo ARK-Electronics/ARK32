@@ -131,7 +131,7 @@ static void escForceState(esc_state_t next)
 void escReconcileFromFlags(void)
 {
 	/* Latched faults win over drive mode. */
-	if (bemf_timeout_happened == ESC_STUCK_LATCH) {
+	if (bemf_timeout_happened == ESC_STUCK_LATCH || faultGateDriverFaultActive()) {
 		escForceState(ESC_FAULT_STUCK);
 		return;
 	}

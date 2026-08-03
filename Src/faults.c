@@ -37,6 +37,16 @@ static uint8_t acq_fail_desyncs;
 /* "Start resisted" counter (see the declaration in faults.h). */
 volatile uint8_t fault_acq_resist_events;
 
+#if defined(USE_DRV_NFAULT)
+/* Sticky until nFAULT releases; keeps FAULT_STUCK if bemf latch is cleared
+ * by the zero-throttle path while the DRV is still asserting. */
+static uint8_t drv_nfault_latched;
+#	if defined(USE_DRV_ENABLE)
+/* Rate-limit ENABLE recovery pulses (~main-loop iterations). */
+static uint16_t drv_enable_retry_div;
+#	endif
+#endif
+
 uint32_t faultErrorCount(void)
 {
 	return desync_happened + fault_stall_trips;
@@ -50,9 +60,77 @@ void faultErrorCountReset(void)
 	acq_fail_desyncs = 0;
 }
 
+uint8_t faultGateDriverFaultActive(void)
+{
+#if defined(USE_DRV_NFAULT)
+	const uint8_t pin_ok = (NFAULT_PORT->IDR & NFAULT_PIN) != 0u;
+	return (uint8_t)(!pin_ok || drv_nfault_latched);
+#else
+	return 0;
+#endif
+}
+
+void faultPollGateDriver(void)
+{
+#if defined(USE_DRV_NFAULT)
+	/* Active low (open-drain). High = healthy. */
+	const uint8_t pin_ok = (NFAULT_PORT->IDR & NFAULT_PIN) != 0u;
+
+	if (!pin_ok) {
+		allOff();
+		maskPhaseInterrupts();
+		SET_DUTY_CYCLE_ALL(0);
+		running = 0;
+		stepper_sine = 0;
+		if (!drv_nfault_latched) {
+			drv_nfault_latched = 1;
+			/* Reuses stuck latch: reconcile holds FAULT_STUCK via
+			 * bemf_timeout_happened == ESC_STUCK_LATCH until zero
+			 * throttle clears it — same pilot-clear semantics. */
+			escToFaultStuck();
+#	ifdef USE_RGB_LED
+			setIndividualRGBLed(1, 0, 0);
+#	endif
+		}
+#	if defined(USE_DRV_ENABLE)
+		/*
+		 * DRV8350H: latched VDS / gate faults stay asserted until
+		 * ENABLE is driven low for t_RST then high again. Only retry
+		 * at zero demand so we never re-arm into a short.
+		 */
+		if (adjusted_input == 0) {
+			if (++drv_enable_retry_div >= 2000u) {
+				drv_enable_retry_div = 0;
+				DRV_ENABLE_PORT->BRR = DRV_ENABLE_PIN;
+				delayMicros(50);
+				DRV_ENABLE_PORT->BSRR = DRV_ENABLE_PIN;
+			}
+		} else {
+			drv_enable_retry_div = 0;
+		}
+#	endif
+	} else if (drv_nfault_latched && adjusted_input == 0) {
+		/* Pin recovered and pilot at zero: drop sticky so arm can proceed. */
+		drv_nfault_latched = 0;
+#	if defined(USE_DRV_ENABLE)
+		drv_enable_retry_div = 0;
+#	endif
+	}
+#endif
+}
+
 uint8_t faultHandleStuckRotorIfNeeded(void)
 {
 #ifndef BRUSHED_MODE
+#	if defined(USE_DRV_NFAULT)
+	/* Gate-driver trip (VDS etc.): do not map throttle back onto the
+	 * bridge while nFAULT is low or still latched. */
+	if (faultGateDriverFaultActive()) {
+		allOff();
+		maskPhaseInterrupts();
+		return 1;
+	}
+#	endif
 	if ((bemf_timeout_happened > bemf_timeout) && eepromBuffer.stuck_rotor_protection) {
 		allOff();
 		maskPhaseInterrupts();
