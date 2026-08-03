@@ -164,4 +164,19 @@ uint32_t faultErrorCount(void);
 /* Zero both error_count addends. Call only on the armed 0->1 edge. */
 void faultErrorCountReset(void);
 
+/*
+ * Gate-driver nFAULT poll (DRV8350H FAULT_N on ARK_G431_CAN, etc.).
+ *
+ * When USE_DRV_NFAULT is defined: if nFAULT is low (VDS OCP, UVLO, OTW,
+ * gate-drive fault — threshold is board hardware), cut PWM, latch
+ * ESC_FAULT_STUCK, and at zero throttle pulse DRV ENABLE so latched VDS
+ * trips can clear. No-op on targets without the pin.
+ *
+ * Call from the main loop (not the 20 kHz path).
+ */
+void faultPollGateDriver(void);
+
+/* 1 while nFAULT is asserted or a gate-driver latch is still held. */
+uint8_t faultGateDriverFaultActive(void);
+
 #endif /* FAULTS_H_ */
