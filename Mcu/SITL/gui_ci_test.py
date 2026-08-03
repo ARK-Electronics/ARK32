@@ -57,7 +57,7 @@ def test_launcher(args, env):
     control_port = free_control_port()
     input_port = 29833
     state_port = 29834
-    params = os.path.join(HERE, 'data', 'VIMDRONES_NANO_2216', 'sitl.param')
+    params = os.path.join(HERE, 'data', 'ARK_4IN1_F051', 'sitl.param')
 
     with tempfile.TemporaryDirectory(prefix='am32_gui_launcher_') as tmp:
         eeprom = sitl_params.write_eeprom(params,

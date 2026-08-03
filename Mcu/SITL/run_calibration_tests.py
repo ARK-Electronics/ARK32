@@ -24,7 +24,7 @@ Designed for CI:
 
 usage:
   run_calibration_tests.py --sitl ../obj/AM32_AM32_SITL_CAN_*.elf
-  run_calibration_tests.py --dataset vim1404 --skip-chirp
+  run_calibration_tests.py --dataset ark_900kv_noprop --skip-chirp
 '''
 
 import argparse
@@ -44,43 +44,45 @@ SCRIPTS = os.path.join(REPO, 'scripts')
 sys.path.insert(0, HERE)
 import sitl_params
 
+# ARK 4IN1 F051 Flight Stand / HWCI captures only. Non-ARK upstream
+# datasets (SEQURE / VimDrones) are not shipped on this fork.
 DATASETS = [
     {
-        'name': 'gt2215',
-        'data': os.path.join(HERE, 'data/SEQURE_G431'),
-        'model': os.path.join(HERE, 'models/sequre_gt2215.json'),
+        'name': 'ark_900kv_noprop',
+        'data': os.path.join(HERE, 'data/ARK_4IN1_F051_900kv_noprop'),
+        'model': os.path.join(HERE, 'models/ark_900kv_noprop.json'),
         'real_sweep': 'sweep1.jsonl',
         'real_square': 'square1.jsonl',
-        'real_chirp': 'sequre_chirp_120s.jsonl',
-        'max_current': 8.0,
+        'real_chirp': 'chirp_120s.jsonl',
+        'max_current': 25.0,
         'chirp_max_freq': 15,
+        'start_level': '0.10',
     },
     {
-        'name': 'nano2216',
-        'data': os.path.join(HERE, 'data/VIMDRONES_NANO_2216'),
-        'model': os.path.join(HERE, 'models/vimdrones_nano_2216.json'),
-        'real_sweep': 'sweep2.jsonl',
-        'real_square': 'square1.jsonl',
-        'real_chirp': 'nano_chirp_120s.jsonl',
-        # the model's limiter-engagement transient peaks ~11A at the
-        # 0.8->0.9 step (real bench peaked 9.4A); 12A still trips on a
-        # runaway while clearing the documented residual
-        'max_current': 12.0,
-        'chirp_max_freq': 20,
-        # prop-inertia rotor: SITL cold starts at mid throttle are
-        # marginal, so sweeps lead with 0.3 and dynamic tests pre-spin
-        'start_level': '0.3',
-        'prespin': True,
-    },
-    {
-        'name': 'vim1404',
-        'data': os.path.join(HERE, 'data/VIMDRONES_L431'),
-        'model': os.path.join(HERE, 'models/vimdrones_1404.json'),
+        'name': 'ark_2807_1300kv',
+        'data': os.path.join(HERE, 'data/ARK_4IN1_F051_2807_1300kv'),
+        'model': os.path.join(HERE, 'models/ark_2807_1300kv_noprop.json'),
         'real_sweep': 'sweep1.jsonl',
-        'real_square': 'square2.jsonl',
-        'real_chirp': 'vim_chirp_120s_v2.jsonl',
-        'max_current': 4.0,
-        'chirp_max_freq': 30,
+        'real_square': 'square1.jsonl',
+        'real_chirp': 'chirp_120s.jsonl',
+        'max_current': 30.0,
+        'chirp_max_freq': 15,
+        'start_level': '0.10',
+    },
+    {
+        # HWCI suite50 reference only (no full square/chirp capture yet);
+        # steady levels still exercise the plant gate.
+        'name': 'ark_900kv_10inch',
+        'data': os.path.join(HERE, 'data/ARK_4IN1_F051_900kv_10inch'),
+        'model': os.path.join(HERE, 'models/ark_900kv_10inch.json'),
+        'real_sweep': 'suite50_ref.jsonl',
+        'real_square': None,
+        'real_chirp': None,
+        'max_current': 40.0,
+        'chirp_max_freq': 10,
+        'start_level': '0.10',
+        'skip_square': True,
+        'skip_chirp': True,
     },
 ]
 
@@ -233,6 +235,10 @@ def sweep_complete(out):
 
 
 def square_test(ds, exp, out):
+    if ds.get('skip_square') or not ds.get('real_square') or 'square' not in exp:
+        report(ds['name'], 'square down-curve', True, 'no square capture', skipped=True)
+        return
+
     for attempt in range(exp.get('square_start_retries', 0) + 1):
         prespin(ds)
         run_tool([sys.executable, os.path.join(SCRIPTS, 'esc_square.py'), 'run',
@@ -338,12 +344,15 @@ def artifacts(ds, run_dir, art_dir):
         return
     os.makedirs(art_dir, exist_ok=True)
     pairs = [
-        ('sweep', os.path.join(ds['data'], ds['real_sweep']), 'sweep.jsonl', []),
-        ('square', os.path.join(ds['data'], ds['real_square']), 'square.jsonl', []),
-        ('square_steps', os.path.join(ds['data'], ds['real_square']), 'square.jsonl', ['--steps']),
-        ('chirp', os.path.join(ds['data'], ds['real_chirp']), 'chirp.jsonl', []),
+        ('sweep', ds.get('real_sweep'), 'sweep.jsonl', []),
+        ('square', ds.get('real_square'), 'square.jsonl', []),
+        ('square_steps', ds.get('real_square'), 'square.jsonl', ['--steps']),
+        ('chirp', ds.get('real_chirp'), 'chirp.jsonl', []),
     ]
-    for tag, real, sim, extra in pairs:
+    for tag, real_name, sim, extra in pairs:
+        if not real_name:
+            continue
+        real = os.path.join(ds['data'], real_name)
         simpath = os.path.join(run_dir, sim)
         if not (os.path.exists(real) and os.path.exists(simpath)):
             continue
@@ -390,7 +399,7 @@ def main():
         try:
             steady_test(ds, exp, os.path.join(run_dir, 'sweep.jsonl'))
             square_test(ds, exp, os.path.join(run_dir, 'square.jsonl'))
-            if not ARGS.skip_chirp:
+            if not ARGS.skip_chirp and not ds.get('skip_chirp') and ds.get('real_chirp'):
                 # fresh instances with a physics log for the raw fit,
                 # and their own verbose log for the ratio guard
                 sitl.stop()

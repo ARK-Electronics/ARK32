@@ -14,8 +14,6 @@
 #ifndef USE_MAKE
 // convenience defines for IDE builds without make - pick one board
 // #define ARK_4IN1_F051
-// #define AM32REF_F051
-// #define REF_G431
 // #define AM32_SITL_CAN
 #endif
 
@@ -31,44 +29,31 @@
    from the FILE_NAME defines in this file (get_targets in make/tools.mk).
    The full upstream board list lives in am32-firmware/AM32. */
 
+/*
+ * Host-native SITL of the ARK 4IN1 F051 vehicle policy: same sense gains,
+ * ramp ceilings, and closed-loop handoff as ARK_4IN1_F051, with the
+ * MCU/peripheral layer replaced by Mcu/SITL. DroneCAN stays enabled so
+ * the calibration tools and mcast CI path can drive the sim.
+ */
 #ifdef AM32_SITL_CAN
-#	define FIRMWARE_NAME "AM32 SITL"
+#	define FIRMWARE_NAME "ARK SITL"
 #	define FILE_NAME "AM32_SITL_CAN"
 #	define DRONECAN_SUPPORT 1
 #	define DRONECAN_NODE_NAME "org.am32.sitl"
-#	define DEAD_TIME 80
 #	define HARDWARE_GROUP_SITL_A
+/* Electrical / vehicle policy matches ARK_4IN1_F051 */
+#	define DEAD_TIME 25
+#	define MILLIVOLT_PER_AMP 10
+#	define CURRENT_OFFSET 25 // millivolts
+#	define TARGET_VOLTAGE_DIVIDER 210
 #	define TARGET_STALL_PROTECTION_INTERVAL 20000
-#	define TARGET_VOLTAGE_DIVIDER 110
-#	define MILLIVOLT_PER_AMP 20
-#	define CURRENT_OFFSET 0
-#	define CURRENT_AUTO_OFFSET
-#endif
-
-#ifdef REF_G431
-#	define FIRMWARE_NAME "Ref G431"
-#	define FILE_NAME "REF_G431"
-#	define DEAD_TIME 80
-#	define HARDWARE_GROUP_G4_A
-#	define TARGET_STALL_PROTECTION_INTERVAL 20000
-#	define USE_SERIAL_TELEMETRY
-#endif
-
-#ifdef AM32REF_F051
-// #define LOOP_FREQUENCY_HZ 10000
-#	define FILE_NAME "AM32REF_F051"
-#	define FIRMWARE_NAME "AM32 Ref-ESC"
-#	define DEAD_TIME 45
-#	define HARDWARE_GROUP_F0_B
-#	define MILLIVOLT_PER_AMP 65
-#	define CURRENT_OFFSET 0
-#	define TARGET_VOLTAGE_DIVIDER 110
-#	define VOLTAGE_ADC_CHANNEL LL_ADC_CHANNEL_6
-#	define VOLTAGE_ADC_PIN LL_GPIO_PIN_6
-#	define CURRENT_ADC_CHANNEL LL_ADC_CHANNEL_3
-#	define CURRENT_ADC_PIN LL_GPIO_PIN_3
-#	define USE_SERIAL_TELEMETRY
-#	define TARGET_STALL_PROTECTION_INTERVAL 9000
+#	define TARGET_MIN_BEMF_COUNTS 3
+#	define TARGET_DEFAULT_MAX_RAMP 20
+#	define RAMP_SPEED_LOW_RPM 3
+#	define RAMP_SPEED_HIGH_RPM 8
+#	ifndef POLLING_MODE_THRESHOLD
+#		define POLLING_MODE_THRESHOLD 5000
+#	endif
 #endif
 
 #ifdef ARK_4IN1_F051
@@ -104,9 +89,8 @@
 	 * racing values; ARK vehicles are 5-10"+ PX4 craft where 8%%/ms full-
 	 * stick authority (0->100%% in 12.5 ms) is already far above controller
 	 * dynamics. Startup stays at the generic 2 - it governs spool-up
-	 * reliability, and SLO never overrode it either. NOT changed in the
-	 * global fallbacks: AM32REF_F051 / REF_G431 stay upstream-identical
-	 * for A/B reference. */
+	 * reliability. AM32_SITL_CAN copies the same ceilings so the plant
+	 * under test matches the production board. */
 #	define RAMP_SPEED_LOW_RPM 3
 #	define RAMP_SPEED_HIGH_RPM 8
 /* Closed-loop when commutation_interval < this (0.5 us ticks). Default
@@ -2460,8 +2444,11 @@
 #endif
 
 #ifdef MCU_SITL
-// software in the loop simulation, emulating a G431 class MCU with the
-// hardware replaced by a motor/battery simulation. See Mcu/SITL
+// Host-native SITL MCU layer: timers/IRQ/ADC are emulated in Mcu/SITL while
+// the vehicle policy (sense gains, ramp, ZC handoff) comes from the
+// AM32_SITL_CAN target block above and matches ARK_4IN1_F051. CPU_FREQUENCY
+// stays at 160 so the sim timer scale matches the existing plant models;
+// the F051's 48 MHz is a silicon detail the native port does not need.
 #	define STMICRO
 #	define CPU_FREQUENCY_MHZ 160
 #	ifndef EEPROM_START_ADD
@@ -2472,7 +2459,9 @@
 #	define UTILITY_TIMER TIM17
 #	define COM_TIMER TIM16
 #	define APPLICATION_ADDRESS 0x08001000
-#	define TARGET_MIN_BEMF_COUNTS 3
+#	ifndef TARGET_MIN_BEMF_COUNTS
+#		define TARGET_MIN_BEMF_COUNTS 3
+#	endif
 #	define COMPARATOR_IRQ SITL_IRQ_COMP
 #	define COM_TIMER_IRQ SITL_IRQ_COM
 #	define IC_DMA_IRQ_NAME SITL_IRQ_DMA

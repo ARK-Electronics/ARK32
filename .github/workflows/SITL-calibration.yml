@@ -8,7 +8,7 @@ name: SITL Calibration Tests
 #
 # All measurements are paced against SITL simulation time, so a slow
 # runner simply takes longer in wall time and measures the same
-# experiment. The three datasets run as parallel matrix jobs.
+# experiment. ARK 4IN1 F051 plant datasets run as parallel matrix jobs.
 # Comparison graphs are uploaded as artifacts on every run.
 
 on:
@@ -43,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dataset: [gt2215, vim1404, nano2216]
+        dataset: [ark_900kv_noprop, ark_2807_1300kv, ark_900kv_10inch]
     steps:
       - uses: actions/checkout@v4
 
