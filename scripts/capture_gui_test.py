@@ -257,7 +257,7 @@ def sitl_checks(c, sitl_bin):
     '''the parts that need a live ESC, against the simulated one'''
     outdir = tempfile.mkdtemp(prefix='am32-capture-sitl-')
     eeprom = sitl_params.write_eeprom(
-        os.path.join(ROOT, 'Mcu/SITL/data/SEQURE_G431/sitl.param'),
+        os.path.join(ROOT, 'Mcu/SITL/data/ARK_4IN1_F051/sitl.param'),
         os.path.join(outdir, 'sitl_eeprom.bin'))
     proc = subprocess.Popen(
         [os.path.abspath(sitl_bin), '--node-id', str(SITL_NODE),

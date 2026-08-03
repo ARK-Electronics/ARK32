@@ -50,7 +50,7 @@ def _open_ctl(sitl):
 
 def _zc_stats(ctl, retries=5):
     for _ in range(retries):
-        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 4, 0))
+        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
         try:
             pkt = ctl.recv(64)
         except socket.timeout:
@@ -64,7 +64,7 @@ def _zc_stats(ctl, retries=5):
 
 
 def _zc_fault(ctl, mode, duration_us):
-    ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, 3, mode, duration_us))
+    ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, 8, mode, duration_us))
 
 
 def test_ceiling_hold_engages_on_desync(sitl_factory, state_stream):
@@ -127,9 +127,12 @@ def test_ceiling_hold_engages_on_desync(sitl_factory, state_stream):
         seen_hold = 0
         seen_value = 0
         saw_desync = False
-        for _ in range(6):
-            _zc_fault(ctl, mode=1, duration_us=60 * ci_us)
-            probe_end = time.time() + 0.35
+        # Longer blackouts: the inertial comparator plant can bridge a short
+        # drop without a jump-desync, so scale with CI and floor at 80 ms.
+        fault_us = max(80 * ci_us, 80_000)
+        for _ in range(10):
+            _zc_fault(ctl, mode=1, duration_us=fault_us)
+            probe_end = time.time() + 0.5
             while time.time() < probe_end:
                 s = _zc_stats(ctl)
                 seen_hold = max(seen_hold, s['dcm_hold_ms'])
@@ -138,16 +141,18 @@ def test_ceiling_hold_engages_on_desync(sitl_factory, state_stream):
                     saw_desync = True
             if seen_hold:
                 break
+            # clear any residual hold before the next inject
+            time.sleep(0.1)
 
         assert saw_desync, (
             'fault injection never produced a desync, so the hold was never '
             'given a chance to arm\n' + sitl.log_tail())
         assert seen_hold > 0, (
-            'THE HOLD NEVER ARMED. dcm_hold_ms stayed 0 across %d desyncs - '
+            'THE HOLD NEVER ARMED. dcm_hold_ms stayed 0 across desyncs - '
             'this is the exact no-op the first revision of PR #62 shipped. '
             'Check that runtimeProcessDesyncCheck still assigns dcm_hold_ms '
             'and dcm_hold_value in the desynced branch.\n%s'
-            % (saw_desync, sitl.log_tail()))
+            % sitl.log_tail())
         assert seen_value > 0, (
             'dcm_hold_ms armed but dcm_hold_value is 0, so the clamp holds '
             'nothing: %d' % seen_value)

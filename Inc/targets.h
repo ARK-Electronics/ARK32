@@ -30,10 +30,13 @@
    The full upstream board list lives in am32-firmware/AM32. */
 
 /*
- * Host-native SITL of the ARK 4IN1 F051 vehicle policy: same sense gains,
- * ramp ceilings, and closed-loop handoff as ARK_4IN1_F051, with the
- * MCU/peripheral layer replaced by Mcu/SITL. DroneCAN stays enabled so
- * the calibration tools and mcast CI path can drive the sim.
+ * Host-native SITL for ARK firmware development. The production board is
+ * ARK_4IN1_F051; this target keeps the classic SITL ADC/dead-time scale
+ * (matched to the 160 MHz host timer plant) so ZC fault-injection and
+ * closed-loop regression tests stay honest. ARK-specific sense gains,
+ * ramp ceilings, and MOTOR_KV for a given motor live in sitl.param under
+ * Mcu/SITL/data/ARK_* and are applied when those plants are loaded.
+ * DroneCAN stays enabled for calibration tools / mcast CI.
  */
 #ifdef AM32_SITL_CAN
 #	define FIRMWARE_NAME "ARK SITL"
@@ -41,19 +44,13 @@
 #	define DRONECAN_SUPPORT 1
 #	define DRONECAN_NODE_NAME "org.am32.sitl"
 #	define HARDWARE_GROUP_SITL_A
-/* Electrical / vehicle policy matches ARK_4IN1_F051 */
-#	define DEAD_TIME 25
-#	define MILLIVOLT_PER_AMP 10
-#	define CURRENT_OFFSET 25 // millivolts
-#	define TARGET_VOLTAGE_DIVIDER 210
+#	define DEAD_TIME 80
 #	define TARGET_STALL_PROTECTION_INTERVAL 20000
+#	define TARGET_VOLTAGE_DIVIDER 110
+#	define MILLIVOLT_PER_AMP 20
+#	define CURRENT_OFFSET 0
+#	define CURRENT_AUTO_OFFSET
 #	define TARGET_MIN_BEMF_COUNTS 3
-#	define TARGET_DEFAULT_MAX_RAMP 20
-#	define RAMP_SPEED_LOW_RPM 3
-#	define RAMP_SPEED_HIGH_RPM 8
-#	ifndef POLLING_MODE_THRESHOLD
-#		define POLLING_MODE_THRESHOLD 5000
-#	endif
 #endif
 
 #ifdef ARK_4IN1_F051

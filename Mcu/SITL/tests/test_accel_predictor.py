@@ -56,7 +56,7 @@ def _open_ctl(sitl):
 
 def _zc_stats(ctl, retries=5):
     for _ in range(retries):
-        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 4, 0))
+        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
         try:
             pkt = ctl.recv(64)
         except socket.timeout:
@@ -71,7 +71,7 @@ def _zc_stats(ctl, retries=5):
 
 
 def _zc_fault(ctl, mode, duration_us):
-    ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, 3, mode, duration_us))
+    ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, 8, mode, duration_us))
 
 
 def _clamp_corr(trend: int, ci: int) -> int:

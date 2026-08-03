@@ -58,7 +58,7 @@ def bundled_eeprom():
     if os.path.isfile(packaged):
         return packaged
     here = os.path.dirname(os.path.abspath(__file__))
-    params = os.path.join(here, 'data', 'VIMDRONES_NANO_2216', 'sitl.param')
+    params = os.path.join(here, 'data', 'ARK_4IN1_F051', 'sitl.param')
     if not os.path.isfile(params):
         return None
     out = os.path.join(base, 'build', 'sitl_gui', 'default_eeprom.bin')

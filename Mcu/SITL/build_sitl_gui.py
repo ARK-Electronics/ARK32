@@ -97,7 +97,7 @@ def main():
         cmd += ['--add-binary', '%s%s%s' % (staged, sep, 'sitl')]
         # the default eeprom is generated from the parameter file, not
         # copied: no eeprom binary is committed
-        params = os.path.join(HERE, 'data/VIMDRONES_NANO_2216/sitl.param')
+        params = os.path.join(HERE, 'data/ARK_4IN1_F051/sitl.param')
         if os.path.isfile(params):
             ee = sitl_params.write_eeprom(
                 params, os.path.join(stage, 'default_eeprom.bin'))

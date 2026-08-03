@@ -33,6 +33,14 @@
       cmd 7 SET_STUCK: float 0..1, stuck rotor fraction (prop blocked
         by an obstruction, e.g. a tree branch): scales the model's
         holding torque, 1.0 locks the rotor rigidly
+      ARK test extensions (free cmd numbers above the upstream set):
+      cmd 8 ZC_FAULT: pad byte = mode (0 off, 1 drop all comparator
+        edge deliveries, 2 drop every other commutation window),
+        u32 duration_us. For blind-step/missed-ZC path tests.
+      cmd 9 ZC_STATS: no payload; replies with the commutation
+        tracking snapshot (magic 0x5356, versioned fields)
+      cmd 10 GOV_FORCE: u16 slope_q10, u16 conf — force governor
+        state for un-latch engagement tests
   SITL -> client:
     u16 magic 0x5354, u8 version=1, u8 count, count * sample
     u16 magic 0x5355, u8 ok, u8 pad, message   (LOAD_MODEL reply)
@@ -58,6 +66,9 @@
 #include "sitl_config.h"
 #include "motor.h"
 #include "sitl_net.h"
+#include "bemf_zc.h"
+#include "motor_runtime.h"
+#include "runtime_loop.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -526,6 +537,83 @@ void sitl_state_poll(void)
 		audio_have_sub = true;
 		audio_expire = time(NULL) + 2;
 		sub_save_env(AUDIO_SUB_ENV, &audio_addr);
+	} else if (cmd == 8 && ret >= 8) {
+		// ZC_FAULT — see motor_zc_fault()
+		uint32_t duration_us;
+		memcpy(&duration_us, pkt + 4, 4);
+		motor_zc_fault(pkt[3], duration_us);
+	} else if (cmd == 9) {
+		// ZC_STATS — racy reads of firmware globals are fine: every
+		// field is a naturally-aligned scalar and the client polls.
+		// Magic 0x5356 matches the ARK pytest suite (versioned;
+		// fields only ever APPENDED). Unrelated to tone events,
+		// which share the magic but are only pushed to tone
+		// subscribers.
+		struct __attribute__((packed)) {
+			uint16_t magic;
+			uint8_t version;
+			uint8_t pad;
+			uint32_t zero_crosses;
+			uint32_t commutation_interval;
+			uint32_t dropped_edges;
+			uint32_t desync_happened;
+			uint8_t old_routine;
+			uint8_t running;
+			uint8_t armed;
+			uint8_t zc_blind_steps;
+			uint8_t zc_miss_bucket;
+			uint8_t zc_deadline_armed;
+			uint8_t dcm_hold_ms;
+			uint8_t pad2;
+			uint16_t dcm_hold_value;
+			uint8_t adv_kerpm_hold_ms;
+			uint8_t pad3;
+			uint16_t adv_kerpm_hold;
+			int32_t zc_trend;
+			uint32_t zc_predicted;
+			uint16_t wait_time;
+			uint16_t advance_val;
+			uint16_t gov_conf_v;
+			uint16_t gov_slope_q10_v;
+			uint16_t gov_duty_ceiling_v;
+			uint16_t gov_stuck_ms_v;
+			uint16_t gov_release_ceil_v;
+			uint16_t gov_unlatch_count_v;
+		} reply = {
+			.magic = 0x5356,
+			.version = 5,
+			.zero_crosses = zero_crosses,
+			.commutation_interval = commutation_interval,
+			.dropped_edges = motor_zc_dropped(),
+			.desync_happened = desync_happened,
+			.old_routine = (uint8_t)old_routine,
+			.running = running,
+			.armed = (uint8_t)armed,
+			.zc_blind_steps = zc_blind_steps,
+			.zc_miss_bucket = zc_miss_bucket,
+			.zc_deadline_armed = zc_deadline_armed,
+			.dcm_hold_ms = dcm_hold_ms,
+			.dcm_hold_value = dcm_hold_value,
+			.adv_kerpm_hold_ms = adv_kerpm_hold_ms,
+			.adv_kerpm_hold = adv_kerpm_hold,
+			.zc_trend = bemfZcGetTrend(),
+			.zc_predicted = bemfZcGetPredicted(),
+			.wait_time = waitTime,
+			.advance_val = advance,
+			.gov_conf_v = gov_conf,
+			.gov_slope_q10_v = gov_slope_q10,
+			.gov_duty_ceiling_v = gov_duty_ceiling,
+			.gov_stuck_ms_v = gov_stuck_ms,
+			.gov_release_ceil_v = gov_release_ceil,
+			.gov_unlatch_count_v = gov_unlatch_count,
+		};
+		sendto(fd, &reply, sizeof(reply), 0, (struct sockaddr *)&src, sizeof(src));
+	} else if (cmd == 10 && ret >= 8) {
+		// GOV_FORCE: u16 slope_q10, u16 conf
+		uint16_t slope, conf;
+		memcpy(&slope, pkt + 4, 2);
+		memcpy(&conf, pkt + 6, 2);
+		runtimeGovForceForTest(slope, conf);
 	}
 }
 

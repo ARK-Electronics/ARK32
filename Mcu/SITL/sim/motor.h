@@ -36,6 +36,13 @@ void motor_log_mainloop(void);
 // commutation debug logging, called from comStep
 void motor_log_commutation(int step);
 
+// zero-cross fault injection (state port cmd 8): suppress comparator EXTI
+// delivery so the firmware's missed-ZC blind-step path can be exercised
+// deterministically. mode 0 off, 1 drop all, 2 alternate windows.
+void motor_zc_fault(uint8_t mode, uint32_t duration_us);
+// total edge deliveries dropped by the fault gate (monotonic)
+uint32_t motor_zc_dropped(void);
+
 // generic event logging into the same debug ring
 enum motor_ev {
 	MEV_COMMUTATE = 0, // a = step
