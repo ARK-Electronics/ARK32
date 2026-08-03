@@ -310,6 +310,7 @@ void setInput()
 			// faultHandleStuckRotorIfNeeded gate above honors that flag;
 			// the episode rail is independent of it).
 			if (!escIsDriving() && !escIsFault() && !faultDesyncRestartHoldoffActive()) {
+				/* comStep/fullBrake gateDriverEnsure() wakes DRV once. */
 				allOff();
 				if (!old_routine) {
 					startMotor();
@@ -407,8 +408,9 @@ void setInput()
 								if (prop_brake_duty_cycle >= (1999)) {
 									fullBrake();
 								} else {
-									proportionalBrake();
+									/* Flag first so gateDriverPoll will not sleep mid-brake. */
 									prop_brake_active = 1;
+									proportionalBrake(); /* gateDriverEnsure inside */
 								}
 							}
 #	else

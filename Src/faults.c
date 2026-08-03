@@ -17,6 +17,7 @@
 #include "bemf_zc.h"
 #include "targets.h"
 #include "esc_state.h"
+#include "gate_driver.h"
 #include "IO.h"
 #include "sounds.h"
 
@@ -73,6 +74,14 @@ uint8_t faultGateDriverFaultActive(void)
 void faultPollGateDriver(void)
 {
 #if defined(USE_DRV_NFAULT)
+	/*
+	 * While intentionally asleep the DRV is off — nFAULT is not meaningful
+	 * (may float or deassert). Only poll when the driver is awake.
+	 */
+	if (!gateDriverIsAwake()) {
+		return;
+	}
+
 	/* Active low (open-drain). High = healthy. */
 	const uint8_t pin_ok = (NFAULT_PORT->IDR & NFAULT_PIN) != 0u;
 
@@ -101,9 +110,7 @@ void faultPollGateDriver(void)
 		if (adjusted_input == 0) {
 			if (++drv_enable_retry_div >= 2000u) {
 				drv_enable_retry_div = 0;
-				DRV_ENABLE_PORT->BRR = DRV_ENABLE_PIN;
-				delayMicros(50);
-				DRV_ENABLE_PORT->BSRR = DRV_ENABLE_PIN;
+				gateDriverFaultResetPulse();
 			}
 		} else {
 			drv_enable_retry_div = 0;

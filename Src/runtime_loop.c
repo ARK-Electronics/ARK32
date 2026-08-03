@@ -9,6 +9,7 @@
 #include "motor_runtime.h"
 #include "faults.h"
 #include "esc_state.h"
+#include "gate_driver.h"
 #include "control_loop.h"
 #include "commutation.h"
 #include "bemf_zc.h"
@@ -592,6 +593,8 @@ void runtimeMotorModeTick(void)
 {
 	/* Once per main loop: ISR flag side-effects → named esc_state (not in 20 kHz). */
 	escReconcileFromFlags();
+	/* Sleep DRV ENABLE / nSLEEP when not driving, braking, or beeping. */
+	gateDriverPoll();
 	stuckcounter = 0;
 	/* Post-desync coast: do not re-enter six-step until holdoff expires.
 	 * (setInput's start branch is gated the same way - this alone cannot

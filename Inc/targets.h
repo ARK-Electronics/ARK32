@@ -105,7 +105,9 @@
 
 /*
 	 * DRV8350H (hardware interface):
-	 *   ENABLE  = PC9  (DRV_ENABLE) — must be high for gate drive
+	 *   ENABLE  = PC9  (DRV_ENABLE) — high = awake, low = sleep (~µA on VM).
+	 *             Gated by gate_driver.c: asleep when disarmed / armed-idle,
+	 *             awake for beeps, drive, and brake (tWAKE ≈ 1 ms).
 	 *   nFAULT  = PA12 (FAULT_N) — open-drain, external 20k to 3.3V;
 	 *             asserts on VDS OCP (resistor-set on VDS pin), UVLO, OTW, GDF
 	 * Mode / IDRIVE / VDS thresholds are hardwired on the board; firmware
@@ -140,6 +142,7 @@
 #	define CURRENT_ADC_CHANNEL LL_ADC_CHANNEL_3
 #	define CURRENT_ADC_PIN LL_GPIO_PIN_3
 #	define USE_SERIAL_TELEMETRY
+/* DRV8328 nSLEEP (PA15): high = awake. Same gate_driver.c policy as G431 ENABLE. */
 #	define USE_DRV8328_NSLEEP
 #	define NSLEEP_PORT GPIOA
 #	define NSLEEP_PIN LL_GPIO_PIN_15
