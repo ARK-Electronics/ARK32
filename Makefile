@@ -290,7 +290,8 @@ factory-image: $(FACTORY_PRODUCT)
 
 # Build + layout/defaults gate used by CI (.github/workflows/static-analysis.yml).
 factory-image-check: factory-image
-	$(QUIET)bash scripts/check-factory-image-ark.sh
+	$(QUIET)BL_IMAGE_F051=$(BL_IMAGE_F051) FACTORY_DEFAULTS=$(FACTORY_DEFAULTS) \
+		bash scripts/check-factory-image-ark.sh
 
 # Code formatting (clang-format ≈ PX4 astyle/Linux look; see .clang-format).
 # Same target names as PX4:
