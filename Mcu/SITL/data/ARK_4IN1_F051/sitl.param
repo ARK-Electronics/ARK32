@@ -1,0 +1,19 @@
+# ARK 4IN1 F051 factory-like defaults for SITL GUI / launcher tests
+
+MAX_RAMP                  20
+MIN_DUTY_CYCLE             4
+ADVANCE_LEVEL             16
+MOTOR_KV                  25   # 1020 Kv (factory)
+MOTOR_POLES               14
+VARIABLE_PWM               1
+PWM_FREQUENCY             24
+INPUT_SIGNAL_TYPE          5
+CAN_NODE                  30
+ESC_INDEX                  0
+REQUIRE_ARMING             0
+TELEM_RATE                50
+REQUIRE_ZERO_THROTTLE      1
+FILTER_HZ                  0
+DEBUG_RATE               100
+CURRENT_LIMIT            102
+TEMPERATURE_LIMIT        141

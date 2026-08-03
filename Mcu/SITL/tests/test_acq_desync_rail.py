@@ -42,7 +42,7 @@ def _open_ctl(sitl):
 
 def _zc_stats(ctl, retries=5):
     for _ in range(retries):
-        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 4, 0))
+        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
         try:
             pkt = ctl.recv(64)
         except socket.timeout:

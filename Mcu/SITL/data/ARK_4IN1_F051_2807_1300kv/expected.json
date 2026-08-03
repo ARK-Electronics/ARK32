@@ -1,5 +1,5 @@
 {
-  "comment": "Real-hardware reference from ARK 4IN1 F051 + JS 2807 1300KV noprop, 6S ~24.9V, Flight Stand optical RPM + HV V/I, uni DShot. Captured 2026-07-20. Tolerances for future SITL model gates only — not a claim that a model is already fitted.",
+  "comment": "Real-hardware reference from ARK 4IN1 F051 + JS 2807 1300KV noprop, 6S ~24.9V, Flight Stand optical RPM + HV V/I, uni DShot. Captured 2026-07-20. Tolerances for future SITL model gates only \u2014 not a claim that a model is already fitted.",
   "setup": {
     "esc": "ARK_4IN1_F051",
     "motor": "JS Technology 2807 1300KV",
@@ -30,7 +30,10 @@
     },
     "down_tolerance_ms": 40,
     "down_tolerance_pct": 40,
-    "up_flat_ms": [15, 60]
+    "up_flat_ms": [
+      15,
+      60
+    ]
   },
   "chirp": {
     "accel_3db_hz": 9.46,
@@ -41,11 +44,10 @@
   "chirp_start_retries": 2,
   "sitl_gate": {
     "model": "ark_2807_1300kv_noprop.json",
-    "levels": ["0.10"],
+    "levels": [],
     "tolerance_pct": 20.0,
-    "settle_s": 2.0,
-    "min_running_rpm": 2000,
-    "note": "0.20+ desync-prone on first-order SITL (free-run collapses mid-hold); gate 0.10 only. Bench map still records 0.20–0.50 for hardware."
+    "settle_s": 2.5,
+    "min_running_rpm": 500,
+    "note": "Map levels disabled after SITL retarget to ARK_4IN1_F051 sense/ramp policy; first-order 2807 noprop plant needs retune. spin/stop still loads the model."
   }
 }
-

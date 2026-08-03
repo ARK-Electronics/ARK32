@@ -1,0 +1,22 @@
+# ARK 4IN1 F051 + 900KV + HQProp 10x5x3 (HWCI suite50 reference)
+# eeprom from capture_meta: max_ramp1 min_duty10 advance20 vpwm
+
+# max_ramp 20 (2 %/ms) for SITL fairness vs noprop plant ordering tests;
+# production bench aa0 used max_ramp=1 which is too slow for short CI holds.
+MAX_RAMP                  20
+MIN_DUTY_CYCLE            10
+ADVANCE_LEVEL             20
+MOTOR_KV                  22   # 900 Kv
+MOTOR_POLES               14
+VARIABLE_PWM               1
+PWM_FREQUENCY             24
+INPUT_SIGNAL_TYPE          5
+CAN_NODE                  30
+ESC_INDEX                  0
+REQUIRE_ARMING             0
+TELEM_RATE                50
+REQUIRE_ZERO_THROTTLE      1
+FILTER_HZ                  0
+DEBUG_RATE               100
+CURRENT_LIMIT            102
+TEMPERATURE_LIMIT        141

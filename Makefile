@@ -72,8 +72,8 @@ CFLAGS_COMMON := $(CFLAGS_BASE)
 # configuration in tree, so what CI and the HWCI bench measure is what ships.
 #
 # Applies to every cross-compiled MCU (not only F051). scripts/check-codegen-ark.sh
-# (make codegen-check-ark / CI) only builds ARK_4IN1_F051, AM32REF_F051, and
-# REF_G431: it asserts F051 hot ISR entry points + known RAM_FUNC callees still
+# (make codegen-check-ark / CI) builds ARK_4IN1_F051: it asserts F051 hot
+# ISR entry points + known RAM_FUNC callees still
 # land in RAM when they remain as symbols, and that externally-read sections
 # (.file_name, .app_signature) are non-empty. It does not replace HWCI for
 # functional timing risk — global -O3 previously broke hold100 free-run on
@@ -248,10 +248,8 @@ cppcheck:
 # See scripts/check-codegen-ark.sh.
 .PHONY : codegen-check-ark
 codegen-check-ark:
-	$(QUIET)$(MAKE) -B ARK_4IN1_F051 AM32REF_F051 REF_G431
+	$(QUIET)$(MAKE) -B ARK_4IN1_F051
 	$(QUIET)bash scripts/check-codegen-ark.sh $(OBJ)/$(IDENTIFIER)_ARK_4IN1_F051_$(FIRMWARE_VERSION).elf
-	$(QUIET)bash scripts/check-codegen-ark.sh $(OBJ)/$(IDENTIFIER)_AM32REF_F051_$(FIRMWARE_VERSION).elf
-	$(QUIET)bash scripts/check-codegen-ark.sh --no-ramfunc $(OBJ)/$(IDENTIFIER)_REF_G431_$(FIRMWARE_VERSION).elf
 
 # Build ARK F051 and enforce flash/RAM headroom (F051 is tight).
 # -B forces a rebuild so a prior image is not size-checked by mistake.

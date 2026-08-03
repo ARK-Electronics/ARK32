@@ -20,50 +20,72 @@
         coarse periods)
       cmd 1 LOAD_MODEL: JSON file path (rest of packet)
       cmd 2 SET_SPEEDUP: float speedup (0 = free run)
-      cmd 3 ZC_FAULT: pad byte = mode (0 off, 1 drop all comparator
+      cmd 3 SUBSCRIBE_TONES: no payload. Streams tone events: the
+        firmware beeps by driving the motor PWM at an audible
+        frequency (sounds.c), which shows up here as TIM1 PSC > 0.
+        An event is sent on every tone change plus a 20Hz wall-clock
+        keepalive so a lost "off" event cannot leave a stuck tone.
+      cmd 4 SUBSCRIBE_AUDIO: no payload. Streams physics audio: what
+        the motor radiates acoustically, derived from torque ripple
+        plus phase current magnitude, high-pass filtered and sampled
+        at 48kHz of SIMULATED time (pitch scales with speedup, as
+        slow motion should sound)
+      cmd 7 SET_STUCK: float 0..1, stuck rotor fraction (prop blocked
+        by an obstruction, e.g. a tree branch): scales the model's
+        holding torque, 1.0 locks the rotor rigidly
+      ARK test extensions (free cmd numbers above the upstream set):
+      cmd 8 ZC_FAULT: pad byte = mode (0 off, 1 drop all comparator
         edge deliveries, 2 drop every other commutation window),
         u32 duration_us. For blind-step/missed-ZC path tests.
-      cmd 4 ZC_STATS: no payload; replies with the commutation
-        tracking snapshot below
+      cmd 9 ZC_STATS: no payload; replies with the commutation
+        tracking snapshot (magic 0x5356, versioned fields)
+      cmd 10 GOV_FORCE: u16 slope_q10, u16 conf — force governor
+        state for un-latch engagement tests
   SITL -> client:
     u16 magic 0x5354, u8 version=1, u8 count, count * sample
     u16 magic 0x5355, u8 ok, u8 pad, message   (LOAD_MODEL reply)
-    u16 magic 0x5356, u8 version=5, u8 pad, u32 zero_crosses,
-      u32 commutation_interval, u32 dropped_edges, u32 desync_happened,
-      u8 old_routine, u8 running, u8 armed, u8 zc_blind_steps,
-      u8 zc_miss_bucket, u8 zc_deadline_armed,
-      u8 dcm_hold_ms, u8 pad2, u16 dcm_hold_value,       (v2 PR 62)
-      u8 adv_kerpm_hold_ms, u8 pad3, u16 adv_kerpm_hold, (v3 PR 63)
-      i32 zc_trend, u32 zc_predicted, u16 waitTime, u16 advance, (v4 PR 64)
-      u16 gov_conf, u16 gov_slope_q10, u16 gov_duty_ceiling,
-      u16 gov_stuck_ms, u16 gov_release_ceil, u16 gov_unlatch_count (v5 PR 65)
-      (ZC_STATS reply). Fields are only ever APPENDED and the version is
-      bumped; clients that unpack a shorter prefix keep working unchanged
-      (they length-check with >=), which is why v1 readers such as
-      test_blind_step.py and the v2/v3 hold tests need no edit.
-      cmd 5 GOV_FORCE: u16 slope_q10, u16 conf — force governor state for
-        un-latch engagement tests (see runtimeGovForceForTest).
+
+  eeprom access (cmd 5/6) lets a local tool read and edit the ESC
+  settings directly, without the 4-way or DroneCAN parameter paths:
+    cmd 5: fetch, replies 0x5356-tagged image (u16 magic, u8 cmd=5,
+           u8 len_hi... see eeprom_reply below)
+    cmd 6: set, u16 offset, u16 length, bytes[]; writes the live
+           eepromBuffer and the backing file
+    u16 magic 0x5356, u8 version=1, u8 source, u64 t_ns (simulated),
+        float freq_hz, float amplitude   (tone event; amplitude is
+        the raw PWM duty fraction, 0 = silence; source 0 = TIM1
+        synthesized, source 1 = physics audio stream active)
+    u16 magic 0x5357, u8 version=1, u8 count, u64 t0_ns (simulated,
+        first sample), u32 sample_period_ns, count * float
+        (physics audio samples, arbitrary linear units)
 */
 
+#include "eeprom.h"
+#include "targets.h"
 #include "sitl.h"
 #include "sitl_config.h"
 #include "motor.h"
+#include "sitl_net.h"
+#include "bemf_zc.h"
 #include "motor_runtime.h"
 #include "runtime_loop.h"
-#include "bemf_zc.h"
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef _WIN32
+#	define setenv(name, val, overwrite) _putenv_s((name), (val))
+#	define unsetenv(name) _putenv(name "=")
+#endif
 
 #define STATE_MAGIC_CMD 0x5353
 #define STATE_MAGIC_DATA 0x5354
 #define STATE_MAGIC_REPLY 0x5355
+#define STATE_MAGIC_TONE 0x5356
+#define STATE_MAGIC_AUDIO 0x5357
 
 struct __attribute__((packed)) state_sample {
 	uint64_t t_ns;
@@ -100,6 +122,165 @@ static struct __attribute__((packed)) {
 	struct state_sample s[STATE_BATCH];
 } batch = {.magic = STATE_MAGIC_DATA, .version = 2};
 
+// tone event stream (cmd 3)
+static struct sockaddr_in tone_addr;
+static bool tone_have_sub;
+static time_t tone_expire;
+static uint32_t tone_raw[5]; // last seen psc, arr, ccr[3]
+static uint8_t tone_raw_modes[3];
+static float tone_freq, tone_amp; // last sent
+static uint64_t tone_last_tx_wall_ns;
+
+#define TONE_KEEPALIVE_NS 50000000ULL
+
+/*
+  physics audio stream (cmd 4): 48kHz of simulated time, batched.
+  Each sample is the mean over its period of the torque plus a
+  weighted phase current magnitude, both high-pass filtered to strip
+  the DC operating point and keep only the audible ripple
+ */
+#define AUDIO_RATE_HZ 48000
+#define AUDIO_PERIOD_NS (1000000000ULL / AUDIO_RATE_HZ)
+#define AUDIO_BATCH 64
+// N*m per A weighting of the current magnitude term: keeps beeps
+// audible when the rotor happens to sit at a zero-torque angle
+#define AUDIO_CURRENT_WEIGHT 0.02
+// one pole high pass at ~40Hz: a = 1 - 2*pi*fc/fs
+#define AUDIO_HPF_A 0.9948
+
+static struct sockaddr_in audio_addr;
+static bool audio_have_sub;
+static time_t audio_expire;
+static double audio_acc[2];
+static uint32_t audio_acc_n;
+static uint64_t audio_next_ns;
+static double audio_hp_y[2], audio_hp_x[2]; // HPF state per signal
+
+static struct __attribute__((packed)) {
+	uint16_t magic;
+	uint8_t version;
+	uint8_t count;
+	uint64_t t0_ns;
+	uint32_t period_ns;
+	float s[AUDIO_BATCH];
+} audio_batch = {.magic = STATE_MAGIC_AUDIO, .version = 1, .period_ns = (uint32_t)AUDIO_PERIOD_NS};
+
+static void audio_step(uint64_t now_ns)
+{
+	if (!audio_have_sub) {
+		return;
+	}
+	motor_add_audio(audio_acc);
+	audio_acc_n++;
+	if (now_ns < audio_next_ns) {
+		return;
+	}
+	audio_next_ns = now_ns + AUDIO_PERIOD_NS;
+
+	double s = 0;
+	for (int k = 0; k < 2; k++) {
+		const double x = audio_acc[k] / audio_acc_n;
+		audio_hp_y[k] = AUDIO_HPF_A * (audio_hp_y[k] + x - audio_hp_x[k]);
+		audio_hp_x[k] = x;
+		s += k == 0 ? audio_hp_y[k] : AUDIO_CURRENT_WEIGHT * audio_hp_y[k];
+	}
+	audio_acc[0] = audio_acc[1] = 0;
+	audio_acc_n = 0;
+
+	if (audio_batch.count == 0) {
+		audio_batch.t0_ns = now_ns;
+	}
+	audio_batch.s[audio_batch.count++] = (float)s;
+	if (audio_batch.count >= AUDIO_BATCH) {
+		sendto(fd, &audio_batch, sizeof(audio_batch), 0, (struct sockaddr *)&audio_addr, sizeof(audio_addr));
+		audio_batch.count = 0;
+	}
+}
+
+/*
+  tone/audio subscribers are preserved across an emulated reset (which
+  re-execs the process) via the environment, so the boot tune after a
+  reset is delivered from its first note. The expiry still applies if
+  the subscriber is gone
+ */
+#define TONE_SUB_ENV "AM32_SITL_TONE_SUB"
+#define AUDIO_SUB_ENV "AM32_SITL_AUDIO_SUB"
+
+static void sub_save_env(const char *env, const struct sockaddr_in *a)
+{
+	char buf[32];
+	snprintf(buf, sizeof(buf), "%s:%u", inet_ntoa(a->sin_addr), ntohs(a->sin_port));
+	setenv(env, buf, 1);
+}
+
+static bool sub_restore_env(const char *env, struct sockaddr_in *a)
+{
+	const char *val = getenv(env);
+	char ip[24];
+	unsigned port;
+	if (val == NULL || sscanf(val, "%23[0-9.]:%u", ip, &port) != 2) {
+		return false;
+	}
+	memset(a, 0, sizeof(*a));
+	a->sin_family = AF_INET;
+	a->sin_addr.s_addr = inet_addr(ip);
+	a->sin_port = htons((uint16_t)port);
+	return true;
+}
+
+static void tone_send(uint64_t now_ns)
+{
+	struct __attribute__((packed)) {
+		uint16_t magic;
+		uint8_t version;
+		uint8_t source;
+		uint64_t t_ns;
+		float freq_hz;
+		float amplitude;
+	} ev = {STATE_MAGIC_TONE, 1, 0, now_ns, tone_freq, tone_amp};
+	sendto(fd, &ev, sizeof(ev), 0, (struct sockaddr *)&tone_addr, sizeof(tone_addr));
+	tone_last_tx_wall_ns = sitl_wallclock_ns();
+}
+
+/*
+  detect an audible tone from the latched TIM1 state. Only sounds.c
+  ever sets a non-zero PWM prescaler, so PSC > 0 with a driven phase
+  is a beep; running motor code changes ARR/CCR only
+ */
+static void tone_step(uint64_t now_ns)
+{
+	if (!tone_have_sub) {
+		return;
+	}
+	uint32_t raw[5];
+	sitl_tim1_get_active(&raw[0], &raw[1], &raw[2]);
+	if (memcmp(raw, tone_raw, sizeof(raw)) == 0 && memcmp((const void *)sitl_phase_mode, tone_raw_modes, 3) == 0) {
+		return;
+	}
+	memcpy(tone_raw, raw, sizeof(raw));
+	memcpy(tone_raw_modes, (const void *)sitl_phase_mode, 3);
+
+	const uint32_t psc = raw[0], arr = raw[1];
+	uint32_t ccr = 0;
+	for (int p = 0; p < 3; p++) {
+		const uint8_t mode = tone_raw_modes[p];
+		if ((mode == SITL_PHASE_PWM || mode == SITL_PHASE_PWM_NOCOMP) && raw[2 + p] > ccr) {
+			ccr = raw[2 + p];
+		}
+	}
+	const float freq = 160e6f / (float)((psc + 1) * (arr + 1));
+	float new_freq = 0, new_amp = 0;
+	if (psc > 0 && ccr > 0 && freq < 20000) {
+		new_freq = freq;
+		new_amp = (float)ccr / (float)(arr + 1);
+	}
+	if (new_freq != tone_freq || new_amp != tone_amp) {
+		tone_freq = new_freq;
+		tone_amp = new_amp;
+		tone_send(now_ns);
+	}
+}
+
 void sitl_state_init(void)
 {
 	if (sitl_cfg.state_port <= 0) {
@@ -119,23 +300,42 @@ void sitl_state_init(void)
 	addr.sin_addr.s_addr = htonl(sitl_cfg.bind_any ? INADDR_ANY : INADDR_LOOPBACK);
 	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
 		perror("SITL: state bind");
-		close(fd);
+		closesocket(fd);
 		fd = -1;
 		return;
 	}
 	fprintf(stderr, "SITL: state/model port udp %d\n", sitl_cfg.state_port);
+	if (sub_restore_env(TONE_SUB_ENV, &tone_addr)) {
+		tone_have_sub = true;
+		tone_expire = time(NULL) + 2;
+	}
+	if (sub_restore_env(AUDIO_SUB_ENV, &audio_addr)) {
+		audio_have_sub = true;
+		audio_expire = time(NULL) + 2;
+	}
 }
 
 static void load_model(const char *path, struct sockaddr_in *src)
 {
 	char msg[256];
+	// report just the file name, not the full path the GUI sent
+	const char *base = path;
+	for (const char *p = path; *p; p++) {
+		if (*p == '/' || *p == '\\') {
+			base = p + 1;
+		}
+	}
 	const bool ok = sitl_config_reload(path);
 	if (ok) {
 		motor_config_changed();
-		snprintf(msg, sizeof(msg), "loaded %.200s", path);
+		// a firmware reboot does not swap the physical motor, so the
+		// runtime model must survive the emulated reset (which re-execs
+		// with the original argv and would otherwise reload --config)
+		setenv("AM32_SITL_MODEL", path, 1);
+		snprintf(msg, sizeof(msg), "loaded %.200s", base);
 		fprintf(stderr, "SITL: %s\n", msg);
 	} else {
-		snprintf(msg, sizeof(msg), "failed to load %.200s", path);
+		snprintf(msg, sizeof(msg), "failed to load %.200s", base);
 		fprintf(stderr, "SITL: %s\n", msg);
 	}
 	struct __attribute__((packed)) {
@@ -143,6 +343,69 @@ static void load_model(const char *path, struct sockaddr_in *src)
 		uint8_t ok;
 		uint8_t pad;
 		char msg[256];
+	} reply = {.magic = STATE_MAGIC_REPLY, .ok = ok, .pad = 0};
+	strncpy(reply.msg, msg, sizeof(reply.msg) - 1);
+	sendto(fd, &reply, 4 + strlen(reply.msg) + 1, 0, (struct sockaddr *)src, sizeof(*src));
+}
+
+/*
+  eeprom access for a local editor (cmd 5 fetch / cmd 6 set). This
+  deliberately bypasses the 4-way and DroneCAN parameter paths: it
+  edits the simulated ESC's settings the way a bench technician would
+  reflash them, which is what the GUI parameter editor wants
+ */
+#define STATE_MAGIC_EEPROM 0x5358
+
+static void eeprom_fetch(struct sockaddr_in *src)
+{
+	// the simulated motor travels with the image so an editor can flag
+	// settings that disagree with what is being simulated
+	struct __attribute__((packed)) {
+		uint16_t magic;
+		uint8_t cmd;
+		uint8_t pad;
+		uint16_t length;
+		uint16_t pad2;
+		float model_kv;
+		uint8_t model_poles;
+		uint8_t pad3[3];
+		uint8_t data[sizeof(eepromBuffer.buffer)];
+	} reply = {.magic = STATE_MAGIC_EEPROM,
+		   .cmd = 5,
+		   .pad = 0,
+		   .length = (uint16_t)sizeof(eepromBuffer.buffer),
+		   .pad2 = 0,
+		   .model_kv = sitl_cfg.motor.kv,
+		   .model_poles = (uint8_t)sitl_cfg.motor.poles};
+	memcpy(reply.data, eepromBuffer.buffer, sizeof(reply.data));
+	sendto(fd, &reply, 16 + sizeof(reply.data), 0, (struct sockaddr *)src, sizeof(*src));
+}
+
+static void eeprom_set(uint16_t off, uint16_t len, const uint8_t *data, int avail, struct sockaddr_in *src)
+{
+	char msg[128];
+	bool ok = false;
+	if (len > (uint16_t)avail) {
+		snprintf(msg, sizeof(msg), "truncated: %u bytes for length %u", (unsigned)avail, (unsigned)len);
+	} else if ((int)off + (int)len > (int)sizeof(eepromBuffer.buffer)) {
+		snprintf(msg, sizeof(msg), "range %u+%u past the eeprom (%u bytes)", (unsigned)off, (unsigned)len,
+			 (unsigned)sizeof(eepromBuffer.buffer));
+	} else {
+		memcpy(eepromBuffer.buffer + off, data, len);
+		// persist the whole image so the file always matches the live
+		// settings, then let the firmware re-read them
+		save_flash_nolib(eepromBuffer.buffer, sizeof(eepromBuffer.buffer), EEPROM_START_ADD);
+		extern void loadEEpromSettings(void);
+		loadEEpromSettings();
+		ok = true;
+		snprintf(msg, sizeof(msg), "wrote %u bytes at %u", (unsigned)len, (unsigned)off);
+		fprintf(stderr, "SITL: eeprom %s\n", msg);
+	}
+	struct __attribute__((packed)) {
+		uint16_t magic;
+		uint8_t ok;
+		uint8_t pad;
+		char msg[128];
 	} reply = {.magic = STATE_MAGIC_REPLY, .ok = ok, .pad = 0};
 	strncpy(reply.msg, msg, sizeof(reply.msg) - 1);
 	sendto(fd, &reply, 4 + strlen(reply.msg) + 1, 0, (struct sockaddr *)src, sizeof(*src));
@@ -176,6 +439,18 @@ void sitl_state_poll(void)
 	}
 	if (have_sub && time(NULL) > sub_expire) {
 		have_sub = false;
+	}
+	if (tone_have_sub) {
+		if (time(NULL) > tone_expire) {
+			tone_have_sub = false;
+			unsetenv(TONE_SUB_ENV);
+		} else if (sitl_wallclock_ns() - tone_last_tx_wall_ns > TONE_KEEPALIVE_NS) {
+			tone_send(sitl_time_ns());
+		}
+	}
+	if (audio_have_sub && time(NULL) > audio_expire) {
+		audio_have_sub = false;
+		unsetenv(AUDIO_SUB_ENV);
 	}
 	uint8_t pkt[512];
 	struct sockaddr_in src;
@@ -215,15 +490,65 @@ void sitl_state_poll(void)
 			// the pacing loop rebases its references on change
 			sitl_cfg.speedup = speedup;
 			apply_period();
+			// survive the re-exec of an emulated reset, like the
+			// tone/audio subscribers (sitl_config.c reads it back)
+			char buf[24];
+			snprintf(buf, sizeof(buf), "%g", (double)speedup);
+			setenv("AM32_SITL_SPEEDUP", buf, 1);
 			fprintf(stderr, "SITL: speedup %.3f\n", (double)speedup);
 		}
-	} else if (cmd == 3 && ret >= 8) {
+	} else if (cmd == 3) {
+		tone_addr = src;
+		tone_have_sub = true;
+		tone_expire = time(NULL) + 2;
+		sub_save_env(TONE_SUB_ENV, &tone_addr);
+		memset(tone_raw, 0xff, sizeof(tone_raw)); // force recompute
+		tone_step(sitl_time_ns());
+		tone_send(sitl_time_ns()); // snapshot for the (re)subscriber
+	} else if (cmd == 7 && ret >= 8) {
+		float stuck;
+		memcpy(&stuck, pkt + 4, 4);
+		if (stuck >= 0 && stuck <= 1) {
+			sitl_cfg.stuck = stuck;
+			// survive the re-exec of an emulated reset: the obstruction
+			// is still in the prop when the firmware reboots
+			char buf[24];
+			// full precision: %g would round 0.99899 up across the
+			// 1.0 rigid-lock threshold on the way through the reset
+			snprintf(buf, sizeof(buf), "%.9g", (double)stuck);
+			setenv("AM32_SITL_STUCK", buf, 1);
+			fprintf(stderr, "SITL: stuck rotor %.2f\n", (double)stuck);
+		}
+	} else if (cmd == 5) {
+		eeprom_fetch(&src);
+	} else if (cmd == 6 && ret >= 8) {
+		uint16_t off, len;
+		memcpy(&off, pkt + 4, 2);
+		memcpy(&len, pkt + 6, 2);
+		eeprom_set(off, len, pkt + 8, (int)(ret - 8), &src);
+	} else if (cmd == 4) {
+		if (!audio_have_sub || src.sin_addr.s_addr != audio_addr.sin_addr.s_addr || src.sin_port != audio_addr.sin_port) {
+			audio_batch.count = 0;
+			audio_acc[0] = audio_acc[1] = 0;
+			audio_acc_n = 0;
+			audio_next_ns = 0;
+		}
+		audio_addr = src;
+		audio_have_sub = true;
+		audio_expire = time(NULL) + 2;
+		sub_save_env(AUDIO_SUB_ENV, &audio_addr);
+	} else if (cmd == 8 && ret >= 8) {
+		// ZC_FAULT — see motor_zc_fault()
 		uint32_t duration_us;
 		memcpy(&duration_us, pkt + 4, 4);
 		motor_zc_fault(pkt[3], duration_us);
-	} else if (cmd == 4) {
-		// racy reads of firmware globals are fine here: every field is a
-		// naturally-aligned scalar and the client polls
+	} else if (cmd == 9) {
+		// ZC_STATS — racy reads of firmware globals are fine: every
+		// field is a naturally-aligned scalar and the client polls.
+		// Magic 0x5356 matches the ARK pytest suite (versioned;
+		// fields only ever APPENDED). Unrelated to tone events,
+		// which share the magic but are only pushed to tone
+		// subscribers.
 		struct __attribute__((packed)) {
 			uint16_t magic;
 			uint8_t version;
@@ -238,20 +563,16 @@ void sitl_state_poll(void)
 			uint8_t zc_blind_steps;
 			uint8_t zc_miss_bucket;
 			uint8_t zc_deadline_armed;
-			/* v2: post-desync throttle-ceiling hold (PR #62). */
 			uint8_t dcm_hold_ms;
 			uint8_t pad2;
 			uint16_t dcm_hold_value;
-			/* v3: post-desync advance-schedule rpm hold (PR #63). */
 			uint8_t adv_kerpm_hold_ms;
 			uint8_t pad3;
 			uint16_t adv_kerpm_hold;
-			/* v4: accel-predictor consumer path (PR #64). */
 			int32_t zc_trend;
 			uint32_t zc_predicted;
 			uint16_t wait_time;
 			uint16_t advance_val;
-			/* v5: governor un-latch (PR #65). */
 			uint16_t gov_conf_v;
 			uint16_t gov_slope_q10_v;
 			uint16_t gov_duty_ceiling_v;
@@ -287,8 +608,8 @@ void sitl_state_poll(void)
 			.gov_unlatch_count_v = gov_unlatch_count,
 		};
 		sendto(fd, &reply, sizeof(reply), 0, (struct sockaddr *)&src, sizeof(src));
-	} else if (cmd == 5 && ret >= 8) {
-		// GOV_FORCE: pad unused; u16 slope_q10, u16 conf
+	} else if (cmd == 10 && ret >= 8) {
+		// GOV_FORCE: u16 slope_q10, u16 conf
 		uint16_t slope, conf;
 		memcpy(&slope, pkt + 4, 2);
 		memcpy(&conf, pkt + 6, 2);
@@ -299,6 +620,8 @@ void sitl_state_poll(void)
 // called from the sim thread on every physics step
 void sitl_state_step(uint64_t now_ns)
 {
+	tone_step(now_ns);
+	audio_step(now_ns);
 	if (!have_sub) {
 		return;
 	}

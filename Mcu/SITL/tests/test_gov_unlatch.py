@@ -56,7 +56,7 @@ def _open_ctl(sitl):
 def _zc_stats(ctl, retries=8):
     need = struct.calcsize(STATS_FMT)
     for _ in range(retries):
-        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 4, 0))
+        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
         try:
             pkt = ctl.recv(96)
         except socket.timeout:
@@ -71,7 +71,7 @@ def _zc_stats(ctl, retries=8):
 
 
 def _gov_force(ctl, slope_q10: int, conf: int):
-    ctl.send(struct.pack('<HBBHH', STATE_MAGIC_CMD, 5, 0, slope_q10 & 0xFFFF,
+    ctl.send(struct.pack('<HBBHH', STATE_MAGIC_CMD, 10, 0, slope_q10 & 0xFFFF,
                          conf & 0xFFFF))
 
 

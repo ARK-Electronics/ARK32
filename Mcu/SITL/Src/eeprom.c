@@ -64,4 +64,43 @@ void read_flash_bin(uint8_t *data, uint32_t add, int out_buff_len)
 		// short file, rest stays 0xFF
 	}
 	fclose(f);
+
+	/*
+      an existing eeprom (often created by the chained bootloader
+      before this binary ran, so the seeding above was skipped) can
+      describe a completely different motor to the one simulated.
+      That is not harmless: AM32 scales its low rpm power protection
+      window from MOTOR_KV, so a kv set far above the simulated motor
+      clamps duty_cycle_maximum and the motor sticks at a fraction of
+      its speed, drawing almost no current, with nothing obviously
+      wrong. Warn with the fix rather than let it look like a physics
+      problem
+     */
+	if (offset == 0 && out_buff_len > 27 && data[26] != 0xFF) {
+		static bool warned;
+		const float ee_kv = data[26] * 40.0f + 20.0f;
+		const float model_kv = sitl_cfg.motor.kv;
+		if (!warned && model_kv > 0 && (ee_kv > model_kv * 1.25f || ee_kv < model_kv * 0.8f)) {
+			warned = true;
+			fprintf(stderr,
+				"SITL: WARNING eeprom MOTOR_KV=%.0f but the simulated motor is "
+				"%.0f kv.\n"
+				"      AM32 low rpm power protection scales with MOTOR_KV, so "
+				"the motor may\n"
+				"      stick at low rpm drawing little current. Fix with:\n"
+				"        scripts/can_params.py --node-id <id> set MOTOR_KV %.0f "
+				"--save\n"
+				"      then restart (MOTOR_KV is read at boot), or delete the "
+				"eeprom file to\n"
+				"      have it seeded from the model.\n",
+				(double)ee_kv, (double)model_kv, (double)model_kv);
+		}
+		if (!warned && data[27] != 0xFF && data[27] != sitl_cfg.motor.poles) {
+			warned = true;
+			fprintf(stderr,
+				"SITL: WARNING eeprom MOTOR_POLES=%u but the simulated motor "
+				"has %u poles\n",
+				data[27], sitl_cfg.motor.poles);
+		}
+	}
 }

@@ -12,12 +12,32 @@ make AM32_SITL_CAN
 ```
 
 produces `obj/AM32_AM32_SITL_CAN_<version>.elf`, a normal Linux
-executable. SITL is **not** part of `make all` (that target stays
-cross-firmware only); use `make sitl` or the product name above.
+executable.
 
-Also note: RTC backup registers used by DroneCAN boot/FW-update handoff
-persist across SITL re-execs in a sibling file `<eeprom>.rtc` next to the
-eeprom backing file.
+### Sanitizers and valgrind
+
+`SITL_SANITIZE=address` builds with AddressSanitizer (heap/stack
+overflow and use-after-free), `SITL_SANITIZE=undefined` with UBSan, and
+both can be combined (`address,undefined`):
+
+```
+make AM32_SITL_CAN SITL_SANITIZE=address
+```
+
+Both run at close to full speed, so it is practical to leave a
+sanitizer on while driving the sim or running the whole test suite.
+`./asan.sh` and `./ubsan.sh` build the respective sanitizer if stale
+and run it, writing any reports to `asan.<pid>` / `ubsan.<pid>` files
+so they are not buried in the SITL's verbose output. ASan's leak
+detector only reports on a clean exit, so under the (kill-terminated)
+test harness ASan catches overflows and use-after-free during the run
+rather than leaks at exit. The whole test suite passes under each, and
+both run as their own CI jobs.
+
+`./valgrind.sh` runs the normal build under valgrind memcheck instead
+(slower - about a tenth of real time - but needs no special build).
+`--fair-sched=yes` is essential there or the firmware busy-wait starves
+the sim thread; the wrapper sets it.
 
 ## Running
 
@@ -45,12 +65,18 @@ Options:
   ports accept unauthenticated control, so only use on trusted networks
 - `--input-type N` force the eeprom INPUT_SIGNAL_TYPE setting (0=auto
   1=dshot 2=servo 5=dronecan)
-- `--speedup X` simulation speed relative to wall clock, 0 = free
-  running; clamped to `[0, 100]` (same as the GUI/state-port control)
+- `--speedup X` simulation speed relative to wall clock, 0 = free running
 - `--uid STR` string used to derive the 16 byte unique ID
 - `--verbose` 1Hz state line on stderr
 - `--nosleep` busy wait instead of sleeping. Uses two full CPU cores but
   avoids OS sleep/wakeup latency for the most accurate wall clock pacing
+- `--bootloader ELF` chain with the bootloader SITL from the
+  am32-bootloader repo: the process boots into the bootloader first
+  (as hardware does) and every reset lands back in it with the right
+  reset cause; the bootloader execs this firmware on jump. The two
+  share the eeprom file, the input/CAN ports, and `<eeprom>.bkup` (the
+  RTC backup registers carrying the DroneCAN firmware-update handoff).
+  The bootloader keeps its flash in `<eeprom>.blflash`. Default off
 
 The virtual ESC can then be controlled with the DroneCAN GUI tool or
 pydronecan on `mcast:0`. A test script is included:
@@ -86,14 +112,23 @@ packet format (little endian):
 | field | size | meaning |
 |-------|------|---------|
 | magic | u16  | 0x4453 |
-| type  | u8   | 0=PWM 1=DSHOT150 2=DSHOT300 3=DSHOT600 |
-| len   | u8   | payload bytes after the header (4) |
-| flags | u16  | bit0: line idle level (1 = idle high, bidir DShot) |
-| data  | u16  | PWM pulse width in us, or the full 16 bit DShot frame |
+| type  | u8   | 0=PWM 1=DSHOT150 2=DSHOT300 3=DSHOT600 4=SERIAL19200 5=LINE_LEVEL |
+| len   | u8   | payload bytes after the header (4; for type 4 the number of serial bytes, 1..200) |
+| flags | u16  | bit0: line idle level (1 = idle high, bidir DShot; for type 5 the constant level), bit1: line floating (types 4/5) |
+| data  | u16  | PWM pulse width in us, or the full 16 bit DShot frame; for type 4 replaced by the raw serial bytes |
 
 Bidirectional DShot replies (eRPM plus extended telemetry frames) are
 sent back to the most recent sender in the same format, with `data`
 carrying the 16 bit GCR-decoded reply frame.
+
+Type 4 carries raw bytes framed as 19200 baud 8N1 on the simulated
+signal wire and type 5 sets a constant line state (driven high, driven
+low, or floating). Both exist for the bootloader SITL (see the
+am32-bootloader repo), which bit-bangs the 4-way configuration protocol
+on the signal pin and detects the input type from the line state at
+boot; the main firmware ignores type 4 and uses type 5 only as the idle
+line level. The bootloader replies with type 4 packets carrying its
+serial output. `sitl_fourway.py` implements the 4-way client side.
 
 Tools in `Mcu/SITL/`:
 
@@ -103,7 +138,18 @@ Tools in `Mcu/SITL/`:
   `INPUT_SIGNAL_TYPE` parameter panel. The simulation panel selects the
   motor model (the JSON files in `Mcu/SITL/models/`, applied to the
   running simulation over the state port; switch at zero throttle for
-  clean results) and has optional high rate views, both default off:
+  clean results). **Create...** next to the model list opens a builder
+  that turns a motor spec sheet — size code (`2216` = 22mm x 16mm
+  stator), poles, Kv, and optionally winding resistance, no-load idle
+  current, weight, propeller and power source — into a new model.json,
+  so a new setup can be simulated without knowing torque constants and
+  inductances (`model_builder.py` is the same logic on the command
+  line). The **SITL process** panel runs the simulator binary itself,
+  on the ports this GUI drives, instead of starting it separately: pick
+  the binary (one is bundled with the packaged build, or Browse), an
+  eeprom and an optional bootloader, and Start; leave it stopped to
+  drive a simulator you ran yourself. The simulation panel also has
+  optional high rate views, both default off:
   pyqtgraph scopes of the phase currents and the phase terminal
   voltages, each in its own window (sample period down to the 500ns
   physics step and adjustable window; the sample rate is automatically
@@ -114,7 +160,11 @@ Tools in `Mcu/SITL/`:
   comparator. A speedup slider (0.01x to 2x)
   changes the simulation pace at runtime, for watching the animation in
   slow motion; input frames arriving faster than the slowed simulation
-  consumes them are dropped, as on a real wire. `--control-port N` accepts UI
+  consumes them are dropped, as on a real wire. A stuck rotor slider
+  blocks the prop with a virtual obstruction (think of a branch caught
+  in the prop), from free through partial drag to completely stuck, for
+  exercising the firmware's `STUCK_ROTOR_PROTECTION`; the Release
+  button clears it. `--control-port N` accepts UI
   commands over a localhost TCP connection for scripted tests (default
   off); `--log FILE` records every UI action with timestamps and
   `--replay FILE` plays a recording back, so a failing interactive
@@ -128,7 +178,10 @@ python3 Mcu/SITL/make_gui_env.py
 
   which creates `Mcu/SITL/venv` and prints the interpreter to run the
   GUI with. A system python with the packages from
-  `Mcu/SITL/requirements-gui.txt` installed works too. The UI backends
+  `Mcu/SITL/requirements.txt` installed works too.
+  `python3 Mcu/SITL/build_sitl_gui.py` packages the GUI into a single
+  executable with the SITL bundled (so it runs the simulator out of the
+  box); CI builds one for Linux and Windows. The UI backends
   live in `sitl_gui_backend.py`, UI-independent for headless tests
 - `dshot_test.py` — headless scripted test (arming, throttle, EDT,
   bad-CRC injection), e.g.:
@@ -171,19 +224,6 @@ from cmd, extra arguments are passed through). Notes:
   dependency (the CI artifact ships it bundled).
 - Windows Firewall must allow inbound UDP for the SITL binary (or ports
   57732-57734) for CAN and the input/state ports to receive.
-- the default ports (57732-57734) are in the Windows dynamic port range
-  (49152-65535). If Hyper-V, WSL2 or Docker Desktop is enabled, Windows
-  reserves blocks of that range at boot and `bind()` inside a reserved
-  block fails with `Permission denied` (`SITL: input bind` /
-  `SITL: state bind` at startup). Check with
-  `netsh interface ipv4 show excludedportrange protocol=udp` and pass
-  ports below 49152 - e.g. `--input-port 17733 --state-port 17734`, with
-  the GUI's matching `--port` / `--state-port`. CI's Windows smoke test
-  uses the 1773x ports for this reason. The CAN multicast port (57732)
-  is fixed for wire compatibility with libcanard / ArduPilot SITL and
-  cannot be moved; if that one lands in a reserved block, either free
-  the range (`net stop winnat`, restart, `net start winnat`) or run with
-  `--can-uri none`.
 - a socket never receives its own multicast on Windows, so the CAN TX
   self test is skipped there; on a machine with several interfaces pass
   an explicit one as `--can-uri mcast:0:<ip>`.
@@ -199,23 +239,9 @@ requirements are:
 ```
 apt install gcc make python3 python3-venv \
     libgl1 libegl1 libfontconfig1 libxkbcommon0
-python3 -m venv sitl-venv && sitl-venv/bin/pip install -r Mcu/SITL/requirements-ci.txt
+pip install dronecan        # for the DroneCAN tests
 python3 Mcu/SITL/make_gui_env.py   # for GUI-driven tests
 ```
-
-Build and run the pytest suite (boot, DShot/BDShot/EDT, PWM, DroneCAN
-throttle + arming, parameter GetSet/save, motor model load):
-
-```
-make AM32_SITL_CAN
-sitl-venv/bin/python Mcu/SITL/run_ci_tests.py
-# or: sitl-venv/bin/pytest Mcu/SITL/tests -v --sitl obj/AM32_AM32_SITL_CAN_*.elf
-```
-
-`run_ci_tests.py` prefers pytest; pass `--legacy` for the smaller
-stdlib-only smoke suite. The GitHub Actions workflow
-`.github/workflows/SITL.yml` runs this on every push/PR to `main` and
-`ark-release` (plus a GUI offscreen job and a Windows build/smoke job).
 
 Multicast CAN over loopback works on a stock VM with no route
 configuration (the SITL self-tests its TX at startup). Timing notes for
@@ -226,6 +252,27 @@ sending catch-up bursts, which matters because the firmware's
 bidirectional DShot auto-detect needs more than 100 frames before
 zero-throttle arming completes, putting a floor of roughly 100Hz on the
 usable frame rate.
+
+## Debugging with gdb
+
+The SITL debugs like any host program, with one wrinkle: emulated
+interrupts are delivered by parking the firmware thread with SIGUSR1,
+which gdb must pass through silently. `Mcu/SITL/gdbinit` sets that up:
+
+```
+gdb -x Mcu/SITL/gdbinit --args obj/AM32_AM32_SITL_CAN_*.elf --can-uri none --input-type 1
+(gdb) break tenKhzRoutine
+(gdb) run
+```
+
+Attach to a running simulator with `gdb -x Mcu/SITL/gdbinit -p <pid>`.
+Stopping (a breakpoint, single stepping, ^C) freezes the firmware and
+the simulation together: simulated time, the emulated watchdog and the
+ESC's own timeouts all stop with the process, and on resume the pacer
+rebases to the wall clock instead of sprinting through the backlog, so
+pausing under the debugger never breaks the physics. For deterministic
+stepping of firmware code with simulated time frozen between steps use
+`set scheduler-locking step`.
 
 ## Architecture
 

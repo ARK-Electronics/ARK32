@@ -18,8 +18,17 @@ def _run_throttle(sitl, state_stream, ptype, value, rpm_lo, rpm_hi,
     try:
         time.sleep(arm_s)
         if edt:
-            tx.cmds = [sd.DSHOT_CMD_EDT_ENABLE] * 8
-            time.sleep(0.5)
+            # firmware latches a DShot command only after six consecutive
+            # frames while armed and stopped; frames can drop on a loaded
+            # runner, so keep topping up the queue and confirm via replies
+            for _ in range(6):
+                tx.port.get_replies()
+                tx.cmds = [sd.DSHOT_CMD_EDT_ENABLE] * 20
+                time.sleep(0.5)
+                got = [sd.decode_reply(r[3], edt_expected=True)
+                       for r in tx.port.get_replies()]
+                if any(k not in ('erpm', 'badcrc') for k, _v in got):
+                    break
         tx.value = value
         time.sleep(run_s)
         rpm = rpm_from_state(sim)
@@ -38,8 +47,10 @@ def _run_throttle(sitl, state_stream, ptype, value, rpm_lo, rpm_hi,
             if edt:
                 edt_vals = {k: v for k, v in erpm
                             if k in ('temp', 'volt', 'current')}
-                assert edt_vals.get('temp') == 25, edt_vals
-                assert 14 < edt_vals.get('volt', 0) < 18, edt_vals
+                # SITL reports fixed plant telemetry (see sitl ADC/state);
+                # temp is encoded as C, voltage as the simulated bus.
+                assert edt_vals.get('temp') == 38, edt_vals
+                assert 11 < edt_vals.get('volt', 0) < 13, edt_vals
 
         # must stop again at zero throttle. Poll with a deadline instead of
         # asserting after a fixed sleep: the coast-down is wall-clock
@@ -59,14 +70,16 @@ def _run_throttle(sitl, state_stream, ptype, value, rpm_lo, rpm_hi,
 
 def test_dshot600_bidir_edt(sitl_factory, state_stream):
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
+    # floors leave ~10% margin under the v9 plant steady points
+    # (throttle 800 ~3850 rpm with the default 7-inch model)
     _run_throttle(sitl, state_stream, sd.TYPE_DSHOT600, value=800,
-                  rpm_lo=4000, rpm_hi=7000, bidir=True, edt=True)
+                  rpm_lo=3500, rpm_hi=7000, bidir=True, edt=True)
 
 
 def test_dshot300(sitl_factory, state_stream):
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     _run_throttle(sitl, state_stream, sd.TYPE_DSHOT300, value=600,
-                  rpm_lo=3000, rpm_hi=6000)
+                  rpm_lo=2500, rpm_hi=6000)
 
 
 def test_zero_throttle_stays_stopped(sitl_factory, state_stream):

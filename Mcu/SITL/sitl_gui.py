@@ -20,7 +20,10 @@ a localhost TCP connection (one per line), for scripted testing of the
 actual UI paths:
   ds_enable 0|1, ds_type pwm|dshot300|..., ds_bidir 0|1, ds_value N,
   ds_rate N, ds_edt 0|1, zero, edt_enable, edt_disable, can_enable 0|1,
-  can_value X, can_rate N, param NAME VALUE, status, quit
+  can_value X, can_rate N, param NAME VALUE, rpm_graph 0|1,
+  rpm_window SECONDS, i_window MS, v_window MS,
+  wave sine|square FREQ AMP BASE [dshot|can], wave off,
+  snap FILE [rpm], status, quit
 responses go back to the client prefixed with OK/STATUS/ERR. A client
 disconnect leaves the GUI running.
 --log FILE records every UI action with a timestamp; --replay FILE plays
@@ -28,6 +31,7 @@ a recording back with its original timing.
 '''
 
 import argparse
+import json
 import os
 import queue
 import signal
@@ -38,12 +42,16 @@ import time
 
 try:
     from PySide6.QtCore import Qt, QTimer, QRectF, QLineF
-    from PySide6.QtGui import QFontDatabase, QPen, QBrush, QColor, QPainter
+    from PySide6.QtGui import (QFontDatabase, QPen, QBrush, QColor, QPainter,
+                               QIcon)
     from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox,
                                    QGraphicsScene, QGraphicsView,
                                    QGridLayout, QGroupBox, QHBoxLayout,
                                    QDoubleSpinBox, QLabel, QPushButton,
-                                   QSlider, QSpinBox, QWidget)
+                                   QSlider, QSpinBox, QVBoxLayout, QWidget,
+                                   QLineEdit, QPlainTextEdit, QFileDialog,
+                                   QDialog, QFormLayout, QDialogButtonBox,
+                                   QScrollArea)
 except ImportError:
     _here = os.path.dirname(os.path.abspath(__file__))
     if sys.platform == 'win32':
@@ -64,22 +72,455 @@ except ImportError:
             '    python3 %s\n'
             'and then run:\n'
             '    %s\n'
-            % (os.path.join(_here, 'requirements-gui.txt'),
+            % (os.path.join(_here, 'requirements.txt'),
                os.path.join(_here, 'make_gui_env.py'),
                _run_cmd))
     sys.exit(1)
 
 try:
     import pyqtgraph as pg
+    import numpy as np    # a pyqtgraph dependency, so always present here
     HAVE_PYQTGRAPH = True
 except ImportError:
     HAVE_PYQTGRAPH = False
 
+import collections
 import glob
 import math
 
 import sitl_dshot as sd
-from sitl_gui_backend import DshotPanel, CanPanel, SimStream, HAVE_DRONECAN
+import sitl_tones
+import sim_runner
+import model_builder
+from sitl_gui_backend import (DshotPanel, CanPanel, CanFrameCounter, EepromClient,
+                              SimStream, ToneStream, AudioStream,
+                              HAVE_DRONECAN)
+from sitl_wave_dialog import wave_pixmap
+
+
+def _fix_windows_multicast():
+    '''DroneCAN's mcast driver connects a UDP socket to the multicast
+    group without choosing an outgoing interface. On Windows a process
+    spawned by multiprocessing (which is how the driver runs its IO, and
+    how a packaged build starts every child) then cannot resolve the
+    route and fails with WinError 10065. Setting the multicast interface
+    explicitly - even to INADDR_ANY - fixes it, so wrap connect() to do
+    that for any multicast address. Runs at import, so the spawned child
+    (which re-imports this module) gets it too.'''
+    if not sys.platform.startswith('win'):
+        return
+    base = socket.socket
+    if getattr(base, '_am32_mcast_fixed', False):
+        return
+
+    class _Sock(base):
+        _am32_mcast_fixed = True
+
+        def connect(self, address):
+            try:
+                first = int(str(address[0]).split('.', 1)[0])
+                if 224 <= first <= 239:
+                    self.setsockopt(socket.IPPROTO_IP,
+                                    socket.IP_MULTICAST_IF,
+                                    socket.inet_aton('0.0.0.0'))
+            except (ValueError, IndexError, TypeError, OSError):
+                pass
+            return base.connect(self, address)
+
+    socket.socket = _Sock
+
+
+_fix_windows_multicast()
+
+
+class SimTimeAxis(object):
+    '''monotonic simulated-time coordinate for the rpm graph: sim time
+    from the state stream with only forward steps accumulated, so a
+    firmware reboot (which resets the sim clock to zero) cannot run the
+    axis backwards. In sim time the waveform periods read true at any
+    speedup'''
+
+    def __init__(self):
+        self.acc = 0.0
+        self.last = None
+
+    def update(self, t):
+        if self.last is not None and t > self.last:
+            self.acc += t - self.last
+        self.last = t
+        return self.acc
+
+
+class ScopeWindow(QWidget):
+    '''a pyqtgraph plot in a window with an Auto Y control and a cursor
+    readout. Auto Y checked rescales every vertical axis to its data
+    (all traces, both axes on the rpm/throttle graph); unchecked freezes
+    them so the mouse can zoom/pan. Hovering the plot shows the cursor
+    position read off each vertical scale (independent of the traces),
+    in the bar above the graph. readout is (name, viewbox, unit) per
+    vertical axis'''
+
+    def __init__(self, plot, yboxes, on_close, title, readout=()):
+        super().__init__()
+        self._on_close = on_close
+        self._plot = plot
+        self._readout_axes = list(readout)
+        self._last_pos = None
+        self.setWindowTitle(title)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(4)
+        bar = QHBoxLayout()
+        self.auto_y = QCheckBox('Auto Y')
+        self.auto_y.setChecked(True)
+        self.auto_y.setToolTip(
+            'Rescale every vertical axis to fit its data (all traces,\n'
+            'both axes on the rpm/throttle graph). Uncheck to freeze\n'
+            'the scales, then zoom or pan with the mouse (the\n'
+            'right-click menu has more view options).')
+
+        def apply_auto():
+            for vb in yboxes:
+                if self.auto_y.isChecked():
+                    vb.enableAutoRange(axis=vb.YAxis, enable=True)
+                else:
+                    vb.disableAutoRange(axis=vb.YAxis)
+
+        self.auto_y.toggled.connect(apply_auto)
+        bar.addWidget(self.auto_y)
+        self.pause = QCheckBox('Pause')
+        self.pause.setToolTip(
+            'Freeze the display for a close look; the simulation and the\n'
+            'data stream keep running. Unpausing jumps straight to the\n'
+            'current data.')
+        bar.addWidget(self.pause)
+        bar.addStretch(1)
+        self.bar = bar          # callers may insert extra controls
+        self.readout = QLabel('')
+        self.readout.setToolTip(
+            'The cursor position read off each vertical scale (not the\n'
+            'trace values - move the cursor onto a trace to read it).')
+        bar.addWidget(self.readout)
+        lay.addLayout(bar)
+        lay.addWidget(plot)
+        apply_auto()
+        if self._readout_axes:
+            # rate limited: mouse moves arrive far faster than the label
+            # is worth updating
+            self._proxy = pg.SignalProxy(plot.scene().sigMouseMoved,
+                                         rateLimit=30,
+                                         slot=self._cursor_moved)
+
+    @staticmethod
+    def _fmt(v):
+        a = abs(v)
+        if a >= 100:
+            return '%.0f' % v
+        return '%.2f' % v if a >= 1 else '%.3f' % v
+
+    def _cursor_moved(self, evt):
+        self._last_pos = evt[0]
+        self._update_readout()
+
+    def refresh_readout(self):
+        '''re-evaluate the readout at the remembered cursor position:
+        with Auto Y the axis ranges follow the data, so the scale value
+        under a stationary cursor changes between redraws'''
+        if self._readout_axes and self._last_pos is not None:
+            self._update_readout()
+
+    def _update_readout(self):
+        pos = self._last_pos
+        if not self._plot.sceneBoundingRect().contains(pos):
+            self.readout.setText('')
+            return
+        # the cursor height mapped through each vertical axis's view box:
+        # a pure scale reading, deliberately independent of the traces
+        parts = []
+        for name, vb, unit in self._readout_axes:
+            y = vb.mapSceneToView(pos).y()
+            parts.append('%s=%s%s' % (name, self._fmt(y), unit))
+        self.readout.setText('  '.join(parts))
+
+    def closeEvent(self, ev):
+        self._on_close()
+        ev.accept()
+
+
+class ModelBuilderDialog(QDialog):
+    '''build a SITL motor model from a spec sheet.
+
+    Turns the numbers a user can read off a motor, ESC, battery and
+    propeller into a model.json, so a new setup can be simulated without
+    knowing torque constants and inductances. Only size, poles and Kv
+    are required; the rest sharpen the estimate.'''
+
+    def __init__(self, parent, models_dir):
+        super().__init__(parent)
+        self.setWindowTitle('Create motor model')
+        self.models_dir = models_dir
+        self.saved_path = None
+        outer = QVBoxLayout(self)
+        form = QFormLayout()
+        self.edits = {}
+
+        def field(key, label, default='', tip=None):
+            e = QLineEdit(str(default))
+            if tip:
+                e.setToolTip(tip)
+            form.addRow(label, e)
+            self.edits[key] = e
+            return e
+
+        # defaults are a T-Motor AIR 2218 on a 10x4.5 prop, 4S: a
+        # complete working example to build from and tweak
+        field('name', 'Model name', 'air2218_10x45',
+              tip='Filename for the saved model (no extension needed).')
+        field('size', 'Size code (e.g. 2216)', '2218',
+              tip='Four-digit stator code: 2218 = 22mm diameter x 18mm '
+                  'tall. Typical: 2207 (5-inch racer), 2216/2218 (larger '
+                  'quad), 1806 (tiny).')
+        field('kv', 'Kv (rpm/V)', '920',
+              tip='Velocity constant, rpm per volt (line-to-line), from '
+                  'the spec sheet. Typical: ~2400 (5-inch racer), '
+                  '900-1000 (2216/2218 class), 400-700 (heavy lift).')
+        self.poles = QSpinBox()
+        self.poles.setRange(2, 64)
+        self.poles.setValue(14)
+        self.poles.setToolTip('Magnet pole count (not stator slots). Almost '
+                              'all multirotor outrunners are 14; some large '
+                              'motors are 22 or 28.')
+        form.addRow('Poles', self.poles)
+        field('resistance', 'Resistance line-to-line (mOhm)', '100',
+              tip='Winding resistance line-to-line, milliohms, from the '
+                  'spec sheet. Typical: 30-60 (5-inch racer), ~100-120 '
+                  '(2216/2218 class), more for small high-Kv motors.')
+        field('idle', 'No-load idle current (e.g. 0.8@10)', '0.8@10',
+              tip='No-load current as amps@volts (e.g. 0.8@10) from the '
+                  'spec sheet; anchors the friction and iron losses. '
+                  'Typical 0.5-1.5A. Blank to estimate from size.')
+        field('weight', 'Motor weight (g)', '72',
+              tip='Motor weight in grams (as the spec sheet lists it); '
+                  'sets rotor inertia. Typical: 25-35g (2207), 60-80g '
+                  '(2216/2218 class).')
+        field('esc_current', 'ESC current rating (A)', '30',
+              tip='ESC continuous current rating, amps; sets the FET '
+                  'on-resistance estimate. Typical 20-60A. Optional.')
+        field('prop', 'Propeller (e.g. 9x4.5, or 240x120mm)', '10x4.5',
+              tip='Diameter x pitch in inches (10x4.5), or append mm '
+                  '(254x114mm). Sets the aerodynamic load and prop '
+                  'inertia. Blank for a no-prop bench model.')
+        field('prop_mass', 'Propeller mass (g)', '10',
+              tip='Propeller mass in grams; adds to rotor inertia. About '
+                  '1g per inch of diameter (a 10-inch prop ~9-11g). Blank '
+                  'to estimate from the diameter.')
+        self.source = QComboBox()
+        self.source.addItems(['battery', 'bench supply'])
+        self.source.setToolTip('A battery sinks regenerated braking energy '
+                               'readily; a bench supply barely does, so the '
+                               'bus pumps up on hard braking.')
+        form.addRow('Power source', self.source)
+        self.cells = QSpinBox()
+        self.cells.setRange(0, 14)
+        self.cells.setValue(4)
+        self.cells.setToolTip('LiPo cells in series. 0 = set the voltage '
+                              'directly. Sets pack voltage (~3.8V/cell) and '
+                              'internal resistance if not given. Typical 3-6S.')
+        form.addRow('Battery cells', self.cells)
+        field('voltage', 'Pack/supply voltage (V)', '16',
+              tip='Measured pack or supply voltage. Typical ~3.8V x cells '
+                  '(a 4S pack ~15-16V). Blank to derive from the cell count.')
+        field('source_resistance', 'Source resistance (Ohm)', '0.07',
+              tip='Battery or supply internal resistance, ohms. Typical '
+                  '~0.012 per LiPo cell plus wiring (4S ~0.07). Blank to '
+                  'estimate from the cell count.')
+        field('temperature', 'Temperature (C)', '25',
+              tip='ESC operating temperature, Celsius. Typical 25 (bench) '
+                  'to 50 (in flight).')
+        outer.addLayout(form)
+
+        outer.addWidget(QLabel('Result:'))
+        self.view = QPlainTextEdit()
+        self.view.setReadOnly(True)
+        self.view.setMinimumHeight(140)
+        self.view.setPlaceholderText(
+            'Press "Build & save" - the generated model and how each value '
+            'was derived appear here.')
+        outer.addWidget(self.view)
+
+        row = QHBoxLayout()
+        build = QPushButton('Build && save')
+        build.clicked.connect(self._build)
+        row.addWidget(build)
+        outer.addLayout(row)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(self.reject)
+        bb.accepted.connect(self.accept)
+        outer.addWidget(bb)
+
+    def _spec(self):
+        e = self.edits
+
+        def num(key):
+            t = e[key].text().strip()
+            return float(t) if t else None
+        return dict(
+            size=e['size'].text().strip(), poles=self.poles.value(),
+            kv=num('kv'), resistance_mohm=num('resistance'),
+            idle=(model_builder.parse_idle(e['idle'].text())
+                  if e['idle'].text().strip() else None),
+            weight_g=num('weight'),
+            prop=(model_builder.parse_prop(e['prop'].text())
+                  if e['prop'].text().strip() else None),
+            prop_mass_g=num('prop_mass'),
+            source=('battery' if self.source.currentIndex() == 0
+                    else 'supply'),
+            cells=self.cells.value() or None, voltage=num('voltage'),
+            battery_resistance=num('source_resistance'),
+            esc_current_a=num('esc_current'),
+            temperature_c=num('temperature') or 25.0)
+
+    def _build(self):
+        try:
+            spec = self._spec()
+            if not spec['size'] or spec['kv'] is None:
+                raise ValueError('size code and Kv are required')
+            notes = []
+            model = model_builder.build_model(spec, notes)
+        except Exception as ex:
+            self.view.setPlainText('cannot build the model: %s' % ex)
+            return
+        name = self.edits['name'].text().strip() or 'model'
+        default = os.path.join(self.models_dir, name + '.json')
+        path, _ = QFileDialog.getSaveFileName(
+            self, 'Save model', default, 'Model JSON (*.json)')
+        if not path:
+            self.view.setPlainText(json.dumps(model, indent=4)
+                                   + '\n\n(not saved)')
+            return
+        with open(path, 'w') as f:
+            f.write(json.dumps(model, indent=4) + '\n')
+        self.saved_path = path
+        self.view.setPlainText(
+            'saved %s\n\n# how each value was derived:\n' % path
+            + '\n'.join('#   ' + n for n in notes))
+
+
+class EditModelDialog(QDialog):
+    '''edit an existing model.json directly.
+
+    Unlike the builder, this edits the physics values a model already
+    holds (Kv, resistance, inductance, inertia, ...). Keep the name to
+    overwrite the model, or change it to save the edits as a new one.'''
+
+    HELP = {
+        'motor.kv': 'Velocity constant, rpm per volt (line-to-line).',
+        'motor.poles': 'Magnet pole count (14 for most outrunners).',
+        'motor.resistance': 'Per-phase winding resistance, ohms '
+                            '(line-to-line / 2). Typ. 0.03-0.12.',
+        'motor.inductance': 'Per-phase inductance, henries. Typ. 5e-6 to 2e-5.',
+        'motor.inertia': 'Rotor + propeller moment of inertia, kg m^2. '
+                         'Typ. 1e-6 (no prop) to 1e-4 (large prop).',
+        'motor.damping': 'Viscous drag torque per rad/s, N m s. Small, ~1e-5.',
+        'motor.static_friction': 'Coulomb friction torque, N m. ~1e-3.',
+        'motor.load_k_omega2': 'Propeller load: torque = k*omega^2, N m s^2. '
+                               '0 for no prop, ~2e-7 for a 9-10in prop.',
+        'battery.voltage': 'Pack/supply open-circuit voltage, volts.',
+        'battery.resistance': 'Source internal resistance, ohms. '
+                              '4S LiPo ~0.07, bench supply ~0.05.',
+        'battery.capacitance': 'Bus capacitance, farads. ~0.002.',
+        'battery.sink_resistance': 'Regen sink resistance: low for a battery '
+                                   '(~0.35), high for a bench supply (~10).',
+        'battery.sink_current_max': 'Max regenerated current the source '
+                                    'absorbs, amps.',
+        'esc.rds_on': 'MOSFET on-resistance, ohms. ~0.004-0.01.',
+        'esc.diode_vf': 'Body-diode forward voltage, volts. ~0.7.',
+        'esc.temperature_c': 'ESC temperature, Celsius.',
+        'esc.commutation_transfer': 'Commutation transfer factor. 1.0.',
+        'sim.comparator_hysteresis_mv': 'Comparator hysteresis, mV. 0.',
+        'sim.comparator_noise_mv': 'Comparator input noise, mV. ~3-5.',
+        'sim.comparator_phase_rc_ns': 'Phase divider RC filter, ns. ~800.',
+        'sim.comparator_neutral_rc_ns': 'Virtual-neutral RC filter, ns. ~800.',
+    }
+
+    def __init__(self, parent, path, models_dir):
+        super().__init__(parent)
+        self.setWindowTitle('Edit motor model')
+        self.models_dir = models_dir
+        self.orig_name = os.path.splitext(os.path.basename(path))[0]
+        with open(path) as f:
+            self.model = json.load(f)
+        self.saved_path = None
+        outer = QVBoxLayout(self)
+
+        content = QWidget()
+        form = QFormLayout(content)
+        self.name_edit = QLineEdit(self.orig_name)
+        self.name_edit.setToolTip('Keep the name to overwrite this model; '
+                                  'change it to save the edits as a new one.')
+        form.addRow('Model name', self.name_edit)
+        self.edits = {}        # (section, key) -> (QLineEdit, original value)
+        for section, params in self.model.items():
+            if not isinstance(params, dict):
+                continue
+            header = QLabel(section)
+            header.setStyleSheet('font-weight: bold')
+            form.addRow(header)
+            for key, val in params.items():
+                e = QLineEdit(str(val))
+                tip = self.HELP.get('%s.%s' % (section, key))
+                if tip:
+                    e.setToolTip(tip)
+                form.addRow(key, e)
+                self.edits[(section, key)] = (e, val)
+
+        scroll = QScrollArea()
+        scroll.setWidget(content)
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(360)
+        outer.addWidget(scroll)
+        self.status = QLabel('')
+        outer.addWidget(self.status)
+
+        row = QHBoxLayout()
+        save = QPushButton('Save')
+        save.clicked.connect(self._save)
+        row.addWidget(save)
+        outer.addLayout(row)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(self.reject)
+        outer.addWidget(bb)
+
+    def _save(self):
+        out = {}
+        for (section, key), (e, orig) in self.edits.items():
+            t = e.text().strip()
+            try:
+                if isinstance(orig, bool):
+                    v = t.lower() in ('1', 'true', 'yes')
+                elif isinstance(orig, int):
+                    v = int(round(float(t)))
+                else:
+                    v = float(t)
+            except ValueError:
+                self.status.setText('%s.%s is not a number: %r'
+                                    % (section, key, t))
+                return
+            out.setdefault(section, {})[key] = v
+        name = self.name_edit.text().strip()
+        if not name:
+            self.status.setText('enter a model name')
+            return
+        path = os.path.join(self.models_dir, name + '.json')
+        try:
+            with open(path, 'w') as f:
+                f.write(json.dumps(out, indent=4) + '\n')
+        except OSError as ex:
+            self.status.setText('could not write %s: %s' % (path, ex))
+            return
+        self.saved_path = path
+        self.status.setText(('overwrote ' if name == self.orig_name
+                             else 'saved new model ') + path)
 
 
 def main():
@@ -109,6 +550,33 @@ def main():
     ds = DshotPanel(args.host, args.port)
     ds.poles = args.poles
     sim = SimStream(args.host, args.state_port)
+
+    # optional launcher for the SITL binary itself: its stdout lines are
+    # queued here and drained into the panel by a timer in the UI thread
+    sim_out_q = queue.Queue()
+    runner = sim_runner.SimRunner(lambda ln: sim_out_q.put(ln))
+
+    # throttle waveform override state and the rpm/throttle history, both
+    # clocked off the simulation state stream so they follow the speedup.
+    # 'run'/'value' belong to the waveform thread (see below)
+    wave = {'kind': None, 'freq': 1.0, 'amp': 0.2, 'base': 0.3, 't0': None,
+            'run': True, 'value': 0, 'target': 'dshot'}
+    # rpm/throttle history for the graph. The x axis is accumulated
+    # SIMULATED time (SimTimeAxis) so waveform periods read true at any
+    # speedup and firmware reboots (which reset the raw sim clock) cannot
+    # run it backwards; the rolling window spans WALL time, so the view
+    # stays equally live at any speedup - at 0.2x a sim-time window would
+    # hold a full minute of history and recent events would crawl in as
+    # a sliver at the right edge
+    # sampled by the waveform thread every 5ms of SIM time (the GUI
+    # tick's 20Hz aliases badly against sine/square tests above a few
+    # Hz, and sim-time spacing keeps the waveform resolution the same at
+    # any speedup); the deque holds the longest selectable window, the
+    # graph slices what its window control asks for
+    RPM_WINDOW_MAX_S = 60.0        # simulated seconds
+    rpm_hist = collections.deque(maxlen=15000)
+    rpm_lock = threading.Lock()    # sampler thread vs redraw snapshot
+    rpm_taxis = SimTimeAxis()
 
     # spawn the DroneCAN node with SIGINT ignored: its multiprocessing IO
     # child inherits the kernel-level SIG_IGN disposition, so a terminal
@@ -252,6 +720,24 @@ def main():
         lambda: ds_value.setValue(1000 if ds.ptype == sd.TYPE_PWM else 0))
     bf.addWidget(zero_btn)
 
+    sine_btn = QPushButton(' Sine')
+    sine_btn.setIcon(QIcon(wave_pixmap('sine')))
+    sine_btn.setToolTip(
+        'Override the throttle with a sine wave. Opens a dialog for the\n'
+        'frequency, amplitude and base throttle. The frequency is in\n'
+        'simulated time, so the waveform tracks the speedup slider. Enable\n'
+        'the input and arm at zero throttle before starting.')
+    bf.addWidget(sine_btn)
+
+    square_btn = QPushButton(' Square')
+    square_btn.setIcon(QIcon(wave_pixmap('square')))
+    square_btn.setToolTip(
+        'Override the throttle with a square wave, alternating between\n'
+        'base+amplitude and base-amplitude. Opens a dialog for frequency,\n'
+        'amplitude and base throttle, running in simulated time so it\n'
+        'tracks the speedup slider.')
+    bf.addWidget(square_btn)
+
     ds_edt = QCheckBox('EDT (extended telemetry)')
 
     def ds_edt_changed():
@@ -276,6 +762,133 @@ def main():
         'and protocol notes.')
     g1.addWidget(ds_status, 5, 0, 1, 4)
 
+    # ---- throttle waveform override: drive the PWM/DShot throttle as a
+    # sine or square wave. The phase advances on simulation time from the
+    # state stream, so the frequency is in simulated seconds and the
+    # waveform tracks the speedup slider like everything else in the sim
+    # the wave can override either input's throttle; these registries let
+    # the DShot buttons (built above) and the DroneCAN buttons (built
+    # below) share one waveform engine
+    wave_buttons = {}          # (kind, target) -> QPushButton
+    wave_value_ctl = {}        # target -> the throttle control it takes over
+
+    def _ds_frac():
+        if ds.ptype == sd.TYPE_PWM:
+            return max(0.0, min(1.0, (ds.value - 1000) / 1000.0))
+        return min(1.0, ds.value / 2047.0)
+
+    def throttle_frac():
+        # current commanded throttle as a 0..1 fraction, from whichever
+        # input is driving; feeds the rpm/throttle graph
+        if wave['kind'] is not None:
+            if wave['target'] == 'can' and can is not None:
+                return can.throttle
+            return _ds_frac()
+        if ds.enabled:
+            return _ds_frac()
+        if can is not None and can.enabled:
+            return can.throttle
+        return 0.0
+
+    def wave_frac():
+        # current waveform throttle as a 0..1 fraction, or None when the
+        # override is off. Runs on the waveform thread: NO Qt calls here
+        smp = sim.latest()
+        if wave['kind'] is None or smp is None:
+            return None
+        t = smp[0]
+        if wave['t0'] is None or t < wave['t0']:
+            wave['t0'] = t              # (re-)anchor; a reboot resets sim time
+        phase = 2.0 * math.pi * wave['freq'] * (t - wave['t0'])
+        if wave['kind'] == 'sine':
+            shape = math.sin(phase)
+        else:
+            shape = 1.0 if math.sin(phase) >= 0 else -1.0
+        return max(0.0, min(1.0, wave['base'] + wave['amp'] * shape))
+
+    # the waveform drives the throttle from its own thread, so the command
+    # stays smooth however busy the Qt thread is repainting graphs - a Qt
+    # timer would stall behind a slow repaint and the stuttered throttle
+    # would desync the motor. The thread only writes a plain attribute the
+    # sender reads (ds.value or can.throttle); the sliders are refreshed
+    # cosmetically from the Qt thread in update()
+    def wave_loop():
+        # also the rpm/throttle graph sampler: 200Hz beats the GUI tick's
+        # 20Hz (which aliases against waveform tests above a few Hz), and
+        # this thread is the throttle writer, so the sampled pair is
+        # coherent. Entries are (sim_t, rpm, throttle, wall_t)
+        while wave['run']:
+            frac = wave_frac()
+            if frac is not None:
+                if wave['target'] == 'can' and can is not None:
+                    can.throttle = frac
+                    wave['value'] = int(round(frac * 1000))
+                elif ds.ptype == sd.TYPE_PWM:
+                    ds.value = int(round(1000 + frac * 1000))
+                    wave['value'] = ds.value
+                else:
+                    v = int(round(frac * 2047))
+                    if 0 < v < 48:      # never sit in the command range
+                        v = 48 if frac > 0 else 0
+                    ds.value = v
+                    wave['value'] = v
+            smp = sim.latest()
+            if smp is not None:
+                t = rpm_taxis.update(smp[0])
+                with rpm_lock:
+                    if not rpm_hist or t >= rpm_hist[-1][0] + 0.005:
+                        rpm_hist.append((t, smp[1] * 60.0 / (2 * math.pi),
+                                         throttle_frac(), time.monotonic()))
+            time.sleep(0.005)
+
+    threading.Thread(target=wave_loop, daemon=True).start()
+
+    WAVE_ACTIVE_STYLE = 'background-color: #cfe8ff; font-weight: bold'
+
+    def wave_apply(kind, freq, amp, base, target='dshot'):
+        if target == 'can' and can is None:
+            target = 'dshot'
+        wave.update(kind=kind, freq=float(freq), amp=float(amp),
+                    base=float(base), t0=None, target=target)
+        log_action('wave %s %.4f %.4f %.4f %s'
+                   % (kind, freq, amp, base, target))
+        # the waveform owns the target input's throttle control now
+        for tgt, ctl in wave_value_ctl.items():
+            ctl.setEnabled(tgt != target)
+        for (k, tgt), btn in wave_buttons.items():
+            btn.setStyleSheet(WAVE_ACTIVE_STYLE
+                              if (k == kind and tgt == target) else '')
+
+    def wave_stop():
+        if wave['kind'] is not None:
+            log_action('wave off')
+        wave['kind'] = None
+        for ctl in wave_value_ctl.values():
+            ctl.setEnabled(True)
+        for btn in wave_buttons.values():
+            btn.setStyleSheet('')
+
+    wave_dialogs = {}
+
+    def open_wave_dialog(kind, target='dshot'):
+        from sitl_wave_dialog import WaveDialog
+        key = (kind, target)
+        d = wave_dialogs.get(key)
+        if d is None:
+            apply_cb = (lambda k, f, a, b, tgt=target:
+                        wave_apply(k, f, a, b, tgt))
+            d = WaveDialog(kind, apply_cb, wave_stop, wave,
+                           icon=wave_pixmap(kind, 44, 22), parent=win)
+            wave_dialogs[key] = d
+        d.show()
+        d.raise_()
+
+    wave_buttons[('sine', 'dshot')] = sine_btn
+    wave_buttons[('square', 'dshot')] = square_btn
+    wave_value_ctl['dshot'] = ds_value
+    sine_btn.clicked.connect(lambda: open_wave_dialog('sine', 'dshot'))
+    square_btn.clicked.connect(lambda: open_wave_dialog('square', 'dshot'))
+
     # ---- DroneCAN input panel
     f2 = QGroupBox('DroneCAN input (%s)' % args.can_uri)
     f2.setToolTip(
@@ -287,6 +900,19 @@ def main():
         'arbitration behaviour the failover parameter work is about.')
     g2 = QGridLayout(f2)
     top.addWidget(f2, 0, 1)
+
+    # raw bus frame rate, counted straight off the multicast group so it
+    # works with CAN control disabled and without the dronecan package
+    can_fps = CanFrameCounter(args.can_uri)
+    can_fps_label = QLabel('FPS: -')
+    can_fps_label.setToolTip(
+        'CAN frames per second seen on the bus, from every node: the\n'
+        'ESC\'s own traffic, this GUI and anything else on the same\n'
+        'multicast group. Counted independently of the Enable switch.\n'
+        'Useful to check the bus really is quiet, e.g. the bootloader\'s\n'
+        'no-CAN fallback (DShot/PWM boot) only arms when no frame at all\n'
+        'arrives in its first 250ms.')
+    g2.addWidget(can_fps_label, 0, 3)
 
     if can is not None:
         can_enable = QCheckBox('Enable')
@@ -304,6 +930,28 @@ def main():
             'RawCommand box instead to cut only the command stream.')
         can_enable.toggled.connect(can_enable_changed)
         g2.addWidget(can_enable, 0, 0)
+
+        can_dna = QCheckBox('DNA server')
+        can_dna.setToolTip(
+            'Serve dynamic node ID allocation, as an autopilot would. An\n'
+            'ESC whose eeprom has no static node ID broadcasts anonymous\n'
+            'allocation requests and stays off the bus (and the CAN\n'
+            'bootloader stays put) until some allocator answers. The DNA\n'
+            'label flashes while such requests are seen. While serving,\n'
+            'the GUI node is on the bus even with Enable unchecked.')
+
+        def can_dna_changed():
+            can.dna_server = can_dna.isChecked()
+            log_action('can_dna %d' % int(can.dna_server))
+
+        can_dna.toggled.connect(can_dna_changed)
+        g2.addWidget(can_dna, 0, 1)
+        can_dna_label = QLabel('')
+        can_dna_label.setToolTip(
+            'Flashes while anonymous DNA allocation requests are seen on\n'
+            'the bus: a node is waiting for an allocator. Tick DNA server\n'
+            '(or run another allocator) to give it a node ID.')
+        g2.addWidget(can_dna_label, 0, 2)
 
         can_rawcmd = QCheckBox('RawCommand')
         can_rawcmd.setChecked(True)
@@ -378,6 +1026,26 @@ def main():
         can_zero_btn.clicked.connect(lambda: can_value.setValue(0))
         g2.addWidget(can_zero_btn, 4, 0)
 
+        # the same waveform generator as the DShot pane, driving the CAN
+        # throttle instead
+        can_sine_btn = QPushButton(' Sine')
+        can_sine_btn.setIcon(QIcon(wave_pixmap('sine')))
+        can_sine_btn.setToolTip(
+            'Override the CAN throttle with a sine wave. Opens a dialog\n'
+            'for the frequency, amplitude and midpoint.')
+        can_sine_btn.clicked.connect(lambda: open_wave_dialog('sine', 'can'))
+        g2.addWidget(can_sine_btn, 4, 1)
+        can_square_btn = QPushButton(' Square')
+        can_square_btn.setIcon(QIcon(wave_pixmap('square')))
+        can_square_btn.setToolTip(
+            'Override the CAN throttle with a square wave, alternating\n'
+            'between midpoint +/- amplitude.')
+        can_square_btn.clicked.connect(lambda: open_wave_dialog('square', 'can'))
+        g2.addWidget(can_square_btn, 4, 2)
+        wave_buttons[('sine', 'can')] = can_sine_btn
+        wave_buttons[('square', 'can')] = can_square_btn
+        wave_value_ctl['can'] = can_value
+
         # parameter panel
         pf = QGroupBox('parameters (set + save + restart)')
         pf.setToolTip(
@@ -420,7 +1088,7 @@ def main():
         'the motor/battery model, the simulation pace and the high rate\n'
         'views fed by the simulation state stream.')
     g4 = QGridLayout(f4)
-    top.addWidget(f4, 2, 0, 1, 2)
+    top.addWidget(f4, 3, 0, 1, 2)
 
     models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models')
 
@@ -445,6 +1113,7 @@ def main():
         if name in model_paths:
             log_action('model %s' % name)
             sim.load_model(model_paths[name])
+            params_view_refresh()
 
     load_btn = QPushButton('Load')
     load_btn.setToolTip(
@@ -453,11 +1122,56 @@ def main():
         'desyncs; switch at zero throttle for clean results.')
     load_btn.clicked.connect(model_load)
     g4.addWidget(load_btn, 0, 2)
+
+    def model_saved(path):
+        # add a newly created/edited model to the list and select it
+        name = os.path.splitext(os.path.basename(path))[0]
+        model_paths[name] = path
+        if model_combo.findText(name) < 0:
+            model_combo.addItem(name)
+        model_combo.setCurrentText(name)
+
+    def model_create():
+        dlg = ModelBuilderDialog(win, models_dir)
+        dlg.exec()
+        if dlg.saved_path:
+            model_saved(dlg.saved_path)
+
+    def model_edit():
+        path = model_paths.get(model_combo.currentText())
+        if not path:
+            model_status.setText('no model selected to edit')
+            return
+        dlg = EditModelDialog(win, path, models_dir)
+        dlg.exec()
+        if dlg.saved_path:
+            model_saved(dlg.saved_path)
+            # apply the edit to the running sim so the change takes effect
+            # (and the parameters view reflects the new Kv/poles)
+            sim.load_model(dlg.saved_path)
+            params_view_refresh()
+
+    edit_btn = QPushButton('Edit...')
+    edit_btn.setToolTip(
+        "Edit the selected model's values (Kv, resistance, inductance, "
+        'inertia, ...). Keep the name to overwrite it, or change the name '
+        'to save the edits as a new model.')
+    edit_btn.clicked.connect(model_edit)
+    g4.addWidget(edit_btn, 0, 3)
+
+    create_btn = QPushButton('Create...')
+    create_btn.setToolTip(
+        'Build a new motor model from a spec sheet (size, poles, Kv,\n'
+        'idle current, weight, propeller, power source) and save it into\n'
+        'the models list, ready to Load.')
+    create_btn.clicked.connect(model_create)
+    g4.addWidget(create_btn, 0, 4)
     model_status = QLabel('')
-    g4.addWidget(model_status, 0, 3, 1, 2)
+    g4.addWidget(model_status, 0, 5, 1, 2)
 
     graph_i_check = QCheckBox('Current graph')
     graph_v_check = QCheckBox('Voltage graph')
+    graph_rpm_check = QCheckBox('RPM/throttle graph')
     motorview_check = QCheckBox('Motor view')
     graph_i_check.setToolTip(
         'Open a scope window with the three phase currents and the battery\n'
@@ -476,15 +1190,22 @@ def main():
         'Open the animated motor/bridge view. Slow the simulation right\n'
         'down with the speedup slider to watch individual commutation\n'
         'steps rotate the stator field ahead of the rotor.')
+    graph_rpm_check.setToolTip(
+        'Open a graph of the true motor rpm (left axis) and the commanded\n'
+        'throttle (right axis, 0..1) against simulated time. Use it with\n'
+        'the sine/square throttle overrides to watch the motor track the\n'
+        'commanded waveform, or with the speedup slider to see the rpm\n'
+        'settle after a step.')
     g4.addWidget(graph_i_check, 1, 0)
     g4.addWidget(graph_v_check, 1, 1)
     g4.addWidget(motorview_check, 1, 2)
+    g4.addWidget(graph_rpm_check, 1, 3)
     sim_rate_label = QLabel('')
     sim_rate_label.setToolTip(
         'State stream rate actually arriving from the simulation (wall\n'
         'clock). It is the sample period in simulated time divided by the\n'
         'speedup, capped at about 200k samples/s.')
-    g4.addWidget(sim_rate_label, 1, 3, 1, 2)
+    g4.addWidget(sim_rate_label, 1, 4)
 
     # simulation speedup, logarithmic 0.001x .. 2x, for slow motion in
     # the motor view
@@ -519,6 +1240,122 @@ def main():
     speed_1x.clicked.connect(lambda: speed_slider.setValue(150))
     g4.addWidget(speed_1x, 2, 4)
 
+    # stuck rotor: block the prop with a virtual obstruction, from
+    # free to completely stuck, to exercise the firmware's stuck
+    # rotor protection
+    g4.addWidget(QLabel('Stuck rotor:'), 5, 0)
+    stuck_slider = QSlider(Qt.Horizontal)
+    stuck_slider.setRange(0, 100)
+    stuck_slider.setValue(0)
+    stuck_label = QLabel('free')
+
+    def stuck_changed(*a):
+        value = stuck_slider.value()
+        stuck_label.setText('free' if value == 0 else
+                            'locked' if value == 100 else '%d%%' % value)
+        log_action('stuck %.2f' % (value / 100.0))
+        sim.set_stuck(value / 100.0)
+
+    stuck_slider.setToolTip(
+        'Simulate the prop being blocked by an obstruction, e.g. hitting\n'
+        'a tree branch. Partial values drag on the rotor with a fraction\n'
+        'of the model\'s holding torque (motor.stuck_torque); fully right\n'
+        'locks the rotor rigidly. With STUCK_ROTOR_PROTECTION enabled the\n'
+        'firmware cuts the output after repeated commutation timeouts and\n'
+        'stays off until the throttle is lowered to zero.')
+    stuck_slider.valueChanged.connect(stuck_changed)
+    g4.addWidget(stuck_slider, 5, 1, 1, 2)
+    g4.addWidget(stuck_label, 5, 3)
+
+    def stuck_release_clicked():
+        # resend even when already showing free: the command is
+        # unacknowledged UDP and another client may have left the
+        # simulator stuck
+        if stuck_slider.value() == 0:
+            stuck_changed()
+        else:
+            stuck_slider.setValue(0)
+
+    stuck_release = QPushButton('Release')
+    stuck_release.setToolTip('Clear the obstruction, back to a free rotor.')
+    stuck_release.clicked.connect(stuck_release_clicked)
+    g4.addWidget(stuck_release, 5, 4)
+
+    # audio: play the ESC beeps (startup tune, DShot beacons) through
+    # the host sound output, from the tone event stream on the state
+    # port. Stream and synth are created lazily on first enable
+    audio_check = QCheckBox('Audio')
+    audio_check.setToolTip(
+        'Play the beeps the ESC firmware makes (startup tune, arm beeps,\n'
+        'DShot beacons) through the sound output. On a real ESC these are\n'
+        'the motor windings driven with PWM at an audible frequency; here\n'
+        'the same PWM is synthesized as a sine. Pitch is unaffected by\n'
+        'the speedup slider, duration scales with it.')
+    g4.addWidget(audio_check, 4, 0)
+    audio_slider = QSlider(Qt.Horizontal)
+    audio_slider.setRange(0, 100)
+    audio_slider.setValue(50)
+    audio_slider.setToolTip('Playback volume, shared by both audio sources.')
+    g4.addWidget(audio_slider, 4, 1, 1, 2)
+    motor_audio_check = QCheckBox('Motor audio')
+    motor_audio_check.setToolTip(
+        'Play what the motor itself radiates, from the physics model:\n'
+        'torque ripple and phase current magnitude, so commutation\n'
+        'noise, PWM whine and beeps sound as a real motor would (Audio\n'
+        'plays clean synthesized tones instead). Pitch follows the\n'
+        'speedup slider - slow motion sounds lower, as physics should.')
+    g4.addWidget(motor_audio_check, 4, 3)
+    tones = None
+    tone_synth = None
+    phys_stream = None
+    phys_player = None
+
+    def audio_toggled(*a):
+        nonlocal tones, tone_synth
+        log_action('audio %d' % int(audio_check.isChecked()))
+        if audio_check.isChecked() and tone_synth is None:
+            tones = ToneStream(args.host, args.state_port)
+            tone_synth = sitl_tones.ToneSynth(tones,
+                                              volume=audio_slider.value() / 100.0)
+            if not tone_synth.active:
+                sys.stderr.write('audio: %s\n' % tone_synth.error)
+                audio_check.setToolTip('Not available: %s' % tone_synth.error)
+                tones.close()
+                tones, tone_synth = None, None
+                audio_check.setChecked(False)
+                return
+        if tones is not None:
+            tones.enabled = audio_check.isChecked()
+
+    def motor_audio_toggled(*a):
+        nonlocal phys_stream, phys_player
+        log_action('motor_audio %d' % int(motor_audio_check.isChecked()))
+        if motor_audio_check.isChecked() and phys_player is None:
+            phys_stream = AudioStream(args.host, args.state_port)
+            phys_player = sitl_tones.PhysicsAudio(
+                phys_stream, volume=audio_slider.value() / 100.0)
+            if not phys_player.active:
+                sys.stderr.write('motor audio: %s\n' % phys_player.error)
+                motor_audio_check.setToolTip('Not available: %s'
+                                             % phys_player.error)
+                phys_stream.close()
+                phys_stream, phys_player = None, None
+                motor_audio_check.setChecked(False)
+                return
+        if phys_stream is not None:
+            phys_stream.enabled = motor_audio_check.isChecked()
+
+    def audio_volume_changed(*a):
+        log_action('audio_volume %d' % audio_slider.value())
+        if tone_synth is not None:
+            tone_synth.set_volume(audio_slider.value() / 100.0)
+        if phys_player is not None:
+            phys_player.set_volume(audio_slider.value() / 100.0)
+
+    audio_check.toggled.connect(audio_toggled)
+    motor_audio_check.toggled.connect(motor_audio_toggled)
+    audio_slider.valueChanged.connect(audio_volume_changed)
+
     # scope controls: sample period and window, shared by both graph
     # windows. Fine sample periods (down to the 500ns physics step,
     # where the dead time windows are visible on the phase voltages) are
@@ -530,15 +1367,9 @@ def main():
     sample_spin.setSuffix(' us sample')
     sample_spin.setDecimals(1)
     g4.addWidget(sample_spin, 3, 0, 1, 2)
-    window_spin = QDoubleSpinBox()
-    window_spin.setRange(0.05, 2000.0)
-    window_spin.setValue(50.0)
-    window_spin.setSuffix(' ms window')
-    window_spin.setDecimals(2)
-    g4.addWidget(window_spin, 3, 2)
 
     def sample_changed(*a):
-        sim.period_us = sample_spin.value()
+        update_sim_enable()
         log_action('sample_us %.1f' % sample_spin.value())
 
     sample_spin.setToolTip(
@@ -551,16 +1382,6 @@ def main():
         'fine periods only take full effect at low speedups.')
     sample_spin.valueChanged.connect(sample_changed)
 
-    def window_changed(*a):
-        log_action('window_ms %.2f' % window_spin.value())
-
-    window_spin.setToolTip(
-        'Scope x axis span in simulated milliseconds, newest sample at the\n'
-        'right edge. For commutation-scale viewing use 10..50ms; for PWM\n'
-        'and dead time detail use 0.1..1ms together with a fine sample\n'
-        'period and a low speedup.')
-    window_spin.valueChanged.connect(window_changed)
-
     # the scopes: each signal set gets its own top level pyqtgraph
     # window, created lazily on first enable. Closing a window unchecks
     # its box
@@ -572,10 +1393,17 @@ def main():
                ('vbus', 'w', 10)), 'voltage', 'V'),
     }
     graph_windows = {}
+    rpm_graph = {}
 
     def update_sim_enable():
-        sim.enabled = (graph_i_check.isChecked() or graph_v_check.isChecked()
-                       or motorview_check.isChecked())
+        # the status pane always needs the stream; scopes and the motor
+        # view raise the rate from the coarse status sampling
+        fine = (graph_i_check.isChecked() or graph_v_check.isChecked()
+                or motorview_check.isChecked())
+        sim.period_us = sample_spin.value() if fine else 2000
+        sim.enabled = True
+
+    update_sim_enable()   # status pane streams from startup
 
     def graph_toggled(key, check, title):
         log_action('graph_%s %d' % (key, int(check.isChecked())))
@@ -585,15 +1413,13 @@ def main():
                 check.setChecked(False)
                 return
 
-            class GraphWindow(pg.PlotWidget):
-                def closeEvent(self, ev):
-                    check.setChecked(False)
-                    ev.accept()
-
-            w = GraphWindow()
-            w.setWindowTitle('AM32 SITL %s' % title)
+            plot = pg.PlotWidget()
+            # decimate to screen resolution so a busy repaint cannot stall
+            # the Qt thread (and starve the sender/reader threads)
+            plot.setDownsampling(mode='peak', auto=True)
+            plot.setClipToView(True)
             if key == 'i':
-                w.setToolTip(
+                plot.setToolTip(
                     'Phase currents iu/iv/iw (red/green/blue) and battery\n'
                     'current ibus (white). Two phases conduct at a time in a\n'
                     '6-step drive: current flows in one phase, back through\n'
@@ -604,7 +1430,7 @@ def main():
                     'current, which is why battery current is far below phase\n'
                     'current at partial throttle.')
             else:
-                w.setToolTip(
+                plot.setToolTip(
                     'Phase terminal voltages vu/vv/vw (red/green/blue) and\n'
                     'battery voltage vbus (white). At coarse sample periods\n'
                     'the trace is the duty proportional average. With a fine\n'
@@ -614,14 +1440,32 @@ def main():
                     'through the zero crossing the comparator detects, and\n'
                     '500ns dead time spikes to -0.7V or vbus+0.7V where the\n'
                     'body diodes conduct at each PWM edge.')
-            w.resize(700, 300)
-            w.addLegend(offset=(10, 10))
-            w.setLabel('bottom', 'time', 's')
+            plot.addLegend(offset=(10, 10))
+            plot.setLabel('bottom', 'sim time', 's')
             defs, label, unit = SIGNAL_SETS[key]
-            w.setLabel('left', label, unit)
-            curves = [(w.plot(pen=pg.mkPen(color, width=1), name=name), col)
+            plot.setLabel('left', label, unit)
+            curves = [(plot.plot(pen=pg.mkPen(color, width=1), name=name), col)
                       for name, color, col in defs]
-            graph_windows[key] = (w, curves)
+            vb = plot.getPlotItem().getViewBox()
+            w = ScopeWindow(plot, [vb], lambda: check.setChecked(False),
+                            'AM32 SITL %s' % title,
+                            readout=[(label, vb, unit)])
+            # per-graph x axis span, in simulated milliseconds
+            win_spin = QDoubleSpinBox()
+            win_spin.setRange(0.05, 2000.0)
+            win_spin.setValue(50.0)
+            win_spin.setDecimals(2)
+            win_spin.setSuffix(' ms window')
+            win_spin.setToolTip(
+                'Scope x axis span in simulated milliseconds, newest sample\n'
+                'at the right edge. For commutation-scale viewing use\n'
+                '10..50ms; for PWM and dead time detail use 0.1..1ms with a\n'
+                'fine sample period and a low speedup.')
+            win_spin.valueChanged.connect(
+                lambda v, k=key: log_action('%s_window %.2f' % (k, v)))
+            w.bar.insertWidget(2, win_spin)
+            w.resize(700, 340)
+            graph_windows[key] = (w, plot, curves, win_spin)
         if key in graph_windows:
             graph_windows[key][0].setVisible(check.isChecked())
         update_sim_enable()
@@ -630,6 +1474,82 @@ def main():
         lambda: graph_toggled('i', graph_i_check, 'phase currents'))
     graph_v_check.toggled.connect(
         lambda: graph_toggled('v', graph_v_check, 'phase voltages'))
+
+    # rpm and throttle share a time axis but not a scale, so the throttle
+    # gets its own right hand axis (0..1) on a linked view box
+    def make_rpm_graph():
+        plot = pg.PlotWidget()
+        plot.setDownsampling(mode='peak', auto=True)
+        plot.setClipToView(True)
+        plot.setToolTip(
+            'True motor rpm from the physics (yellow, left axis) and the\n'
+            'commanded throttle (cyan dashed, right axis 0..1) over the\n'
+            'selected window of SIMULATED time (0 = now): waveform\n'
+            'periods read true at any speedup. Sampled every 5ms of sim\n'
+            'time; shrink the window to resolve fast waveforms. Auto Y\n'
+            'rescales both the rpm and throttle axes.')
+        p1 = plot.plotItem
+        p1.setLabel('bottom', 'sim time', 's')
+        p1.setLabel('left', 'rpm')
+        p1.getAxis('left').enableAutoSIPrefix(False)   # show plain rpm
+        p1.showGrid(x=True, y=True, alpha=0.2)
+        leg = p1.addLegend(offset=(10, 10))
+        rpm_curve = p1.plot(pen=pg.mkPen('y', width=2), name='rpm')
+        # throttle on a second view box sharing the x axis
+        thr_vb = pg.ViewBox()
+        p1.showAxis('right')
+        p1.scene().addItem(thr_vb)
+        p1.getAxis('right').linkToView(thr_vb)
+        thr_vb.setXLink(p1)
+        thr_vb.setYRange(0, 1, padding=0)
+        p1.getAxis('right').enableAutoSIPrefix(False)
+        p1.getAxis('right').setLabel('throttle', '0..1')
+        thr_curve = pg.PlotCurveItem(pen=pg.mkPen('c', width=2, style=Qt.DashLine))
+        thr_vb.addItem(thr_curve)
+        leg.addItem(thr_curve, 'throttle')
+
+        def sync_vb():
+            thr_vb.setGeometry(p1.vb.sceneBoundingRect())
+            thr_vb.linkedViewChanged(p1.vb, thr_vb.XAxis)
+
+        p1.vb.sigResized.connect(sync_vb)
+        w = ScopeWindow(plot, [p1.vb, thr_vb],
+                        lambda: graph_rpm_check.setChecked(False),
+                        'AM32 SITL rpm / throttle',
+                        readout=[('rpm', p1.vb, ''), ('throttle', thr_vb, '')])
+        # window length control: shrink it to resolve fast waveform
+        # tests - 84 cycles of a 7Hz sine across a 12s window can only
+        # alias, a 2s window shows them cleanly
+        win_spin = QDoubleSpinBox()
+        win_spin.setRange(0.5, RPM_WINDOW_MAX_S)
+        win_spin.setValue(12.0)
+        win_spin.setDecimals(1)
+        win_spin.setSuffix(' s window')
+        win_spin.setToolTip(
+            'Displayed history length in SIMULATED seconds, matching the\n'
+            'axis units and the waveform test frequencies. Reduce it to\n'
+            'resolve fast sine/square tests; widening shows history\n'
+            'already recorded.')
+        win_spin.valueChanged.connect(
+            lambda v: log_action('rpm_window %.1f' % v))
+        w.bar.insertWidget(2, win_spin)
+        w.resize(700, 340)
+        rpm_graph.update(win=w, p1=p1, rpm_curve=rpm_curve,
+                         thr_curve=thr_curve, win_spin=win_spin)
+        sync_vb()
+
+    def graph_rpm_toggled():
+        log_action('rpm_graph %d' % int(graph_rpm_check.isChecked()))
+        if graph_rpm_check.isChecked() and 'win' not in rpm_graph:
+            if not HAVE_PYQTGRAPH:
+                model_status.setText('pyqtgraph not available')
+                graph_rpm_check.setChecked(False)
+                return
+            make_rpm_graph()
+        if 'win' in rpm_graph:
+            rpm_graph['win'].setVisible(graph_rpm_check.isChecked())
+
+    graph_rpm_check.toggled.connect(graph_rpm_toggled)
 
     # motor/bridge animation, created lazily on first enable
     view = None
@@ -693,20 +1613,42 @@ def main():
 
     motorview_check.toggled.connect(motorview_changed)
 
+    scope_pace = {'tick': 0, 'every': 1}
+
     def update_sim_views():
-        visible = [gw for gw, _ in graph_windows.values() if gw.isVisible()]
-        if visible:
-            win_s = window_spin.value() * 1e-3
-            w = sim.window(win_s)
-            if w:
-                t0 = w[-1][0] - win_s
-                ts = [smp[0] - t0 for smp in w]
-                for gw, curves in graph_windows.values():
-                    if gw.isVisible():
-                        for curve, col in curves:
-                            curve.setData(ts, [smp[col] for smp in w])
-                        # the x axis is the window control, not auto range
-                        gw.setXRange(0, win_s, padding=0)
+        # paused windows keep their frozen display; the stream keeps
+        # running so unpausing lands on the current data
+        active = [t for t in graph_windows.values()
+                  if t[0].isVisible() and not t[0].pause.isChecked()]
+        if active:
+            # huge windows (fine sample periods) redraw less often: the
+            # data prep holds the GIL on the Qt thread, and physics-facing
+            # threads (DShot sender, waveform) must keep their cadence
+            scope_pace['tick'] += 1
+            if scope_pace['tick'] >= scope_pace['every']:
+                scope_pace['tick'] = 0
+                maxlen = 0
+                # each scope carries its own window control, so the span
+                # is fetched per graph; the window is in SIMULATED time
+                for cont, plot, curves, win_spin in active:
+                    win_s = win_spin.value() * 1e-3
+                    w = sim.window(win_s)
+                    if not w:
+                        continue
+                    maxlen = max(maxlen, len(w))
+                    # one C-speed array build instead of a python
+                    # comprehension per curve; numpy arrays are also
+                    # pyqtgraph's fast path in setData
+                    arr = np.array([smp[:12] for smp in w])
+                    ts = arr[:, 0] - (w[-1][0] - win_s)
+                    for curve, col in curves:
+                        curve.setData(ts, arr[:, col])
+                    # x axis is the window control, not auto range
+                    plot.setXRange(0, win_s, padding=0)
+                    cont.refresh_readout()
+                # huge windows (fine sample periods) redraw less often: the
+                # data prep holds the GIL on the Qt thread
+                scope_pace['every'] = 1 + maxlen // 10000
         if motorview_check.isChecked() and view is not None:
             smp = sim.latest()
             if smp is not None:
@@ -722,16 +1664,94 @@ def main():
                     anim['legs'][p].setBrush(QBrush(MODE_COLORS.get(modes[p], QColor('gray'))))
                 anim['comp'].setText('comparator: phase %s out=%d' % ('UVW'[comp_ph], comp_out))
                 anim['rpm'].setText('%.0f rpm' % (omega * 60 / (2 * math.pi)))
+        # rpm/throttle sampling lives in the waveform thread (200Hz);
+        # here we only redraw. The history keeps rolling while paused,
+        # so unpausing shows the current window, and it holds the
+        # longest selectable window so widening shows history at once
+        rg = rpm_graph.get('win')
+        if rg is not None and rg.isVisible() and not rg.pause.isChecked():
+            with rpm_lock:
+                hist = list(rpm_hist)          # C-speed snapshot
+            if hist:
+                # the window is SIM seconds, matching the axis units and
+                # the waveform frequencies
+                win_s = rpm_graph['win_spin'].value()
+                cutoff = hist[-1][0] - win_s
+                # bisect's key= argument needs Python 3.10, while the
+                # Python shipped with current Xcode is still 3.9
+                lo, hi = 0, len(hist)
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if hist[mid][0] < cutoff:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+                hist = hist[lo:]
+            if len(hist) > 1:
+                # x is sim seconds before now (0 at the right edge); the
+                # spanned range varies with speedup, the tick spacing
+                # stays honest sim time
+                arr = np.asarray(hist)
+                ts = arr[:, 0] - arr[-1, 0]
+                rpm_graph['rpm_curve'].setData(ts, arr[:, 1])
+                rpm_graph['thr_curve'].setData(ts, arr[:, 2])
+                rpm_graph['p1'].setXRange(float(ts[0]), 0, padding=0)
+                rg.refresh_readout()
 
     sim_view_timer = QTimer()
     sim_view_timer.timeout.connect(update_sim_views)
-    sim_view_timer.start(33)
+    # 20fps: the repaints run on the Qt thread, so a lower rate leaves the
+    # event loop more time to service the audio pull between frames
+    sim_view_timer.start(50)
+
+    # ---- simulator status: the true state of the simulated machine,
+    # straight from the physics stream, as opposed to the telemetry
+    # panel below which shows what the firmware reports over its links
+    fixed = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+    fs = QGroupBox('simulator status (true state)')
+    fs.setToolTip(
+        'The actual state of the simulation, read from the state stream:\n'
+        'not what the firmware measures or reports. Differences between\n'
+        'this and the telemetry panel below are the ESC firmware\n'
+        'mismeasuring (ADC scaling, commutation timing), which is often\n'
+        'exactly what you want to see.')
+    gs = QGridLayout(fs)
+    top.addWidget(fs, 1, 0, 1, 2)
+    sim_status = QLabel('rpm=- volt=- current=- armed=-')
+    sim_status.setFont(fixed)
+    gs.addWidget(sim_status, 0, 0)
+    param_btn = QPushButton('Parameters...')
+    param_btn.setToolTip(
+        'Edit the simulated ESC eeprom directly over the simulator link\n'
+        '(no 4-way or DroneCAN parameter protocol involved).')
+    gs.addWidget(param_btn, 0, 1)
+    eeprom_client = EepromClient(args.host, args.state_port)
+    param_state = {'dialog': None, 'mismatch': None, 'next_check': 0.0,
+                   'input_hint': None}
+
+    def open_params():
+        from sitl_param_dialog import ParamDialog
+        d = param_state.get('dialog')
+        if d is None:
+            d = ParamDialog(eeprom_client, win)
+            param_state['dialog'] = d
+        else:
+            d.refresh()
+        d.show()
+        d.raise_()
+    param_btn.clicked.connect(open_params)
+
+    def params_view_refresh():
+        # keep an open parameters view in step with a model load/edit; the
+        # reload is async over the sim link, so let it apply first
+        d = param_state.get('dialog')
+        if d is not None and d.isVisible():
+            QTimer.singleShot(400, d.refresh)
 
     # ---- telemetry panel
-    f3 = QGroupBox('telemetry')
+    f3 = QGroupBox('telemetry (as the firmware reports it)')
     g3 = QGridLayout(f3)
-    top.addWidget(f3, 1, 0, 1, 2)
-    fixed = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+    top.addWidget(f3, 2, 0, 1, 2)
     bds_label = QLabel('BDShot: -')
     bds_label.setToolTip(
         'Telemetry decoded from the BDShot replies on the signal wire:\n'
@@ -757,6 +1777,133 @@ def main():
     can_label.setFont(fixed)
     g3.addWidget(can_label, 1, 0)
 
+    # ---- SITL launcher panel: run the simulator binary itself, on the
+    # ports this GUI already drives, instead of starting it separately
+    fl = QGroupBox('SITL process')
+    fl.setToolTip(
+        'Run the AM32 simulator binary itself. It is launched on the\n'
+        'ports this GUI drives, so the panels above control it. Leave it\n'
+        'stopped to drive a simulator you started separately.')
+    gl = QGridLayout(fl)
+    sim_bin_edit = QLineEdit(sim_runner.bundled_sitl() or '')
+    sim_ee_edit = QLineEdit(sim_runner.bundled_eeprom() or '')
+    sim_bl_edit = QLineEdit('')
+
+    def _browse(edit, title, filt='All files (*)'):
+        def go():
+            path, _ = QFileDialog.getOpenFileName(win, title, edit.text(), filt)
+            if path:
+                edit.setText(path)
+        return go
+
+    for r, (lab, edit, filt) in enumerate((
+            ('SITL binary', sim_bin_edit, 'All files (*)'),
+            ('EEPROM', sim_ee_edit, 'EEPROM (*.bin);;All files (*)'),
+            ('Bootloader (optional)', sim_bl_edit, 'All files (*)'))):
+        gl.addWidget(QLabel(lab), r, 0)
+        gl.addWidget(edit, r, 1)
+        b = QPushButton('Browse...')
+        b.clicked.connect(_browse(edit, lab, filt))
+        gl.addWidget(b, r, 2)
+
+    gl.addWidget(QLabel('Input'), 3, 0)
+    sim_input = QComboBox()
+    sim_input.addItems(['Auto (from eeprom)', 'DShot', 'DroneCAN'])
+    sim_input.setToolTip(
+        'Force the ESC firmware input mode. A DroneCAN-configured eeprom '
+        '(like the bundled one) ignores DShot input, so pick DShot here to '
+        'drive it from the DShot pane, or DroneCAN to drive it over CAN. '
+        'Auto uses whatever the eeprom is set to.')
+    gl.addWidget(sim_input, 3, 1)
+    sim_verbose = QCheckBox('verbose')
+    gl.addWidget(sim_verbose, 3, 2)
+    sim_accurate = QCheckBox('high accuracy')
+    sim_accurate.setToolTip(
+        'Run the simulator without pacing sleeps so it holds real time '
+        'steadily (the motor will not desync from timing jitter). Uses a '
+        'full CPU core; leave off if the UI feels sluggish.\n'
+        'On Windows the paced mode only reaches ~0.1x real time (the OS '
+        'sleep is too coarse), so this defaults on there - the motor '
+        'needs it.')
+    # Windows' coarse timer makes the paced simulator run at ~0.1x real
+    # time, which desyncs the motor; busy-waiting is effectively required
+    sim_accurate.setChecked(sys.platform.startswith('win'))
+    gl.addWidget(sim_accurate, 3, 3)
+    sim_start_btn = QPushButton('Start simulator')
+    sim_stop_btn = QPushButton('Stop')
+    sim_stop_btn.setEnabled(False)
+    gl.addWidget(sim_start_btn, 4, 2)
+    gl.addWidget(sim_stop_btn, 4, 3)
+    sim_launch_status = QLabel('not launched from here')
+    gl.addWidget(sim_launch_status, 4, 0, 1, 2)
+    sim_pause_check = QCheckBox('pause scroll')
+    sim_pause_check.setToolTip('Stop the output pane from following new '
+                               'lines, so you can read back through it.')
+    gl.addWidget(sim_pause_check, 5, 3)
+    sim_out_view = QPlainTextEdit()
+    sim_out_view.setReadOnly(True)
+    sim_out_view.setMaximumBlockCount(1000)
+    sim_out_view.setMinimumHeight(90)
+    gl.addWidget(sim_out_view, 6, 0, 1, 4)
+
+    def sim_launch():
+        itype = {0: None, 1: 1, 2: 5}[sim_input.currentIndex()]
+        try:
+            runner.start(
+                sim_bin_edit.text().strip() or None,
+                sim_ee_edit.text().strip() or None,
+                model=(model_paths.get(model_combo.currentText())),
+                host=args.host, input_port=args.port,
+                state_port=args.state_port, can_uri=args.can_uri,
+                bootloader=sim_bl_edit.text().strip() or None,
+                verbose=sim_verbose.isChecked(), input_type=itype,
+                high_accuracy=sim_accurate.isChecked())
+        except Exception as ex:
+            sim_launch_status.setText('failed: %s' % ex)
+            return
+        sim_start_btn.setEnabled(False)
+        sim_stop_btn.setEnabled(True)
+        sim_launch_status.setText('running on udp %u / %s'
+                                  % (args.port, args.can_uri))
+
+    def sim_halt():
+        runner.stop()
+        sim_start_btn.setEnabled(True)
+        sim_stop_btn.setEnabled(False)
+        sim_launch_status.setText('stopped')
+
+    sim_start_btn.clicked.connect(sim_launch)
+    sim_stop_btn.clicked.connect(sim_halt)
+    top.addWidget(fl, 5, 0, 1, 2)
+
+    def drain_sim_out():
+        # drain the whole queue so it can't grow without bound, but only
+        # append the most recent lines and in one batch - a verbose sim
+        # floods stdout, and one appendPlainText per line would stall the
+        # UI on the Qt thread
+        lines = []
+        while True:
+            try:
+                lines.append(sim_out_q.get_nowait())
+            except queue.Empty:
+                break
+        if lines:
+            if len(lines) > 500:
+                lines = lines[-500:]
+            bar = sim_out_view.verticalScrollBar()
+            # appendPlainText auto-scrolls to the bottom on its own when
+            # the view is already there, so to pause we put the scrollbar
+            # back where it was after appending
+            keep = bar.value()
+            paused = sim_pause_check.isChecked()
+            sim_out_view.appendPlainText('\n'.join(lines))
+            bar.setValue(min(keep, bar.maximum()) if paused else bar.maximum())
+            if not runner.is_running() and sim_stop_btn.isEnabled():
+                sim_halt()
+    sim_out_timer = QTimer()
+    sim_out_timer.timeout.connect(drain_sim_out)
+    sim_out_timer.start(200)
+
     # ---- optional TCP control interface, driving the same widgets and
     # handlers as the mouse, so scripted tests cover the UI paths.
     # Commands are one per line; OK/STATUS/ERR responses go back to the
@@ -774,10 +1921,16 @@ def main():
                 conn.sendall((msg + '\n').encode())
             except OSError:
                 pass
-        f = conn.makefile('r')
-        for line in f:
-            cmd_queue.put((line, reply))
-        conn.close()
+        try:
+            with conn.makefile('r') as f:
+                for line in f:
+                    cmd_queue.put((line, reply))
+        except OSError:
+            # macOS reports ECONNRESET when the app exits while a test
+            # client still has the control connection open
+            pass
+        finally:
+            conn.close()
 
     def control_server():
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -813,6 +1966,8 @@ def main():
             ds_edt.setChecked(False)
         elif cmd == 'can_enable' and can is not None:
             can_enable.setChecked(bool(int(cargs[0])))
+        elif cmd == 'can_dna' and can is not None:
+            can_dna.setChecked(bool(int(cargs[0])))
         elif cmd == 'can_rawcmd' and can is not None:
             can_rawcmd.setChecked(bool(int(cargs[0])))
         elif cmd == 'can_armed' and can is not None:
@@ -825,6 +1980,18 @@ def main():
             can.set_param(cargs[0], int(cargs[1]))
         elif cmd == 'motorview':
             motorview_check.setChecked(bool(int(cargs[0])))
+        elif cmd == 'rpm_graph':
+            graph_rpm_check.setChecked(bool(int(cargs[0])))
+        elif cmd == 'rpm_window':
+            if 'win_spin' in rpm_graph:
+                rpm_graph['win_spin'].setValue(float(cargs[0]))
+        elif cmd == 'wave':
+            if cargs and cargs[0] == 'off':
+                wave_stop()
+            else:
+                target = cargs[4] if len(cargs) > 4 else 'dshot'
+                wave_apply(cargs[0], float(cargs[1]), float(cargs[2]),
+                           float(cargs[3]), target)
         elif cmd == 'model':
             if cargs[0] in model_paths:
                 model_combo.setCurrentText(cargs[0])
@@ -843,8 +2010,10 @@ def main():
                 graph_i_check.setChecked(True)
         elif cmd == 'sample_us':
             sample_spin.setValue(float(cargs[0]))
-        elif cmd == 'window_ms':
-            window_spin.setValue(float(cargs[0]))
+        elif cmd in ('i_window', 'v_window'):
+            key = cmd[0]
+            if key in graph_windows:
+                graph_windows[key][3].setValue(float(cargs[0]))
         elif cmd == 'speedup':
             x = float(cargs[0])
             pos = int(round(150 + 50 * math.log10(max(0.001, min(2.0, x)))))
@@ -852,11 +2021,98 @@ def main():
                 speed_changed()
             else:
                 speed_slider.setValue(pos)
+        elif cmd == 'stuck':
+            x = float(cargs[0])
+            if not math.isfinite(x):
+                raise ValueError('stuck %r' % cargs[0])
+            pos = int(round(max(0.0, min(1.0, x)) * 100))
+            if pos == stuck_slider.value():
+                stuck_changed()
+            else:
+                stuck_slider.setValue(pos)
+        elif cmd == 'audio':
+            audio_check.setChecked(bool(int(cargs[0])))
+        elif cmd == 'motor_audio':
+            motor_audio_check.setChecked(bool(int(cargs[0])))
+        elif cmd == 'audio_volume':
+            audio_slider.setValue(int(cargs[0]))
+        elif cmd == 'snap':
+            # screenshot a window to a file, for scripted visual checks
+            tgt = win
+            if len(cargs) > 1 and cargs[1] == 'rpm' and 'win' in rpm_graph:
+                tgt = rpm_graph['win']
+            tgt.grab().save(cargs[0])
+        elif cmd == 'sim_set':
+            {'binary': sim_bin_edit, 'eeprom': sim_ee_edit,
+             'bootloader': sim_bl_edit}[cargs[0]].setText(' '.join(cargs[1:]))
+        elif cmd == 'sim_verbose':
+            sim_verbose.setChecked(bool(int(cargs[0])))
+        elif cmd == 'sim_input':
+            sim_input.setCurrentIndex(
+                {'auto': 0, 'dshot': 1, 'dronecan': 2}.get(cargs[0].lower(), 0))
+        elif cmd == 'sim_accurate':
+            sim_accurate.setChecked(bool(int(cargs[0])))
+        elif cmd == 'sim_start':
+            sim_launch()
+        elif cmd == 'sim_stop':
+            sim_halt()
+        elif cmd == 'sim_status':
+            reply('STATUS sim_process: %s'
+                  % ('running' if runner.is_running() else 'stopped'))
+        elif cmd == 'sim_log':
+            reply('STATUS sim_log: %s'
+                  % '\\n'.join(runner.recent()[-20:]))
+        elif cmd == 'model_new':
+            # build a model from key=value args and save it, for tests:
+            #   model_new PATH size=2216 kv=920 poles=14 ...
+            path = cargs[0]
+            spec = {'poles': 14, 'source': 'battery', 'temperature_c': 25.0}
+            for kv in cargs[1:]:
+                k, _, v = kv.partition('=')
+                if k in ('poles',):
+                    spec[k] = int(v)
+                elif k in ('size', 'source'):
+                    spec[k] = v
+                elif k == 'prop':
+                    spec['prop'] = model_builder.parse_prop(v)
+                elif k == 'idle':
+                    spec['idle'] = model_builder.parse_idle(v)
+                elif k == 'cells':
+                    spec['cells'] = int(v)
+                else:
+                    spec[{'kv': 'kv', 'resistance': 'resistance_mohm',
+                          'weight': 'weight_g',
+                          'voltage': 'voltage'}.get(k, k)] = float(v)
+            with open(path, 'w') as f:
+                f.write(json.dumps(model_builder.build_model(spec), indent=4))
         elif cmd == 'status':
             reply('STATUS %s' % bds_label.text())
             reply('STATUS %s' % can_label.text())
-            reply('STATUS ds: %s' % (ds.status or '-'))
+            reply('STATUS ds: %s' % (param_state['input_hint'] or ds.status
+                                     or '-'))
             reply('STATUS sim: %s rate=%.0f/s' % (sim.model_status or '-', sim.rate.hz()))
+            smp = sim.latest()
+            reply('STATUS rpmhist: n=%d stream_t=%.3f taxis_last=%.3f acc=%.3f'
+                  % (len(rpm_hist),
+                     smp[0] if smp else -1,
+                     rpm_taxis.last if rpm_taxis.last is not None else -1,
+                     rpm_taxis.acc))
+            reply('STATUS canbus: %s%s' %
+                  ('%.0f fps' % can_fps.rate.hz() if can_fps.available
+                   else can_fps.error,
+                   ' dna-request' if can_fps.available
+                   and can_fps.dna_request_seen() else ''))
+            if tones is not None:
+                freq, amp = tones.current()
+                reply('STATUS audio: on vol=%d freq=%.1f amp=%.5f'
+                      % (audio_slider.value(), freq, amp))
+            else:
+                reply('STATUS audio: off')
+            if phys_stream is not None:
+                reply('STATUS motor_audio: on rate=%.0f/s'
+                      % phys_stream.rate.hz())
+            else:
+                reply('STATUS motor_audio: off')
             return
         elif cmd == 'quit':
             app.quit()
@@ -901,9 +2157,73 @@ def main():
     if args.control_port > 0 or args.replay:
         cmd_timer.start(50)
 
+    def update_sim_status():
+        smp = sim.latest()
+        if smp is None:
+            sim_status.setText('rpm=- volt=- current=- armed=-   '
+                               '(enable a scope or motor view to stream state)')
+        else:
+            rpm = smp[1] * 60.0 / (2 * math.pi)
+            armed = 'yes' if (ds.spinning or (can is not None and
+                                              can.status.get('rpm', 0))) else '-'
+            sim_status.setText(
+                'rpm=%-8.0f volt=%-6.2f current=%-6.2f armed=%s'
+                % (rpm, smp[10], smp[11], armed))
+        # tint the parameters button while the stored settings disagree
+        # with the simulated motor: silent mismatches (a stale MOTOR_KV
+        # especially) look like physics faults, not configuration
+        now = time.time()
+        if now >= param_state['next_check']:
+            param_state['next_check'] = now + 3.0
+            image, model = eeprom_client.fetch()
+            if image is not None:
+                import sitl_params
+                bad = sitl_params.mismatches(image, model)
+                if bad != param_state['mismatch']:
+                    param_state['mismatch'] = bad
+                    if bad:
+                        param_btn.setStyleSheet(
+                            'background-color: #ffd6d6; font-weight: bold')
+                        param_btn.setText('Parameters (%s)...' % ', '.join(bad))
+                    else:
+                        param_btn.setStyleSheet('')
+                        param_btn.setText('Parameters...')
+                # the freshly seeded eeprom default is 5 (dronecan only),
+                # which disables the PWM/DShot input at boot: an enabled
+                # DShot stream then gets zero replies, never arms, and
+                # with no CAN commander the ESC reboot-loops on its
+                # signal timeout. Say so instead of leaving replies=0/s
+                # as the only clue
+                if len(image) > 46 and image[46] == 5 and ds.enabled:
+                    param_state['input_hint'] = (
+                        'eeprom INPUT_SIGNAL_TYPE=5 (dronecan): the '
+                        'PWM/DShot input is disabled at boot - set 1 '
+                        '(dshot) or 2 (servo) in Parameters')
+                else:
+                    param_state['input_hint'] = None
+                # the INPUT_SIGNAL_TYPE editor tracks the stored byte so
+                # it shows what the ESC actually has, not a stale entry
+                # (it used to sit at its initial value forever); leave it
+                # alone while the user is editing
+                if (can is not None and len(image) > 46
+                        and not ptype_var.hasFocus()
+                        and ptype_var.value() != image[46]):
+                    ptype_var.setValue(image[46])
+
     def update():
+        update_sim_status()
+        if wave['kind'] is not None:
+            # follow the waveform thread's throttle on the driven input's
+            # slider (display only; the real command already went out on
+            # the wave thread). wave['value'] is in that slider's units
+            slider = (can_value if wave['target'] == 'can' and can is not None
+                      else ds_value)
+            slider.blockSignals(True)
+            slider.setValue(wave['value'])
+            slider.blockSignals(False)
         ds_value_label.setText(str(ds_value.value()))
-        ds_status.setText(ds.status or 'arm: enable + hold zero throttle >1.5s')
+        ds_status.setText(param_state['input_hint'] or ds.status
+                          or 'arm: enable + hold zero throttle >1.5s')
         edt = ' '.join('%s=%s' % kv for kv in sorted(ds.edt_fresh().items()))
         bds_label.setText('BDShot:   rpm=%-6.0f %-8s EDT:%-3s sent=%.0f/s replies=%.0f/s badcrc=%u %s'
                           % (ds.rpm, 'spinning' if ds.spinning else 'stopped',
@@ -929,11 +2249,21 @@ def main():
                 param_status.setText(can.param_result.get_nowait())
             except queue.Empty:
                 pass
+            if can_fps.available and can_fps.dna_request_seen():
+                # flash: a node on the bus is asking for an allocation
+                if int(time.time() * 2.5) % 2:
+                    can_dna_label.setText('DNA request')
+                    can_dna_label.setStyleSheet('color: red; font-weight: bold')
+                else:
+                    can_dna_label.setText('DNA request')
+                    can_dna_label.setStyleSheet('color: gray')
+            else:
+                can_dna_label.setText('')
+                can_dna_label.setStyleSheet('')
         model_status.setText(sim.model_status)
-        if sim.enabled:
-            sim_rate_label.setText('%.0f samples/s' % sim.rate.hz())
-        else:
-            sim_rate_label.setText('')
+        sim_rate_label.setText('%.0f samples/s' % sim.rate.hz())
+        if can_fps.available:
+            can_fps_label.setText('FPS: %.0f' % can_fps.rate.hz())
 
     update_timer = QTimer()
     update_timer.timeout.connect(update)
@@ -948,7 +2278,13 @@ def main():
     try:
         app.exec()
     finally:
+        wave['run'] = False
+        if tone_synth is not None:      # stop the audio threads cleanly
+            tone_synth.stop()
+        if phys_player is not None:
+            phys_player.stop()
         ds.running = False
+        runner.stop()
         sim.close()
         if can is not None:
             can.running = False
@@ -956,5 +2292,33 @@ def main():
             can.thread.join(2.0)
 
 
+def _ensure_stdio():
+    '''a --windowed packaged build has no console, so sys.stdout and
+    sys.stderr are None and any print()/write() would raise. Point them
+    at a log file so the GUI cannot die on a stray message'''
+    import tempfile
+    for name in ('stdout', 'stderr'):
+        if getattr(sys, name, None) is not None:
+            continue
+        try:
+            f = open(os.path.join(tempfile.gettempdir(), 'am32-sitl-gui.log'),
+                     'a', buffering=1)
+        except Exception:
+            f = open(os.devnull, 'w')
+        setattr(sys, name, f)
+
+
 if __name__ == '__main__':
+    _ensure_stdio()
+    # the DroneCAN node runs its IO in a multiprocessing child. In a
+    # packaged (PyInstaller) build that child re-executes this binary, so
+    # without freeze_support() it would start another copy of the whole
+    # GUI instead of the worker
+    import multiprocessing
+    multiprocessing.freeze_support()
+    if sys.platform.startswith('linux'):
+        try:
+            multiprocessing.set_start_method('fork')
+        except RuntimeError:
+            pass
     main()

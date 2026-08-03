@@ -24,15 +24,11 @@ void motor_get_live_state(float *omega, float *theta, float *theta_e, float i[3]
 // re-derive cached values after a runtime config reload
 void motor_config_changed(void);
 
-// zero-cross fault injection (state port cmd 3): suppress comparator EXTI
-// delivery for duration_us. mode 0 = off, 1 = drop every delivery,
-// 2 = drop deliveries during every other commutation window
-void motor_zc_fault(uint8_t mode, uint32_t duration_us);
-// total edge deliveries dropped by the fault gate (monotonic)
-uint32_t motor_zc_dropped(void);
-
 // accumulate iu,iv,iw,vu,vv,vw,vbus,ibus for averaged state sampling
 void motor_add_signals(double acc[8]);
+
+// accumulate audio signals (torque, summed |i|) for the audio stream
+void motor_add_audio(double acc[2]);
 
 // called from the firmware main loop for debug tracing
 void motor_log_mainloop(void);
@@ -40,16 +36,20 @@ void motor_log_mainloop(void);
 // commutation debug logging, called from comStep
 void motor_log_commutation(int step);
 
+// zero-cross fault injection (state port cmd 8): suppress comparator EXTI
+// delivery so the firmware's missed-ZC blind-step path can be exercised
+// deterministically. mode 0 off, 1 drop all, 2 alternate windows.
+void motor_zc_fault(uint8_t mode, uint32_t duration_us);
+// total edge deliveries dropped by the fault gate (monotonic)
+uint32_t motor_zc_dropped(void);
+
 // generic event logging into the same debug ring
 enum motor_ev {
 	MEV_COMMUTATE = 0, // a = step
 	MEV_EDGE,	   // comparator edge: a = new level, b = IMR set, c = pended
 	MEV_COMP_BLANKED,  // comp irq discarded by blanking: a = CNT, b = ci/2
 	MEV_COMP_RUN,	   // comp irq calling interruptRoutine: a = CNT
-	MEV_COM_ARM,	   // COM timer armed: a = ticks. From interruptRoutine
-			   // (accepted crossing, a = waitTime) or from
-			   // PeriodElapsedCallback (blind-step deadline arm /
-			   // cancel-race re-arm) - not necessarily an accepted ZC.
+	MEV_ZC_ACCEPT,	   // interruptRoutine armed COM timer: a = waitTime
 	MEV_MAINLOOP,	   // firmware main loop iteration: a = avg, b = last_avg, c = gap us
 };
 void motor_log_event(int kind, uint32_t a, uint32_t b, uint32_t c);

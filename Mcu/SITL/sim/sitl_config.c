@@ -13,32 +13,41 @@
 #include "jsmn.h"
 
 sitl_config_t sitl_cfg = {
+	/*
+      defaults are the calibrated VimDrones Nano + T-Motor AIR 2216 II
+      920Kv with a 10x4.5 prop on 3S (an Edu450 drivetrain), fitted
+      against the bench captures in data/VIMDRONES_NANO_2216 - see
+      models/vimdrones_nano_2216.json. A prop-loaded model is the right
+      default: it matches how ESCs are actually flown, and the real
+      combination never desyncs, which the model reproduces
+     */
 	.motor =
 		{
-			.kv = 900,
+			.kv = 944,
 			.poles = 14,
-			.resistance = 0.045f,
-			.inductance = 2.1e-5f,
+			.resistance = 0.09f,
+			.inductance = 1.5e-5f,
 			.mutual_inductance = 0.0f,
-			// defaults model a ~7 inch prop on a 900Kv motor at 4S: about
-			// 19A and 13500 rpm at full throttle. Rotors much lighter than
-			// this accelerate faster than the firmware desync detection
-			// allows
-			.inertia = 3.0e-5f,
+			.inertia = 3.35e-5f,
 			.damping = 1.0e-6f,
-			.static_friction = 0.003f,
-			.load_k_omega2 = 1.0e-7f,
+			.static_friction = 0.002f,
+			.load_k_omega2 = 1.9e-7f,
+			.stuck_torque = 1.0f,
 		},
 	.battery =
 		{
-			.voltage = 16.8f,
-			.resistance = 0.012f,
+			.voltage = 12.4f,
+			.resistance = 0.09f,
+			.capacitance = 0.002f,
+			.sink_resistance = 4.0f,
+			.sink_current_max = 0.8f,
 		},
 	.esc =
 		{
-			.rds_on = 0.004f,
+			.rds_on = 0.006f,
 			.diode_vf = 0.7f,
-			.temperature_c = 25.0f,
+			.temperature_c = 38.0f,
+			.commutation_transfer = 1.0f,
 		},
 	.sim =
 		{
@@ -46,18 +55,25 @@ sitl_config_t sitl_cfg = {
 			.loop_time_ns = 2000,
 			.isr_read_ns = 100,
 			.comparator_noise_mv = 5.0f,
-			// enough hysteresis that noise cannot eat a zero crossing edge,
-			// as on a real comparator
-			.comparator_hysteresis_mv = 15.0f,
+			// the real boards configure no comparator hysteresis; the
+			// divider RC band-limits the input instead
+			.comparator_hysteresis_mv = 0.0f,
+			.comparator_phase_rc_ns = 800,
+			.comparator_neutral_rc_ns = 800,
+			.comparator_min_toggle_ns = 2000,
+			.fw_lag_max_ns = 20000,
 			.watchdog_enabled = true,
 		},
 	.speedup = 1.0f,
+	.stuck = 0.0f,
 	.input_port = 57733,
 	.state_port = 57734,
 	.bind_any = false,
 	.eeprom_path = "am32_eeprom.bin",
 	.can_uri = "mcast:0",
 	.uid = NULL,
+	.bootloader_path = NULL,
+	.physics_log = NULL,
 	.node_id = -1,
 	.input_type = -1,
 	.verbose = false,
@@ -82,16 +98,25 @@ static const struct cfg_entry cfg_table[] = {
 	{"motor", "damping", CFG_FLOAT, &sitl_cfg.motor.damping},
 	{"motor", "static_friction", CFG_FLOAT, &sitl_cfg.motor.static_friction},
 	{"motor", "load_k_omega2", CFG_FLOAT, &sitl_cfg.motor.load_k_omega2},
+	{"motor", "stuck_torque", CFG_FLOAT, &sitl_cfg.motor.stuck_torque},
 	{"battery", "voltage", CFG_FLOAT, &sitl_cfg.battery.voltage},
 	{"battery", "resistance", CFG_FLOAT, &sitl_cfg.battery.resistance},
+	{"battery", "capacitance", CFG_FLOAT, &sitl_cfg.battery.capacitance},
+	{"battery", "sink_resistance", CFG_FLOAT, &sitl_cfg.battery.sink_resistance},
+	{"battery", "sink_current_max", CFG_FLOAT, &sitl_cfg.battery.sink_current_max},
 	{"esc", "rds_on", CFG_FLOAT, &sitl_cfg.esc.rds_on},
 	{"esc", "diode_vf", CFG_FLOAT, &sitl_cfg.esc.diode_vf},
 	{"esc", "temperature_c", CFG_FLOAT, &sitl_cfg.esc.temperature_c},
+	{"esc", "commutation_transfer", CFG_FLOAT, &sitl_cfg.esc.commutation_transfer},
 	{"sim", "physics_dt_ns", CFG_U32, &sitl_cfg.sim.physics_dt_ns},
 	{"sim", "loop_time_ns", CFG_U32, &sitl_cfg.sim.loop_time_ns},
 	{"sim", "isr_read_ns", CFG_U32, &sitl_cfg.sim.isr_read_ns},
 	{"sim", "comparator_noise_mv", CFG_FLOAT, &sitl_cfg.sim.comparator_noise_mv},
 	{"sim", "comparator_hysteresis_mv", CFG_FLOAT, &sitl_cfg.sim.comparator_hysteresis_mv},
+	{"sim", "comparator_phase_rc_ns", CFG_U32, &sitl_cfg.sim.comparator_phase_rc_ns},
+	{"sim", "comparator_neutral_rc_ns", CFG_U32, &sitl_cfg.sim.comparator_neutral_rc_ns},
+	{"sim", "comparator_min_toggle_ns", CFG_U32, &sitl_cfg.sim.comparator_min_toggle_ns},
+	{"sim", "fw_lag_max_ns", CFG_U32, &sitl_cfg.sim.fw_lag_max_ns},
 	{"sim", "watchdog_enabled", CFG_BOOL, &sitl_cfg.sim.watchdog_enabled},
 };
 
@@ -226,20 +251,6 @@ static void clampf(float *v, float lo, float hi, const char *name)
 	}
 }
 
-static void clampu32(uint32_t *v, uint32_t lo, uint32_t hi, const char *name)
-{
-	uint32_t nv = *v;
-	if (nv < lo) {
-		nv = lo;
-	} else if (nv > hi) {
-		nv = hi;
-	}
-	if (nv != *v) {
-		fprintf(stderr, "SITL: config %s=%u clamped to %u\n", name, *v, nv);
-		*v = nv;
-	}
-}
-
 static void config_sanitise(void)
 {
 	clampf(&sitl_cfg.motor.kv, 1.0f, 1e6f, "motor.kv");
@@ -255,25 +266,20 @@ static void config_sanitise(void)
 	clampf(&sitl_cfg.motor.damping, 0.0f, 1.0f, "motor.damping");
 	clampf(&sitl_cfg.motor.static_friction, 0.0f, 10.0f, "motor.static_friction");
 	clampf(&sitl_cfg.motor.load_k_omega2, 0.0f, 1.0f, "motor.load_k_omega2");
+	clampf(&sitl_cfg.motor.stuck_torque, 0.0f, 100.0f, "motor.stuck_torque");
+	clampf(&sitl_cfg.stuck, 0.0f, 1.0f, "stuck");
 	clampf(&sitl_cfg.battery.voltage, 1.0f, 200.0f, "battery.voltage");
 	clampf(&sitl_cfg.battery.resistance, 0.0f, 10.0f, "battery.resistance");
+	clampf(&sitl_cfg.battery.capacitance, 0.0f, 1.0f, "battery.capacitance");
+	clampf(&sitl_cfg.battery.sink_resistance, 0.0f, 1000.0f, "battery.sink_resistance");
+	clampf(&sitl_cfg.battery.sink_current_max, 0.0f, 100.0f, "battery.sink_current_max");
+	if (sitl_cfg.sim.fw_lag_max_ns != 0 && sitl_cfg.sim.fw_lag_max_ns < 4 * sitl_cfg.sim.loop_time_ns) {
+		fprintf(stderr, "SITL: sim.fw_lag_max_ns raised to %u (4x loop_time_ns)\n", 4 * sitl_cfg.sim.loop_time_ns);
+		sitl_cfg.sim.fw_lag_max_ns = 4 * sitl_cfg.sim.loop_time_ns;
+	}
 	clampf(&sitl_cfg.esc.rds_on, 0.0f, 1.0f, "esc.rds_on");
 	clampf(&sitl_cfg.esc.diode_vf, 0.0f, 5.0f, "esc.diode_vf");
-
-	// physics_dt_ns == 0 turns sitl_isr_read_tick() into an infinite loop
-	// (accum_ns -= 0). Keep steps in a sane range for the BLDC model.
-	clampu32(&sitl_cfg.sim.physics_dt_ns, 100U, 10000U, "sim.physics_dt_ns");
-	// isr_read_ns == 0 freezes progress under PRIMASK (startup tunes /
-	// micros64 critical sections never complete). Cap at a few physics steps.
-	clampu32(&sitl_cfg.sim.isr_read_ns, 1U, sitl_cfg.sim.physics_dt_ns * 10U, "sim.isr_read_ns");
-	clampu32(&sitl_cfg.sim.loop_time_ns, 100U, 1000000U, "sim.loop_time_ns");
-
-	// match SET_SPEEDUP on the state port: [0, 100], 0 = free run
-	if (!isfinite(sitl_cfg.speedup) || sitl_cfg.speedup < 0.0f || sitl_cfg.speedup > 100.0f) {
-		const float nv = (!isfinite(sitl_cfg.speedup) || sitl_cfg.speedup < 0.0f) ? 0.0f : 100.0f;
-		fprintf(stderr, "SITL: config speedup=%g clamped to %g\n", (double)sitl_cfg.speedup, (double)nv);
-		sitl_cfg.speedup = nv;
-	}
+	clampf(&sitl_cfg.esc.commutation_transfer, 0.0f, 1.0f, "esc.commutation_transfer");
 }
 
 bool sitl_config_reload(const char *path)
@@ -302,6 +308,12 @@ static void usage(const char *prog)
 	       "  --input-type N   force eeprom INPUT_SIGNAL_TYPE (0=auto 1=dshot\n"
 	       "                   2=servo 5=dronecan)\n"
 	       "  --uid STR        string used to derive the 16 byte unique ID\n"
+	       "  --physics-log F  write raw physics state (rpm/volt/curr/duty)\n"
+	       "                   as JSONL at 1kHz of sim time, appended\n"
+	       "                   across boots\n"
+	       "  --bootloader ELF chain with the bootloader SITL (am32-bootloader\n"
+	       "                   repo): boot starts in the bootloader and resets\n"
+	       "                   return to it, as on hardware. Default off\n"
 	       "  --verbose        1Hz state output on stderr\n"
 	       "  --nosleep        busy wait instead of sleeping (uses two full\n"
 	       "                   CPU cores but gives the most accurate timing)\n"
@@ -324,6 +336,8 @@ void sitl_config_init(int argc, char **argv)
 		{"node-id", required_argument, NULL, 'n'},
 		{"input-type", required_argument, NULL, 'I'},
 		{"uid", required_argument, NULL, 'U'},
+		{"bootloader", required_argument, NULL, 'B'},
+		{"physics-log", required_argument, NULL, 'L'},
 		{"verbose", no_argument, NULL, 'v'},
 		{"nosleep", no_argument, NULL, 'N'},
 		{"realtime", no_argument, NULL, 'R'},
@@ -331,7 +345,7 @@ void sitl_config_init(int argc, char **argv)
 		{NULL, 0, NULL, 0},
 	};
 	int c;
-	while ((c = getopt_long(argc, argv, "c:e:u:p:P:s:An:I:U:vNRh", opts, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "c:e:u:p:P:s:An:I:U:B:L:vNRh", opts, NULL)) != -1) {
 		switch (c) {
 			case 'c':
 				load_json(optarg);
@@ -348,17 +362,9 @@ void sitl_config_init(int argc, char **argv)
 			case 'P':
 				sitl_cfg.state_port = atoi(optarg);
 				break;
-			case 's': {
-				char *end = NULL;
-				const float v = strtof(optarg, &end);
-				if (end == optarg || (end && *end != '\0') || !isfinite(v)) {
-					fprintf(stderr, "SITL: invalid --speedup '%s' (need a finite number)\n", optarg);
-					exit(1);
-				}
-				// range clamped in config_sanitise() to [0, 100]
-				sitl_cfg.speedup = v;
+			case 's':
+				sitl_cfg.speedup = strtof(optarg, NULL);
 				break;
-			}
 			case 'A':
 				sitl_cfg.bind_any = true;
 				break;
@@ -370,6 +376,12 @@ void sitl_config_init(int argc, char **argv)
 				break;
 			case 'U':
 				sitl_cfg.uid = optarg;
+				break;
+			case 'B':
+				sitl_cfg.bootloader_path = optarg;
+				break;
+			case 'L':
+				sitl_cfg.physics_log = optarg;
 				break;
 			case 'v':
 				sitl_cfg.verbose = true;
@@ -385,6 +397,32 @@ void sitl_config_init(int argc, char **argv)
 				usage(argv[0]);
 				exit(c == 'h' ? 0 : 1);
 		}
+	}
+	// a runtime SET_SPEEDUP is exported to the environment, which
+	// survives the execv of an emulated reset; the reset exec vector is
+	// the original argv, so without this the pace would jump back to
+	// the command line value whenever the firmware reboots
+	const char *env_speedup = getenv("AM32_SITL_SPEEDUP");
+	if (env_speedup != NULL) {
+		const float s = strtof(env_speedup, NULL);
+		if (s >= 0 && s <= 100) {
+			sitl_cfg.speedup = s;
+		}
+	}
+	// a runtime stuck rotor setting survives resets the same way: the
+	// obstruction is still in the prop when the firmware reboots
+	const char *env_stuck = getenv("AM32_SITL_STUCK");
+	if (env_stuck != NULL) {
+		const float s = strtof(env_stuck, NULL);
+		if (s >= 0 && s <= 1) {
+			sitl_cfg.stuck = s;
+		}
+	}
+	// a runtime model load survives resets too: the physical motor is
+	// unchanged by a firmware reboot, so reapply it over any --config
+	const char *env_model = getenv("AM32_SITL_MODEL");
+	if (env_model != NULL && env_model[0] != 0) {
+		load_json_ex(env_model, true);
 	}
 	config_sanitise();
 }

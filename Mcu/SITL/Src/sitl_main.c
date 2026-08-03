@@ -8,7 +8,14 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/file.h>
+#include <unistd.h>
+#ifdef _WIN32
+#	include <windows.h>
+// Windows deletes an environment variable by assigning it an empty value
+#	define unsetenv(name) _putenv(name "=")
+#else
+#	include <sys/file.h>
+#endif
 
 #include "sitl.h"
 #include "sitl_config.h"
@@ -57,6 +64,17 @@ static void lock_instance(void)
 	// the firmware writing it (a missing eeprom triggers default seeding)
 	char lockpath[512];
 	snprintf(lockpath, sizeof(lockpath), "%s.lock", sitl_cfg.eeprom_path);
+#ifdef _WIN32
+	// exclusive-share open; a second instance's open fails. FILE_FLAG_
+	// DELETE_ON_CLOSE and non-inheritable so a reset (re-exec) drops it.
+	// Contention only warns: the input socket bind is the real guard, and
+	// enforcing here would race the brief parent/child overlap on re-exec
+	HANDLE h = CreateFileA(lockpath, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (h == INVALID_HANDLE_VALUE) {
+		fprintf(stderr, "SITL: %s may be in use by another SITL instance\n", sitl_cfg.eeprom_path);
+	}
+	// handle deliberately left open to hold the lock
+#else
 	const int fd = open(lockpath, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
 	if (fd < 0) {
 		perror("SITL: lock file open");
@@ -70,17 +88,60 @@ static void lock_instance(void)
 		exit(1);
 	}
 	// fd deliberately left open to hold the lock
+#endif
 }
+
+#ifdef SITL_COVERAGE
+// gcov writes .gcda only through its atexit hook, which a SIGTERM/SIGKILL
+// and the execv on reset both skip - so coverage would be lost every run.
+// Flush explicitly on those paths. __gcov_dump is a gcc builtin
+void __gcov_dump(void);
+
+void sitl_coverage_flush(void)
+{
+	__gcov_dump();
+}
+
+static void coverage_signal(int sig)
+{
+	(void)sig;
+	__gcov_dump();
+	_exit(0);
+}
+
+static void install_coverage_handlers(void)
+{
+	struct sigaction sa = {0};
+	sa.sa_handler = coverage_signal;
+	sigaction(SIGTERM, &sa, NULL);
+	sigaction(SIGINT, &sa, NULL);
+}
+#else
+void sitl_coverage_flush(void) {}
+#endif
 
 int main(int argc, char **argv)
 {
-	// Connected UDP send() can raise SIGPIPE on macOS/BSD when multicast
-	// is unavailable (e.g. GitHub Actions runners). Ignore it so the
-	// caller gets EPIPE/ECONNREFUSED instead of a silent death.
-	signal(SIGPIPE, SIG_IGN);
-
 	sitl_saved_argv = argv;
+#ifdef _WIN32
+	// the GUI reads our diagnostics over a pipe, and msvcrt block-buffers
+	// a piped stderr/stdout - force unbuffered so verbose output streams
+	// live as it does on POSIX (where stderr is unbuffered by default)
+	setvbuf(stderr, NULL, _IONBF, 0);
+	setvbuf(stdout, NULL, _IONBF, 0);
+#endif
+#ifdef SITL_COVERAGE
+	install_coverage_handlers();
+#endif
 	sitl_config_init(argc, argv);
+	if (sitl_cfg.bootloader_path != NULL) {
+		if (getenv("AM32_SITL_FROM_BL") == NULL) {
+			// hardware boots into the bootloader first; it execs us
+			// back with the marker set
+			sitl_exec_bootloader("power");
+		}
+		unsetenv("AM32_SITL_FROM_BL");
+	}
 	lock_instance();
 	motor_init();
 	if (sitl_cfg.node_id >= 0 || sitl_cfg.input_type >= 0) {

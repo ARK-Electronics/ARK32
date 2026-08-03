@@ -72,7 +72,7 @@ def test_dshot(sitl_path, name, ptype, bidir, edt, value, rpm_lo, rpm_hi, input_
                     edt_vals = dict((k, v) for k, v in erpm
                                     if k in ('temp', 'volt', 'current'))
                     check(name + ' edt values',
-                          edt_vals.get('temp') == 25 and 14 < edt_vals.get('volt', 0) < 18,
+                          edt_vals.get('temp') == 38 and 11 < edt_vals.get('volt', 0) < 13,
                           'edt=%s' % edt_vals)
             tx.value = 1000 if ptype == sd.TYPE_PWM else 0
             time.sleep(3.0)
@@ -121,7 +121,7 @@ def test_dronecan(sitl_path):
         rpm = rpm_from_state(sim)
         check('dronecan rpm', 3500 <= rpm <= 6500, 'rpm=%.0f' % rpm)
         check('dronecan telemetry', 3500 <= status.get('rpm', -1) <= 6500
-              and 15 < status.get('voltage', 0) < 18,
+              and 11 < status.get('voltage', 0) < 18,
               'esc.Status=%s' % status)
         node.close()
         sim.close()
@@ -129,9 +129,9 @@ def test_dronecan(sitl_path):
 
 def run_legacy(sitl_path):
     test_dshot(sitl_path, 'dshot600 bidir edt', sd.TYPE_DSHOT600,
-               bidir=True, edt=True, value=800, rpm_lo=4000, rpm_hi=7000)
+               bidir=True, edt=True, value=800, rpm_lo=3500, rpm_hi=7000)
     test_dshot(sitl_path, 'dshot300', sd.TYPE_DSHOT300,
-               bidir=False, edt=False, value=600, rpm_lo=3000, rpm_hi=6000)
+               bidir=False, edt=False, value=600, rpm_lo=2500, rpm_hi=6000)
     test_dshot(sitl_path, 'pwm', sd.TYPE_PWM,
                bidir=False, edt=False, value=1500, rpm_lo=4000, rpm_hi=9000,
                input_type=2)
