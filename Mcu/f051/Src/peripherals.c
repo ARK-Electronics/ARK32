@@ -10,6 +10,7 @@
 #include "peripherals.h"
 
 #include "ADC.h"
+#include "gate_driver.h"
 #include "serial_telemetry.h"
 #include "targets.h"
 
@@ -525,19 +526,6 @@ void initLed()
 }
 #endif
 
-#ifdef USE_DRV8328_NSLEEP // Disable gate driver when disarmed
-void initnSleep()
-{
-	LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
-	GPIO_InitStruct.Pin = NSLEEP_PIN;
-	GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-	GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
-	GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-	LL_GPIO_Init(NSLEEP_PORT, &GPIO_InitStruct);
-	NSLEEP_PORT->BSRR = NSLEEP_PIN;
-}
-#endif
-
 #ifdef USE_DRV8328_NFAULT
 void initnFault()
 {
@@ -624,10 +612,6 @@ void enableCorePeripherals()
 	initLed();
 #endif
 
-#ifdef USE_DRV8328_NSLEEP
-	initnSleep();
-#endif
-
 #ifdef USE_DRV8328_NFAULT
 	initnFault();
 #endif
@@ -644,6 +628,10 @@ void enableCorePeripherals()
 #endif
 	LL_TIM_EnableCounter(UTILITY_TIMER);
 	LL_TIM_GenerateEvent_UPDATE(UTILITY_TIMER);
+#if GATE_DRIVER_SLEEP_SUPPORT
+	/* After UTILITY_TIMER: wake timing uses get_timer_us16(). */
+	gateDriverInit();
+#endif
 	//
 	LL_TIM_EnableCounter(INTERVAL_TIMER);
 	LL_TIM_GenerateEvent_UPDATE(INTERVAL_TIMER);
