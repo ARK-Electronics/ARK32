@@ -271,6 +271,38 @@ void loadEEpromSettings(void)
 	}
 }
 
+/*
+ * Re-apply tables that depend on motor_kv / motor_poles after a DroneCAN (or
+ * other) live change. Does not re-read flash. motor_kv is the live decoded
+ * value (e.g. 360); eepromBuffer.motor_kv may be the quantised byte form.
+ */
+void applyMotorIdentitySettings(void)
+{
+	if (motor_kv < 300) {
+		low_rpm_throttle_limit = 0;
+	} else {
+		low_rpm_throttle_limit = 1;
+	}
+	if (eepromBuffer.motor_poles >= 2 && eepromBuffer.motor_poles <= 64) {
+		low_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (100U * 32U);
+		high_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (17U * 32U);
+	} else {
+		low_rpm_level = 0;
+		high_rpm_level = 0;
+	}
+	advance_erpm_scale_q12 = 0;
+	if (motor_kv >= 300 && eepromBuffer.motor_poles >= 2 && eepromBuffer.motor_poles <= 64) {
+		uint16_t scale = (uint16_t)(((uint32_t)motor_kv * eepromBuffer.motor_poles * 4096u) / 200000u);
+		advance_erpm_scale_q12 = (uint16_t)(scale - (scale >> 4)); /* * 15/16 */
+	}
+	reverse_speed_threshold = map(motor_kv, 300, 3000, 1000, 500);
+	if (eepromBuffer.bi_direction) {
+		polling_mode_changeover = POLLING_MODE_THRESHOLD / 2;
+	} else {
+		polling_mode_changeover = POLLING_MODE_THRESHOLD;
+	}
+}
+
 void saveEEpromSettings(void)
 {
 	save_flash_nolib(eepromBuffer.buffer, sizeof(eepromBuffer.buffer), eeprom_address);
