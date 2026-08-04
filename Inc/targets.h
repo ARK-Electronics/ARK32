@@ -73,7 +73,7 @@
 #	define VOLTAGE_ADC_PORT GPIOB
 #	define USE_CURRENT_SENSE
 #	define MILLIVOLT_PER_AMP 10
-#	define CURRENT_OFFSET 1 // millivolts
+/* No CURRENT_OFFSET: idle sense is ~0 V (uses global default 0). */
 #	define TARGET_VOLTAGE_DIVIDER 310
 /* Match ARK_4IN1_F051 vehicle policy (voltage-comp ramp + eeprom max_ramp
  * can only lower these ceilings). Was 1/1 (SLO-style) before the F051
