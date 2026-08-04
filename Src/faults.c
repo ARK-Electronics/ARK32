@@ -478,7 +478,7 @@ void faultHandleBemfIntervalStall(void)
 			 * both of which reach the loop through this trip - see
 			 * faultErrorCount(). */
 			fault_stall_trips++;
-			debugUartLogEvent(DBG_EVT_STALL);
+			/* Single UART line (LogEvent would print "fault: stall" twice). */
 			debugUartPrintf("fault: stall zc=%lu bemf_to=%u/%u e_com=%lu\r\n", (unsigned long)zero_crosses,
 					(unsigned)bemf_timeout_happened, (unsigned)bemf_timeout, (unsigned long)commutation_interval);
 			faultDesyncEpisodeCharge(DESYNC_EPISODE_STALL_RAIL);
