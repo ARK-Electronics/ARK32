@@ -539,7 +539,20 @@ RAM_FUNC void tenKhzRoutine()
 				if (adjusted_input == 0) {
 					armed_timeout_count++;
 					if (armed_timeout_count > LOOP_FREQUENCY_HZ) { // one second
-						if (zero_input_count > 30) {
+						/*
+						 * DShot/PWM: zero_input_count confirms many true-zero
+						 * frames (noisy edges). DroneCAN: ESCRaw may be only
+						 * 10 Hz; holding adjusted_input==0 for this full
+						 * second is already the safety gate — do not also
+						 * require >30 transfercomplete samples (that needs
+						 * ~30 Hz or the 1 kHz reinject path).
+						 */
+						const uint8_t zero_ok = (zero_input_count > 30)
+#if DRONECAN_SUPPORT
+									|| (eepromBuffer.input_type == DRONECAN_IN)
+#endif
+							;
+						if (zero_ok) {
 							escToArmedIdle();
 #ifdef USE_LED_STRIP
 							//	send_LED_RGB(0,0,0);
