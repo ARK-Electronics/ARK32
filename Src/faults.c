@@ -78,10 +78,20 @@ void faultPollGateDriver(void)
 {
 #if defined(USE_DRV_NFAULT)
 	/*
-	 * While intentionally asleep the DRV is off — nFAULT is not meaningful
-	 * (may float or deassert). Only poll when the driver is awake.
+	 * While asleep ENABLE is held low (gate_driver sleep). That already
+	 * satisfies DRV8350H t_RST for latched VDS/GDF faults — but we used to
+	 * return here without ever clearing drv_nfault_latched, so FAULT_STUCK
+	 * survived zero throttle + VM restore until reboot. Clear the software
+	 * sticky at zero demand while asleep; nFAULT is not meaningful with
+	 * ENABLE low, so do not re-assert from the pin in that state.
 	 */
 	if (!gateDriverIsAwake()) {
+		if (drv_nfault_latched && adjusted_input == 0) {
+			drv_nfault_latched = 0;
+#	if defined(USE_DRV_ENABLE)
+			drv_enable_retry_div = 0;
+#	endif
+		}
 		return;
 	}
 
