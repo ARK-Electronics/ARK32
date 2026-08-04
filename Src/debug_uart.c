@@ -138,6 +138,16 @@ void debugUartLogEvent(uint8_t event)
 	if (event == 0) {
 		return;
 	}
+	/*
+	 * Drop duplicate consecutive fault events so a latched rail does not
+	 * flood the UART (e.g. stuck polled every main-loop tick).
+	 */
+	if (q_head != q_tail) {
+		uint8_t last = (uint8_t)((q_head + DBG_Q_LEN - 1u) % DBG_Q_LEN);
+		if (q[last].kind == 2 && q[last].a == event) {
+			return;
+		}
+	}
 	q_push(2, event, 0);
 }
 
