@@ -66,6 +66,7 @@
 #	define CURRENT_ADC_CHANNEL LL_ADC_CHANNEL_3
 #	define CURRENT_ADC_PIN LL_GPIO_PIN_3
 #	define USE_SERIAL_TELEMETRY
+/* DRV8328 nSLEEP (PA15): high = awake. Sleep when idle via gate_driver.c. */
 #	define USE_DRV8328_NSLEEP
 #	define NSLEEP_PORT GPIOA
 #	define NSLEEP_PIN LL_GPIO_PIN_15

@@ -8,7 +8,8 @@ These files are release artifacts converted from the published Intel HEX to a fl
 
 | File | Target | Signal pin | Source |
 |---|---|---|---|
-| `AM32_F051_BOOTLOADER_PB4_V18.bin` | STM32F051, ARK 4IN1 / `HARDWARE_GROUP_F0_B` | PB4 | [ARK32-bootloader v18.0.0](https://github.com/ARK-Electronics/ARK32-bootloader/releases/tag/v18.0.0) (`0d667c5`), asset `AM32_F051_BOOTLOADER_PB4_V18.hex` |
+| `AM32_F051_BOOTLOADER_ARK4IN1_V18.bin` | STM32F051, ARK 4IN1 (default embed) | PB4; **PA15 nSLEEP low** | [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) `master` (`cdce0a2`, #4); product `AM32_F051_BOOTLOADER_ARK4IN1` |
+| `AM32_F051_BOOTLOADER_PB4_V18.bin` | STM32F051 generic PB4 (reference only) | PB4 | [ARK32-bootloader v18.0.0](https://github.com/ARK-Electronics/ARK32-bootloader/releases/tag/v18.0.0) (`0d667c5`), asset `AM32_F051_BOOTLOADER_PB4_V18.hex` |
 
 | Resource | URL |
 |---|---|
@@ -44,20 +45,25 @@ App-side BL rewrite erases flash pages at `0x08000000` (reset vectors and the on
 
 ## Updating
 
-1. Download the matching `AM32_*_BOOTLOADER_*_V*.hex` from the [ARK32-bootloader releases](https://github.com/ARK-Electronics/ARK32-bootloader/releases) (ARK 4IN1 uses F051 PB4).
-2. Convert to a flat binary with the pinned toolchain:
+1. Build or download the ARK 4IN1 product from [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) (`make AM32_F051_BOOTLOADER_ARK4IN1`), or convert a release `.hex` with the pinned toolchain.
+2. Install the flat binary:
 
    ```sh
-   arm-none-eabi-objcopy -I ihex -O binary \
-     AM32_F051_BOOTLOADER_PB4_V18.hex \
-     Bootloaders/AM32_F051_BOOTLOADER_PB4_V18.bin
+   cp obj/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin \
+     Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
+   # or from a release hex:
+   # arm-none-eabi-objcopy -I ihex -O binary \
+   #   AM32_F051_BOOTLOADER_ARK4IN1_V18.hex \
+   #   Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
    ```
 
-3. Point `BL_IMAGE_F051` in the `Makefile` at the new path if the filename changed.
-4. Update the table above with the release tag and source commit.
+3. Point `BL_IMAGE_F051` in the `Makefile` at the new path if the filename changed (default is already the ARK4IN1 blob).
+4. Update the table above with the release tag / source commit.
 5. Rebuild — the `.bin` is an explicit prerequisite of the `.elf`, so the change is picked up.
 
-Keep the old file until the new one has been flown; reverting is then a one-line `Makefile` change (or restoring the previous `.bin`).
+**Do not embed the generic `…_PB4` image on ARK 4IN1** if the chip has ARK4IN1 BL: first boot would rewrite PA15 nSLEEP-off back to stock.
+
+Keep the previous file until the new one has been flown; reverting is a one-line `Makefile` change (or restoring the previous `.bin`).
 
 ## Verifying a build embedded the right image
 
@@ -66,8 +72,8 @@ The blob lands at the `.bl_image` symbols, so it can be pulled straight back out
 ```sh
 arm-none-eabi-objcopy -O binary --only-section=.bl_image \
   obj/AM32_ARK_4IN1_F051_*.elf /tmp/embedded.bin
-cmp -n "$(wc -c < Bootloaders/AM32_F051_BOOTLOADER_PB4_V18.bin)" \
-  /tmp/embedded.bin Bootloaders/AM32_F051_BOOTLOADER_PB4_V18.bin
+cmp -n "$(wc -c < Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin)" \
+  /tmp/embedded.bin Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
 ```
 
 The compare is limited to the source file's length because `.bl_image` is padded out to the full 4096-byte region with `0xFF`.

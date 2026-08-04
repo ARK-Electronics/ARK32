@@ -7,18 +7,19 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 OBJ="${OBJ:-obj}"
-BL="${BL_IMAGE_F051:-Bootloaders/AM32_F051_BOOTLOADER_PB4_V18.bin}"
+# Must match Makefile BL_IMAGE_F051 (ARK 4IN1 nSLEEP-off BL, not generic PB4).
+BL="${BL_IMAGE_F051:-Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin}"
 DEFAULTS_JSON="${FACTORY_DEFAULTS:-factory/ARK_4IN1_F051_eeprom_defaults.json}"
 
 shopt -s nullglob
 factory_bins=("$OBJ"/AM32_ARK_4IN1_F051_*.factory.bin)
-app_bins=("$OBJ"/AM32_ARK_4IN1_F051_*.bin)
-# Exclude .factory.bin / .eeprom.bin from the app list
+# App .bin only: exclude factory, eeprom, and local experiment names (*nsleep*).
 app_bins=()
 for f in "$OBJ"/AM32_ARK_4IN1_F051_*.bin; do
-	case "$f" in
-		*.factory.bin|*.eeprom.bin) ;;
-		*) app_bins+=("$f") ;;
+	base="$(basename "$f")"
+	case "$base" in
+		*.factory.bin|*.eeprom.bin|*factory*|*nsleep*|*hwci*) ;;
+		AM32_ARK_4IN1_F051_*.bin) app_bins+=("$f") ;;
 	esac
 done
 
@@ -70,7 +71,10 @@ if len(img) != FLASH_SIZE:
 if len(bl) > APP_OFFSET:
     errors.append(f"bootloader {len(bl)} exceeds region {APP_OFFSET}")
 if img[BL_OFFSET:BL_OFFSET + len(bl)] != bl:
-    errors.append("bootloader region does not match Bootloaders/*.bin")
+    errors.append(
+        f"bootloader region does not match {bl_path.name} "
+        f"(factory image BL must equal BL_IMAGE_F051)"
+    )
 if any(b != 0xFF for b in img[len(bl):APP_OFFSET]):
     errors.append("gap between bootloader and app is not 0xFF-padded")
 

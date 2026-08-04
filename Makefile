@@ -123,7 +123,10 @@ SRC_COMMON_BASE := $(filter-out $(SRC_OPTIONAL_BRUSHED) $(SRC_OPTIONAL_HWCI),$(S
 # Bumping the bootloader means dropping the new .bin (from the release .hex)
 # and editing this one line if the name changes.
 SRC_OPTIONAL_BL_IMAGE := $(MAIN_SRC_DIR)/bl_image.S
-BL_IMAGE_F051 := Bootloaders/AM32_F051_BOOTLOADER_PB4_V18.bin
+# ARK 4IN1: PB4 signal + PA15 nSLEEP low in BL (ARK32-bootloader #4).
+# Do not use the generic …_PB4 blob here — first boot would rewrite the
+# nSLEEP-off BL back to stock if they differ.
+BL_IMAGE_F051 := Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
 # 0x08000000..ORIGIN(FLASH_VECTAB); the F051 linker script asserts the match.
 BL_REGION_SIZE_F051 := 4096
 # Default on; set EMBED_BOOTLOADER=0 or NO_EMBED_BL=1 to strip the image.
@@ -287,7 +290,8 @@ factory-image: $(FACTORY_PRODUCT)
 
 # Build + layout/defaults gate used by CI (.github/workflows/static-analysis.yml).
 factory-image-check: factory-image
-	$(QUIET)bash scripts/check-factory-image-ark.sh
+	$(QUIET)BL_IMAGE_F051=$(BL_IMAGE_F051) FACTORY_DEFAULTS=$(FACTORY_DEFAULTS) \
+		bash scripts/check-factory-image-ark.sh
 
 # Code formatting (clang-format ≈ PX4 astyle/Linux look; see .clang-format).
 # Same target names as PX4:
