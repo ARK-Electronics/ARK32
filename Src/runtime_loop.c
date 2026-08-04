@@ -186,6 +186,8 @@ void runtimeProcessDesyncCheck(void)
 			bemfZcResetTrend();
 			desync_happened++;
 			debugUartLogEvent(DBG_EVT_DESYNC);
+			debugUartPrintf("fault: desync zc=%lu e_com=%lu input=%u duty=%u\r\n", (unsigned long)zc_at_desync,
+					(unsigned long)average_interval, (unsigned)input, (unsigned)duty_cycle);
 			// Same established-run gate as the stall rail (see
 			// faultHandleBemfIntervalStall): interval jumps while the
 			// loop is still acquiring (zc 11..100) are normal startup
