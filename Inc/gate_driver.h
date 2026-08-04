@@ -1,7 +1,8 @@
 /*
  * gate_driver.h - sleep/wake for DRV8350 ENABLE / DRV8328 nSLEEP
  *
- * Active-high run: low = sleep, high = ready after ~1 ms (tWAKE).
+ * Active-high run: low = sleep, high = awake. After rising edge, block ~1 ms
+ * (datasheet tWAKE) before PWM/commutation — IC bias must settle; pin stays high.
  */
 #ifndef GATE_DRIVER_H_
 #define GATE_DRIVER_H_

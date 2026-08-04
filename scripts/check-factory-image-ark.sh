@@ -6,6 +6,7 @@
 #   FACTORY_PRODUCT   e.g. ARK_4IN1_F051 or ARK_G431_CAN
 #   FACTORY_DEFAULTS  path to factory/*_eeprom_defaults.json
 #   BL_IMAGE          optional bootloader .bin (omit / empty = allow 0xFF BL)
+#   BL_IMAGE_F051     fallback default for ARK_4IN1_F051 when BL_IMAGE unset
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,16 +18,19 @@ DEFAULTS_JSON="${FACTORY_DEFAULTS:-factory/${PRODUCT}_eeprom_defaults.json}"
 BL="${BL_IMAGE:-}"
 
 # Default BL for the classic F051 product when caller did not set BL_IMAGE.
+# Must match Makefile BL_IMAGE_F051 (ARK 4IN1 nSLEEP-off BL, not generic PB4).
 if [[ -z "$BL" && "$PRODUCT" == "ARK_4IN1_F051" ]]; then
-	BL="${BL_IMAGE_F051:-Bootloaders/AM32_F051_BOOTLOADER_PB4_V18.bin}"
+	BL="${BL_IMAGE_F051:-Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin}"
 fi
 
 shopt -s nullglob
 factory_bins=("$OBJ"/AM32_"${PRODUCT}"_*.factory.bin)
+# App .bin only: exclude factory, eeprom, and local experiment names.
 app_bins=()
 for f in "$OBJ"/AM32_"${PRODUCT}"_*.bin; do
-	case "$f" in
-		*.factory.bin|*.eeprom.bin) ;;
+	base="$(basename "$f")"
+	case "$base" in
+		*.factory.bin|*.eeprom.bin|*factory*|*nsleep*|*hwci*) ;;
 		*) app_bins+=("$f") ;;
 	esac
 done
@@ -109,7 +113,11 @@ if len(bl) > BL_REGION:
     errors.append(f"bootloader {len(bl)} exceeds region {BL_REGION}")
 if bl:
     if img[BL_OFFSET : BL_OFFSET + len(bl)] != bl:
-        errors.append("bootloader region does not match Bootloaders/*.bin")
+        bl_name = bl_path.name if bl_path is not None else "Bootloaders/*.bin"
+        errors.append(
+            f"bootloader region does not match {bl_name} "
+            f"(factory image BL must equal BL_IMAGE)"
+        )
     if any(b != 0xFF for b in img[BL_OFFSET + len(bl) : APP_OFFSET]):
         errors.append("gap between bootloader and app is not 0xFF-padded")
 else:

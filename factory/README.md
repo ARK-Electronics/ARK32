@@ -47,9 +47,9 @@ openocd -f interface/stlink.cfg -f target/stm32f0x.cfg \
 
 | Region | Address | Size | Source |
 |--------|---------|------|--------|
-| Bootloader | `0x08000000` | 4 KiB | `Bootloaders/AM32_F051_BOOTLOADER_PB4_V18.bin` |
-| Application | `0x08001000` | 27 KiB | `make ARK_4IN1_F051` |
-| EEPROM | `0x08007C00` | 1 KiB | [`ARK_4IN1_F051_eeprom_defaults.json`](ARK_4IN1_F051_eeprom_defaults.json) |
+| Bootloader | `0x08000000` | 4 KiB | `Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin` (0xFF padded; PB4 signal + PA15 nSLEEP low) |
+| Application | `0x08001000` | 27 KiB | `make ARK_4IN1_F051` app `.bin` (0xFF padded) |
+| EEPROM | `0x08007C00` | 1 KiB | Defaults from [`ARK_4IN1_F051_eeprom_defaults.json`](ARK_4IN1_F051_eeprom_defaults.json) |
 
 ### STM32G431 ARK 12S CAN (128 KiB)
 
