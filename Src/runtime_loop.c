@@ -10,6 +10,7 @@
 #include "faults.h"
 #include "esc_state.h"
 #include "gate_driver.h"
+#include "debug_uart.h"
 #include "control_loop.h"
 #include "commutation.h"
 #include "bemf_zc.h"
@@ -184,6 +185,7 @@ void runtimeProcessDesyncCheck(void)
 			zero_crosses = 0;
 			bemfZcResetTrend();
 			desync_happened++;
+			debugUartLogEvent(DBG_EVT_DESYNC);
 			// Same established-run gate as the stall rail (see
 			// faultHandleBemfIntervalStall): interval jumps while the
 			// loop is still acquiring (zc 11..100) are normal startup
@@ -560,6 +562,7 @@ void runtimeProcessAdcAndProtections(void)
 			allOff();
 			maskPhaseInterrupts();
 			zero_input_count = 0;
+			debugUartLogEvent(DBG_EVT_LVC);
 			escToFaultLvc();
 		}
 
