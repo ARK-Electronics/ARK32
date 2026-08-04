@@ -15,20 +15,8 @@
 #include <stdint.h>
 #include "targets.h"
 
-#ifdef USE_DEBUG_UART
-
-void debugUartInit(void);
-/* Blocking print (main / init only — not from ISRs). */
-void debugUartPrint(const char *msg);
-void debugUartPrintf(const char *fmt, ...);
-/* Queue a state transition (ISR-safe). */
-void debugUartLogState(uint8_t from, uint8_t to);
-/* Queue a named event (ISR-safe). */
-void debugUartLogEvent(uint8_t event);
-/* Drain the queue — call once per main-loop tick. */
-void debugUartService(void);
-
-/* Event codes for debugUartLogEvent() */
+/* Event codes for debugUartLogEvent() — always defined so call sites compile
+ * on targets without USE_DEBUG_UART (stubs are no-ops). */
 enum {
 	DBG_EVT_BOOT = 1,
 	DBG_EVT_NFAULT,
@@ -41,6 +29,19 @@ enum {
 	DBG_EVT_GD_WAKE,
 	DBG_EVT_GD_SLEEP,
 };
+
+#ifdef USE_DEBUG_UART
+
+void debugUartInit(void);
+/* Blocking print (main / init only — not from ISRs). */
+void debugUartPrint(const char *msg);
+void debugUartPrintf(const char *fmt, ...);
+/* Queue a state transition (ISR-safe). */
+void debugUartLogState(uint8_t from, uint8_t to);
+/* Queue a named event (ISR-safe). */
+void debugUartLogEvent(uint8_t event);
+/* Drain the queue — call once per main-loop tick. */
+void debugUartService(void);
 
 #else /* !USE_DEBUG_UART */
 
