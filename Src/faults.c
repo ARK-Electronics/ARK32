@@ -143,7 +143,10 @@ uint8_t faultHandleStuckRotorIfNeeded(void)
 	if ((bemf_timeout_happened > bemf_timeout) && eepromBuffer.stuck_rotor_protection) {
 		allOff();
 		maskPhaseInterrupts();
-		debugUartLogEvent(DBG_EVT_STUCK);
+		/* Log once on entry — this path runs every main-loop tick while latched. */
+		if (escGetState() != ESC_FAULT_STUCK) {
+			debugUartLogEvent(DBG_EVT_STUCK);
+		}
 		escToFaultStuck();
 #	ifdef USE_RGB_LED
 		setIndividualRGBLed(1, 0, 0);
@@ -388,6 +391,9 @@ void faultDesyncEpisodeCharge(desync_episode_kind_t kind)
 	if (desync_episode_bucket >= DESYNC_EPISODE_LIMIT) {
 		allOff();
 		maskPhaseInterrupts();
+		if (escGetState() != ESC_FAULT_STUCK) {
+			debugUartLogEvent(DBG_EVT_STUCK);
+		}
 		escToFaultStuck();
 #	ifdef USE_RGB_LED
 		setIndividualRGBLed(1, 0, 0);

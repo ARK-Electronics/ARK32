@@ -23,6 +23,7 @@
 #	include "phaseouts.h"
 #	include "functions.h"
 #	include "filter.h"
+#	include "debug_uart.h"
 
 // include the headers for the generated DroneCAN messages from the
 // dronecan_dsdlc compiler
@@ -374,6 +375,8 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 	if (p != NULL && req.name.len != 0 && req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_EMPTY) {
 		const char last_dir_reversed = eepromBuffer.dir_reversed;
 		const char last_bi_direction = eepromBuffer.bi_direction;
+		int32_t set_log_val = 0;
+		uint8_t set_log_is_str = 0;
 
 		/*
 	  a parameter set command
@@ -383,17 +386,21 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				uint8_t *ptr8 = (uint8_t *)p->ptr;
 				if (ptr8 == &eepromBuffer.limits.current) {
 					*ptr8 = req.value.integer_value / 2;
+					set_log_val = (int32_t)req.value.integer_value; /* user-facing amps */
 				} else {
 					*ptr8 = req.value.integer_value;
+					set_log_val = (int32_t)req.value.integer_value;
 				}
 				if (ptr8 == &eepromBuffer.advance_level) {
 					*ptr8 = req.value.integer_value + 10; // adjust for advance level offset for eeprom v3
+					set_log_val = (int32_t)req.value.integer_value;
 				}
 				break;
 			}
 			case T_UINT16: {
 				uint16_t *ptr16 = (uint16_t *)p->ptr;
 				*ptr16 = req.value.integer_value;
+				set_log_val = (int32_t)req.value.integer_value;
 				if (ptr16 == &motor_kv) {
 					eepromBuffer.motor_kv = (uint8_t)((*(uint16_t *)p->ptr - 20) / 40);
 				} else if (ptr16 == &low_cell_volt_cutoff) {
@@ -403,6 +410,7 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 			}
 			case T_BOOL:
 				*(uint8_t *)p->ptr = req.value.boolean_value ? 1 : 0;
+				set_log_val = req.value.boolean_value ? 1 : 0;
 				break;
 			case T_STRING:
 				if (req.value.union_tag == UAVCAN_PROTOCOL_PARAM_VALUE_STRING_VALUE) {
@@ -414,11 +422,18 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 								eepromBuffer.tune[i] = 0xFF;
 							}
 						}
+						set_log_is_str = 1;
 					}
 				}
 				break;
 			default:
 				return;
+		}
+
+		if (set_log_is_str) {
+			debugUartPrintf("param: %s=<string len=%u>\r\n", p->name, (unsigned)req.value.string_value.len);
+		} else {
+			debugUartPrintf("param: %s=%ld\r\n", p->name, (long)set_log_val);
 		}
 
 		if (last_dir_reversed != eepromBuffer.dir_reversed || last_bi_direction != eepromBuffer.bi_direction) {
