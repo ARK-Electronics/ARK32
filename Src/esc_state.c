@@ -58,6 +58,7 @@ static const uint16_t esc_allowed[ESC_STATE_COUNT] = {
 	[ESC_FAULT_LVC] = (1u << ESC_FAULT_LVC),
 };
 
+#ifdef USE_DEBUG_UART
 const char *escStateName(esc_state_t s)
 {
 	switch (s) {
@@ -85,6 +86,7 @@ const char *escStateName(esc_state_t s)
 			return "?";
 	}
 }
+#endif
 
 esc_state_t escGetState(void)
 {

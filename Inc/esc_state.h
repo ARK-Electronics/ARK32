@@ -36,7 +36,9 @@ extern volatile esc_state_t esc_state;
 /* Saturating count of named transitions that violated the edge table. */
 extern volatile uint16_t esc_illegal_edge_count;
 
+#ifdef USE_DEBUG_UART
 const char *escStateName(esc_state_t s);
+#endif
 esc_state_t escGetState(void);
 
 /* --- predicates (flag-backed; ISR may update flags before reconcile) --- */
