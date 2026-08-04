@@ -29,16 +29,17 @@ These files are release (or branch) artifacts as flat binaries. They are stored 
 
 `Src/bl_image.S` pulls the F051 file in with `.incbin` and pads it to the bootloader region size with `0xFF`. The linker script places it in a dedicated `.bl_image` section and asserts that it is exactly the region size and that it does not live inside the region it will erase.
 
-The image is linked for **all F051 targets by default**, including `HWCI_PERF=1`
-(LTO leaves enough flash for the image and the perf struct). To strip it for a
-size emergency or pure perf A/B:
+The image is linked for **F051 release builds by default**. `HWCI_PERF=1`
+does **not** embed it (flash goes to the perf struct; the HWCI rig already has
+a bootloader on-chip). To strip it on a release build:
 
 ```bash
 make ARK_4IN1_F051 EMBED_BOOTLOADER=0
-make ARK_4IN1_F051 HWCI_PERF=1 NO_EMBED_BL=1
+make ARK_4IN1_F051 NO_EMBED_BL=1
 ```
 
 Either kill switch disables embed (`EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`).
+`HWCI_PERF=1` also disables embed automatically.
 
 ### G431 CAN factory image
 
