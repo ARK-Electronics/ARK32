@@ -386,7 +386,18 @@ void ADC_Init(void)
 	ADC_REG_InitStruct.Overrun = LL_ADC_REG_OVR_DATA_PRESERVED;
 	LL_ADC_REG_Init(ADC1, &ADC_REG_InitStruct);
 	LL_ADC_SetGainCompensation(ADC1, 0);
-	LL_ADC_SetOverSamplingScope(ADC1, LL_ADC_OVS_DISABLE);
+	/*
+	 * Hardware oversampling on the regular sequence (temp / Vbus / current).
+	 * Ratio 16 + right-shift 4 keeps a 12-bit DR result so existing scale
+	 * math (adc_app / temp macros) is unchanged, while averaging 16 SAR
+	 * conversions per rank to cut broadband shunt noise. Continuous mode:
+	 * one software StartConversion still produces one DMA word per rank.
+	 * ARK_G431_CAN current sense is the primary beneficiary; sample time
+	 * stays 47.5 cycles (PWM-sync is a separate step if still noisy).
+	 */
+	LL_ADC_SetOverSamplingScope(ADC1, LL_ADC_OVS_GRP_REGULAR_CONTINUED);
+	LL_ADC_SetOverSamplingDiscont(ADC1, LL_ADC_OVS_REG_CONT);
+	LL_ADC_ConfigOverSamplingRatioShift(ADC1, LL_ADC_OVS_RATIO_16, LL_ADC_OVS_SHIFT_RIGHT_4);
 	ADC_CommonInitStruct.CommonClock = LL_ADC_CLOCK_SYNC_PCLK_DIV4;
 	ADC_CommonInitStruct.Multimode = LL_ADC_MULTI_INDEPENDENT;
 	LL_ADC_CommonInit(__LL_ADC_COMMON_INSTANCE(ADC1), &ADC_CommonInitStruct);
