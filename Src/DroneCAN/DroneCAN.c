@@ -430,7 +430,12 @@ static uint8_t DroneCAN_nodeHealth(void)
 	if (st == ESC_FAULT_SIGNAL) {
 		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_ERROR;
 	}
-	/* Recoverable roughness this arm: hard desync/stall trips or post-desync holdoff. */
+	/*
+	 * WARNING only for established hard trips (faultErrorCount: stall +
+	 * established jump desync) or active post-desync holdoff. Acquisition
+	 * roughness at low startup duty must stay OK — those no longer increment
+	 * desync_happened (see runtimeProcessDesyncCheck).
+	 */
 	if (faultErrorCount() > 0 || faultDesyncRestartHoldoffActive()) {
 		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_WARNING;
 	}
