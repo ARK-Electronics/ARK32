@@ -26,6 +26,7 @@
 #	include "debug_uart.h"
 #	include "settings.h"
 #	include "motor_runtime.h"
+#	include "esc_state.h"
 
 // include the headers for the generated DroneCAN messages from the
 // dronecan_dsdlc compiler
@@ -352,24 +353,88 @@ static const uint8_t advance_level_v3_remap[] = {
 	0x00, 0x08, 0x10, 0x16 // old values 0-3 map to new values 0,8,16,22
 };
 
-// printf to CAN LogMessage for debugging
-static void can_printf(const char *fmt, ...)
+/*
+ * Broadcast uavcan.protocol.debug.LogMessage.
+ * level: UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_*
+ */
+static void can_log(uint8_t level, const char *fmt, ...)
 {
 	struct uavcan_protocol_debug_LogMessage pkt;
 	memset(&pkt, 0, sizeof(pkt));
+
+	pkt.level.value = level;
+	/* Short fixed source so GUI tools group ESC logs. */
+	static const char src[] = "AM32";
+	pkt.source.len = (uint8_t)(sizeof(src) - 1u);
+	memcpy(pkt.source.data, src, pkt.source.len);
 
 	uint8_t buffer[UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_MAX_SIZE];
 	va_list ap;
 	va_start(ap, fmt);
 	uint32_t n = vsnprintf((char *)pkt.text.data, sizeof(pkt.text.data), fmt, ap);
 	va_end(ap);
-	pkt.text.len = MIN(n, sizeof(pkt.text.data));
+	pkt.text.len = (uint8_t)MIN(n, sizeof(pkt.text.data));
 
 	uint32_t len = uavcan_protocol_debug_LogMessage_encode(&pkt, buffer);
 	static uint8_t logmsg_transfer_id;
 
 	canardBroadcast(&canard, UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_SIGNATURE, UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_ID, &logmsg_transfer_id,
 			CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
+}
+
+/* printf-style LogMessage at INFO (param/save notices, etc.). */
+static void can_printf(const char *fmt, ...)
+{
+	/* Wrap through can_log so source/level stay consistent. */
+	char buf[90];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "%s", buf);
+}
+
+/*
+ * One-shot fault LogMessages: rising edge of nFAULT latch or stuck-rotor
+ * latch. nFAULT also forces ESC_FAULT_STUCK — prefer "nFAULT" when both
+ * rise together so the FC sees the gate-driver cause.
+ */
+static void DroneCAN_pollFaultLogMessages(void)
+{
+	static uint8_t prev_nfault;
+	static uint8_t prev_stuck;
+
+	const uint8_t nfault = faultGateDriverFaultActive();
+	const uint8_t stuck = (uint8_t)(escGetState() == ESC_FAULT_STUCK);
+
+	if (nfault && !prev_nfault) {
+		can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT");
+	} else if (stuck && !prev_stuck) {
+		can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "stuck");
+	}
+
+	prev_nfault = nfault;
+	prev_stuck = stuck;
+}
+
+/* Map ESC / gate state into NodeStatus.health for 1 Hz NodeStatus. */
+static uint8_t DroneCAN_nodeHealth(void)
+{
+	const esc_state_t st = escGetState();
+
+	/* Cannot drive: stuck latch, gate-driver trip, or LVC. */
+	if (st == ESC_FAULT_STUCK || faultGateDriverFaultActive() || st == ESC_FAULT_LVC) {
+		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_CRITICAL;
+	}
+	/* Signal loss is usually followed by reset — still an error while held. */
+	if (st == ESC_FAULT_SIGNAL) {
+		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_ERROR;
+	}
+	/* Recoverable roughness this arm: hard desync/stall trips or post-desync holdoff. */
+	if (faultErrorCount() > 0 || faultDesyncRestartHoldoffActive()) {
+		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_WARNING;
+	}
+	return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_OK;
 }
 
 /*
@@ -635,6 +700,7 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
 	memset(&pkt, 0, sizeof(pkt));
 
 	node_status.uptime_sec = micros64() / 1000000ULL;
+	node_status.health = DroneCAN_nodeHealth();
 	pkt.status = node_status;
 
 	// fill in your major and minor firmware version
@@ -1026,14 +1092,15 @@ static bool shouldAcceptTransfer(const CanardInstance *ins, uint64_t *out_data_t
 
 /*
   send the 1Hz NodeStatus message. This is what allows a node to show
-  up in the DroneCAN GUI tool and in the flight controller logs
+  up in the DroneCAN GUI tool and in the flight controller logs.
+  health reflects latched faults / recent hard errors (see DroneCAN_nodeHealth).
 */
 static void send_NodeStatus(void)
 {
 	uint8_t buffer[UAVCAN_PROTOCOL_GETNODEINFO_RESPONSE_MAX_SIZE];
 
 	node_status.uptime_sec = micros64() / 1000000ULL;
-	node_status.health = UAVCAN_PROTOCOL_NODESTATUS_HEALTH_OK;
+	node_status.health = DroneCAN_nodeHealth();
 	node_status.mode = UAVCAN_PROTOCOL_NODESTATUS_MODE_OPERATIONAL;
 	node_status.sub_mode = 0;
 
@@ -1269,6 +1336,9 @@ void DroneCAN_update()
 	}
 
 	const uint64_t ts = micros64();
+
+	/* Rising-edge stuck / nFAULT → one LogMessage (not rate-limited spam). */
+	DroneCAN_pollFaultLogMessages();
 
 	if (ts >= next_1hz_service_at) {
 		next_1hz_service_at += 1000000ULL;

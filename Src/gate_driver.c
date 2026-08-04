@@ -7,7 +7,7 @@
 #if GATE_DRIVER_SLEEP_SUPPORT
 
 #	include "functions.h"
-#	include "main.h"
+#	include "main.h" /* GPIO_TypeDef / BRR / BSRR */
 #	include "motor_runtime.h"
 #	include "targets.h"
 
@@ -57,12 +57,13 @@ void gateDriverSleep(void)
 
 void gateDriverFaultResetPulse(void)
 {
+	/* DRV8350H ENABLE pulse only; nSLEEP boards do not need t_RST. */
 #	if defined(USE_DRV_ENABLE)
 	GD_PORT->BRR = GD_PIN;
 	delayMicros(GD_FAULT_RST_US);
 	gate_driver_awake = 0;
-#	endif
 	gateDriverWakeBlocking();
+#	endif
 }
 
 void gateDriverPoll(void)
