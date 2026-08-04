@@ -523,6 +523,7 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				return;
 		}
 
+#	ifdef USE_DEBUG_UART
 		if (set_log_is_str) {
 			debugUartPrintf("param: %s=<string len=%u>\r\n", p->name, (unsigned)req.value.string_value.len);
 		} else {
@@ -533,6 +534,10 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 					(unsigned)eepromBuffer.motor_poles, (unsigned)low_rpm_level, (unsigned)high_rpm_level,
 					(unsigned)advance_erpm_scale_q12);
 		}
+#	else
+		(void)set_log_val;
+		(void)set_log_is_str;
+#	endif
 
 		if (last_dir_reversed != eepromBuffer.dir_reversed || last_bi_direction != eepromBuffer.bi_direction) {
 			// make dir_reversed and bi_direction change work without
