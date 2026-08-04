@@ -35,8 +35,12 @@
 #	include "serial_telemetry.h"
 #endif
 
-/* Zero-cross filter levels (were file-local defines in main.c) */
-#ifdef MCU_F051
+/* Zero-cross filter levels (were file-local defines in main.c).
+ * F051 was retuned (42/10/7) so a faster confirm loop keeps the same
+ * wall-clock window as stock. G431 runs even faster (160 MHz) and already
+ * uses the F051 glitch-tolerant confirm path — use the same filter scale
+ * so ARK_G431_CAN is not stuck on stock 12/3/2 (too short at low BEMF). */
+#if defined(MCU_F051) || defined(MCU_G431)
 #	define ZC_FILTER_MAX 42
 #	define ZC_FILTER_RUN_MIN 10
 #	define ZC_FILTER_FAST 7
@@ -165,6 +169,7 @@ void runtimeProcessDesyncCheck(void)
 		if (desynced) {
 			slow_avg_revs = 0;
 			const uint32_t zc_at_desync = zero_crosses;
+			const uint8_t established = (zc_at_desync > 100);
 			// Freeze the throttle ceiling briefly: k_erpm is about to
 			// collapse because the ESTIMATE died, not because the rotor
 			// did, and re-deriving the ceiling from the collapsed
@@ -185,7 +190,7 @@ void runtimeProcessDesyncCheck(void)
 			zero_crosses = 0;
 			bemfZcResetTrend();
 			desync_happened++;
-			debugUartLogEvent(DBG_EVT_DESYNC);
+			/* Single UART line (LogEvent would print "fault: desync" twice). */
 			debugUartPrintf("fault: desync zc=%lu e_com=%lu input=%u duty=%u\r\n", (unsigned long)zc_at_desync,
 					(unsigned long)average_interval, (unsigned)input, (unsigned)duty_cycle);
 			// Same established-run gate as the stall rail (see
@@ -197,7 +202,7 @@ void runtimeProcessDesyncCheck(void)
 			// reproduces this under plain dshot spool). Legacy desync
 			// handling below still restarts; only the episode
 			// accounting is established-runs-only.
-			if (zc_at_desync > 100) {
+			if (established) {
 				faultDesyncEpisodeCharge(DESYNC_EPISODE_JUMP);
 			} else {
 				// Acquisition-regime desyncs are not charged directly
@@ -207,12 +212,18 @@ void runtimeProcessDesyncCheck(void)
 				// counter reading zero. See faultNoteEarlyDesync.
 				faultNoteEarlyDesync();
 			}
-			if ((!eepromBuffer.bi_direction && (input > DSHOT_CMD_MAX)) || commutation_interval > 1000) {
+			/*
+			 * Full stop (running=0 → ARMED_IDLE) only after an
+			 * established run. Acquisition jump-desyncs on slow/low-BEMF
+			 * motors (low kV, low duty) are common; force open-loop
+			 * re-acquire without killing the start attempt.
+			 */
+			if (established && ((!eepromBuffer.bi_direction && (input > DSHOT_CMD_MAX)) || commutation_interval > 1000)) {
 				running = 0;
 			}
 			/* Always fall back to poll-ZC path after a desync event. */
 			escNoteStallOrDesync(0);
-			if (zero_crosses > 100) {
+			if (established) {
 				average_interval = 5000;
 			}
 			last_duty_cycle = min_startup_duty / 2;
