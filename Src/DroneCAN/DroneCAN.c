@@ -1172,7 +1172,14 @@ static void send_ESCStatus(void)
 
 	pkt.temperature = C_TO_KELVIN(degrees_celsius);
 	pkt.rpm = (e_rpm * 200) / eepromBuffer.motor_poles;
-	pkt.power_rating_pct = 0; // how do we get this?
+	/* Instant demand factor: applied duty 0..2000 → 0..100% of full scale. */
+	{
+		uint16_t pct = duty_cycle / 20u;
+		if (pct > 100u) {
+			pct = 100u;
+		}
+		pkt.power_rating_pct = (uint8_t)pct;
+	}
 	pkt.esc_index = eepromBuffer.can.esc_index;
 
 	uint32_t len = uavcan_equipment_esc_Status_encode(&pkt, buffer);
