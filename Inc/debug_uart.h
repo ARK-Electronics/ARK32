@@ -45,25 +45,14 @@ void debugUartService(void);
 
 #else /* !USE_DEBUG_UART */
 
-static inline void debugUartInit(void) {}
-static inline void debugUartPrint(const char *msg)
-{
-	(void)msg;
-}
-static inline void debugUartPrintf(const char *fmt, ...)
-{
-	(void)fmt;
-}
-static inline void debugUartLogState(uint8_t from, uint8_t to)
-{
-	(void)from;
-	(void)to;
-}
-static inline void debugUartLogEvent(uint8_t event)
-{
-	(void)event;
-}
-static inline void debugUartService(void) {}
+/* Macros (not empty inlines): format-string args are not evaluated and
+ * do not land in F051 .rodata when the target has no debug UART. */
+#	define debugUartInit() ((void)0)
+#	define debugUartPrint(msg) ((void)0)
+#	define debugUartPrintf(...) ((void)0)
+#	define debugUartLogState(from, to) ((void)0)
+#	define debugUartLogEvent(event) ((void)0)
+#	define debugUartService() ((void)0)
 
 #endif /* USE_DEBUG_UART */
 
