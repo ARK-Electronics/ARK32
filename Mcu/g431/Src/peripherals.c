@@ -9,6 +9,7 @@
 
 #include "peripherals.h"
 
+#include "debug_uart.h"
 #include "gate_driver.h"
 #include "serial_telemetry.h"
 #include "targets.h"
@@ -651,6 +652,9 @@ void enableCorePeripherals()
 #if GATE_DRIVER_SLEEP_SUPPORT
 	/* After UTILITY_TIMER: wake timing uses get_timer_us16(). */
 	gateDriverInit();
+#endif
+#ifdef USE_DEBUG_UART
+	debugUartInit();
 #endif
 	//
 	LL_TIM_EnableCounter(INTERVAL_TIMER);

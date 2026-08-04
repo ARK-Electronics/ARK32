@@ -10,6 +10,7 @@
 #include "signal.h"
 #include "eeprom.h"
 #include "faults.h"
+#include "debug_uart.h"
 
 volatile esc_state_t esc_state = ESC_DISARMED;
 volatile uint16_t esc_illegal_edge_count = 0;
@@ -120,12 +121,18 @@ static void escCommitState(esc_state_t next)
 		}
 #endif
 	}
+	if (from != next) {
+		debugUartLogState((uint8_t)from, (uint8_t)next);
+	}
 	esc_state = next;
 }
 
 /* Force without edge check (reconcile / recovery). */
 static void escForceState(esc_state_t next)
 {
+	if (esc_state != next) {
+		debugUartLogState((uint8_t)esc_state, (uint8_t)next);
+	}
 	esc_state = next;
 }
 
