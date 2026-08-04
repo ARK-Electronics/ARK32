@@ -188,7 +188,6 @@ void runtimeProcessDesyncCheck(void)
 			}
 			zero_crosses = 0;
 			bemfZcResetTrend();
-			desync_happened++;
 #ifdef USE_DEBUG_UART
 			/* Single UART line (LogEvent would print "fault: desync" twice). */
 			debugUartPrintf("fault: desync zc=%lu e_com=%lu input=%u duty=%u\r\n", (unsigned long)zc_at_desync,
@@ -199,7 +198,10 @@ void runtimeProcessDesyncCheck(void)
 			// charge early desyncs softly (faultNoteEarlyDesync), and do
 			// not full-stop (running=0). Established desyncs charge the
 			// episode bucket and may stop the motor.
+			// desync_happened / esc.Status.error_count / NodeStatus WARNING
+			// only count established jumps — not low-duty acquisition kicks.
 			if (zc_at_desync > 100) {
+				desync_happened++;
 				faultDesyncEpisodeCharge(DESYNC_EPISODE_JUMP);
 				if ((!eepromBuffer.bi_direction && (input > 47)) || commutation_interval > 1000) {
 					running = 0;
