@@ -88,13 +88,16 @@ Files: `Inc/hwci_perf.h`, `Src/hwci_perf.c`, three hooks in `Src/main.c`
 
 ## Embedded bootloader (F051)
 
-F051 builds **embed the ARK32-bootloader image by default**, including
-`HWCI_PERF=1` (LTO leaves room for both). At boot the app compares the on-chip
-BL region to the embedded image and rewrites it if they differ
-(`Src/bootloader_update.c`).
+F051 **release** builds embed the ARK32-bootloader image by default. At boot
+the app compares the on-chip BL region to the embedded image and rewrites it
+if they differ (`Src/bootloader_update.c`).
 
-**After a BL version bump** (new `.bin` in `Bootloaders/`, or a board still on
-an older BL):
+`HWCI_PERF=1` does **not** embed the BL (flash is reserved for the perf
+struct; the rig already has a bootloader). First-boot BL rewrite only applies
+to release images that carry `.bl_image`.
+
+**After a BL version bump** on a **release** image (new `.bin` in
+`Bootloaders/`, or a board still on an older BL):
 
 1. First app boot may erase/program `0x08000000`, soft-reset, and play the
    short rising **BL-updated** chirp before the normal startup tune.
@@ -102,12 +105,11 @@ an older BL):
    or re-run the profile is fine once the on-chip BL matches.
 3. Later boots are a no-op `memcmp` (no rewrite thrash).
 
-To strip the embed for size emergencies or pure perf A/Bs (no app-side BL
-update in that binary):
+To strip the embed on a release build:
 
 ```
-make ARK_4IN1_F051 HWCI_PERF=1 NO_EMBED_BL=1
-# or: EMBED_BOOTLOADER=0
+make ARK_4IN1_F051 EMBED_BOOTLOADER=0
+# or: NO_EMBED_BL=1
 ```
 
 Details: [Bootloaders/README.md](../Bootloaders/README.md).
