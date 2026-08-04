@@ -18,6 +18,7 @@
 #include "targets.h"
 #include "esc_state.h"
 #include "gate_driver.h"
+#include "debug_uart.h"
 #include "IO.h"
 #include "sounds.h"
 
@@ -93,6 +94,7 @@ void faultPollGateDriver(void)
 		stepper_sine = 0;
 		if (!drv_nfault_latched) {
 			drv_nfault_latched = 1;
+			debugUartLogEvent(DBG_EVT_NFAULT);
 			/* Reuses stuck latch: reconcile holds FAULT_STUCK via
 			 * bemf_timeout_happened == ESC_STUCK_LATCH until zero
 			 * throttle clears it — same pilot-clear semantics. */
@@ -141,6 +143,7 @@ uint8_t faultHandleStuckRotorIfNeeded(void)
 	if ((bemf_timeout_happened > bemf_timeout) && eepromBuffer.stuck_rotor_protection) {
 		allOff();
 		maskPhaseInterrupts();
+		debugUartLogEvent(DBG_EVT_STUCK);
 		escToFaultStuck();
 #	ifdef USE_RGB_LED
 		setIndividualRGBLed(1, 0, 0);
@@ -174,6 +177,8 @@ void faultPollSignalTimeout(void)
 	if (signaltimeout > (LOOP_FREQUENCY_HZ >> 1)) { // half second timeout when armed;
 		if (escIsArmed()) {
 			allOff();
+			debugUartLogEvent(DBG_EVT_SIGNAL);
+			debugUartService(); /* flush before reset */
 			escToFaultSignal();
 			zero_input_count = 0;
 			SET_DUTY_CYCLE_ALL(0);
@@ -186,6 +191,8 @@ void faultPollSignalTimeout(void)
 		}
 		if (signaltimeout > LOOP_FREQUENCY_HZ << 1) { // 2 second when not armed
 			allOff();
+			debugUartLogEvent(DBG_EVT_SIGNAL);
+			debugUartService();
 			escToFaultSignal();
 			zero_input_count = 0;
 			SET_DUTY_CYCLE_ALL(0);
@@ -392,6 +399,7 @@ void faultNoteEarlyDesync(void)
 		return;
 	}
 	acq_fail_desyncs = 0;
+	debugUartLogEvent(DBG_EVT_ACQ_DESYNC);
 	faultDesyncEpisodeCharge(DESYNC_EPISODE_ACQ_FAIL);
 #endif
 }
@@ -456,6 +464,7 @@ void faultHandleBemfIntervalStall(void)
 			 * both of which reach the loop through this trip - see
 			 * faultErrorCount(). */
 			fault_stall_trips++;
+			debugUartLogEvent(DBG_EVT_STALL);
 			faultDesyncEpisodeCharge(DESYNC_EPISODE_STALL_RAIL);
 		}
 		if (escIsFault()) {
