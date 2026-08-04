@@ -457,33 +457,40 @@ void faultHandleBemfIntervalStall(void)
 {
 	/* Six-step only (not sine soft-start). */
 	if (INTERVAL_TIMER_COUNT > BEMF_STALL_TICKS && (escInOpenLoop() || escInClosedLoop())) {
-		bemf_timeout_happened++;
+		/* Commanded stop (input < 48 == escNoteStallOrDesync): duty already
+		 * zero, running still set while BEMF dies — INTERVAL_TIMER expiry
+		 * is expected, not a stall. Skip trip count / log / episode charge. */
+		const uint8_t commanded_stop = (input < 48);
 
 		maskPhaseInterrupts();
-		// Charge the episode rail only when this run was ESTABLISHED
-		// before it died (the bad-tune restart->spool->desync cycle
-		// always reaches closed loop first). A start attempt that never
-		// got going is the legacy stuck-rotor rail's job, with its
-		// throttle-scaled tolerance (bemf_timeout 100 below input 150) -
-		// heavy props legitimately kick many times at low throttle, and
-		// charging those latched the ESC on the 4th kick. This gate also
-		// covers the blind/miss-limit handoff (bemf_zc kicks
-		// INTERVAL_TIMER past BEMF_STALL_TICKS with comparator interrupts masked, so
-		// this rail is guaranteed to run next pass): blind stepping only
-		// arms at zero_crosses >= 100, so those episodes always charge.
-		if (zero_crosses > 100) {
-			/* Established run died here. This is the ONLY place the
-			 * stall rail is counted, and it is the aggregation point
-			 * for the dead-reckoning budget handoff in bemf_zc.c,
-			 * both of which reach the loop through this trip - see
-			 * faultErrorCount(). */
-			fault_stall_trips++;
+		if (!commanded_stop) {
+			bemf_timeout_happened++;
+			// Charge the episode rail only when this run was ESTABLISHED
+			// before it died (the bad-tune restart->spool->desync cycle
+			// always reaches closed loop first). A start attempt that never
+			// got going is the legacy stuck-rotor rail's job, with its
+			// throttle-scaled tolerance (bemf_timeout 100 below input 150) -
+			// heavy props legitimately kick many times at low throttle, and
+			// charging those latched the ESC on the 4th kick. This gate also
+			// covers the blind/miss-limit handoff (bemf_zc kicks
+			// INTERVAL_TIMER past BEMF_STALL_TICKS with comparator interrupts masked, so
+			// this rail is guaranteed to run next pass): blind stepping only
+			// arms at zero_crosses >= 100, so those episodes always charge.
+			if (zero_crosses > 100) {
+				/* Established run died here. This is the ONLY place the
+				 * stall rail is counted, and it is the aggregation point
+				 * for the dead-reckoning budget handoff in bemf_zc.c,
+				 * both of which reach the loop through this trip - see
+				 * faultErrorCount(). */
+				fault_stall_trips++;
 #ifdef USE_DEBUG_UART
-			/* Single UART line (LogEvent would print "fault: stall" twice). */
-			debugUartPrintf("fault: stall zc=%lu bemf_to=%u/%u e_com=%lu\r\n", (unsigned long)zero_crosses,
-					(unsigned)bemf_timeout_happened, (unsigned)bemf_timeout, (unsigned long)commutation_interval);
+				/* Single UART line (LogEvent would print "fault: stall" twice). */
+				debugUartPrintf("fault: stall zc=%lu bemf_to=%u/%u e_com=%lu\r\n", (unsigned long)zero_crosses,
+						(unsigned)bemf_timeout_happened, (unsigned)bemf_timeout,
+						(unsigned long)commutation_interval);
 #endif
-			faultDesyncEpisodeCharge(DESYNC_EPISODE_STALL_RAIL);
+				faultDesyncEpisodeCharge(DESYNC_EPISODE_STALL_RAIL);
+			}
 		}
 		if (escIsFault()) {
 			/* Episode rail latched: do not re-enter startup. */
@@ -495,8 +502,8 @@ void faultHandleBemfIntervalStall(void)
 		escNoteStallOrDesync(1);
 		zero_crosses = 0;
 		bemfZcResetTrend();
-		if (faultDesyncRestartHoldoffActive()) {
-			/* Coast until holdoff expires; main loop will re-arm. */
+		if (commanded_stop || faultDesyncRestartHoldoffActive()) {
+			/* Coast / commanded stop: do not zcfound re-enter. */
 			running = 0;
 			allOff();
 			return;
