@@ -34,8 +34,8 @@ Example OpenOCD (ST-Link + STM32F0):
 ```bash
 openocd -f interface/stlink.cfg -f target/stm32f0x.cfg \
   -c "init; halt; flash erase_sector 0 0 last; \
-      flash write_bank 0 obj/AM32_ARK_4IN1_F051_3.0-ark.factory.bin 0; \
-      flash verify_bank 0 obj/AM32_ARK_4IN1_F051_3.0-ark.factory.bin 0; \
+      flash write_bank 0 obj/AM32_ARK_4IN1_F051_3.0.1-ark.factory.bin 0; \
+      flash verify_bank 0 obj/AM32_ARK_4IN1_F051_3.0.1-ark.factory.bin 0; \
       reset run; exit"
 ```
 
