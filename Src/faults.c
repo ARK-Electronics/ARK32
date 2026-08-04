@@ -21,6 +21,8 @@
 #include "debug_uart.h"
 #include "IO.h"
 #include "sounds.h"
+/* commutation_interval for stall debug line */
+#include "motor_runtime.h"
 
 #ifdef USE_RGB_LED
 extern void setIndividualRGBLed(uint8_t, uint8_t, uint8_t);
@@ -477,6 +479,8 @@ void faultHandleBemfIntervalStall(void)
 			 * faultErrorCount(). */
 			fault_stall_trips++;
 			debugUartLogEvent(DBG_EVT_STALL);
+			debugUartPrintf("fault: stall zc=%lu bemf_to=%u/%u e_com=%lu\r\n", (unsigned long)zero_crosses,
+					(unsigned)bemf_timeout_happened, (unsigned)bemf_timeout, (unsigned long)commutation_interval);
 			faultDesyncEpisodeCharge(DESYNC_EPISODE_STALL_RAIL);
 		}
 		if (escIsFault()) {

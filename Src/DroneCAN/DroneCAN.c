@@ -24,6 +24,8 @@
 #	include "functions.h"
 #	include "filter.h"
 #	include "debug_uart.h"
+#	include "settings.h"
+#	include "motor_runtime.h"
 
 // include the headers for the generated DroneCAN messages from the
 // dronecan_dsdlc compiler
@@ -415,6 +417,9 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 					*ptr8 = req.value.integer_value + 10; // adjust for advance level offset for eeprom v3
 					set_log_val = (int32_t)req.value.integer_value;
 				}
+				if (ptr8 == &eepromBuffer.motor_poles) {
+					applyMotorIdentitySettings();
+				}
 				break;
 			}
 			case T_UINT16: {
@@ -423,6 +428,9 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				set_log_val = (int32_t)req.value.integer_value;
 				if (ptr16 == &motor_kv) {
 					eepromBuffer.motor_kv = (uint8_t)((*(uint16_t *)p->ptr - 20) / 40);
+					/* Advance / RPM envelopes were computed at boot from
+					 * old kV — refresh them now (AM32 identity tables). */
+					applyMotorIdentitySettings();
 				} else if (ptr16 == &low_cell_volt_cutoff) {
 					eepromBuffer.low_cell_volt_cutoff = (uint8_t)(*ptr16 - 250);
 				}
@@ -454,6 +462,11 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 			debugUartPrintf("param: %s=<string len=%u>\r\n", p->name, (unsigned)req.value.string_value.len);
 		} else {
 			debugUartPrintf("param: %s=%ld\r\n", p->name, (long)set_log_val);
+		}
+		if (p->ptr == (void *)&motor_kv || p->ptr == (void *)&eepromBuffer.motor_poles) {
+			debugUartPrintf("param: applied kv=%u poles=%u erpm_lo=%u erpm_hi=%u adv_q12=%u\r\n", (unsigned)motor_kv,
+					(unsigned)eepromBuffer.motor_poles, (unsigned)low_rpm_level, (unsigned)high_rpm_level,
+					(unsigned)advance_erpm_scale_q12);
 		}
 
 		if (last_dir_reversed != eepromBuffer.dir_reversed || last_bi_direction != eepromBuffer.bi_direction) {
