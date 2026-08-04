@@ -169,7 +169,6 @@ void runtimeProcessDesyncCheck(void)
 		if (desynced) {
 			slow_avg_revs = 0;
 			const uint32_t zc_at_desync = zero_crosses;
-			const uint8_t established = (zc_at_desync > 100);
 			// Freeze the throttle ceiling briefly: k_erpm is about to
 			// collapse because the ESTIMATE died, not because the rotor
 			// did, and re-deriving the ceiling from the collapsed
@@ -190,42 +189,32 @@ void runtimeProcessDesyncCheck(void)
 			zero_crosses = 0;
 			bemfZcResetTrend();
 			desync_happened++;
+#ifdef USE_DEBUG_UART
 			/* Single UART line (LogEvent would print "fault: desync" twice). */
 			debugUartPrintf("fault: desync zc=%lu e_com=%lu input=%u duty=%u\r\n", (unsigned long)zc_at_desync,
 					(unsigned long)average_interval, (unsigned)input, (unsigned)duty_cycle);
-			// Same established-run gate as the stall rail (see
-			// faultHandleBemfIntervalStall): interval jumps while the
-			// loop is still acquiring (zc 11..100) are normal startup
-			// roughness on light motors - charging them stacks holdoff
-			// onto honest starts until the bucket
-			// latches a motor that never got going (SITL racer model
-			// reproduces this under plain dshot spool). Legacy desync
-			// handling below still restarts; only the episode
-			// accounting is established-runs-only.
-			if (established) {
+#endif
+			// Established-run gate (zc > 100): same as stall rail. Interval
+			// jumps while still acquiring are normal startup roughness —
+			// charge early desyncs softly (faultNoteEarlyDesync), and do
+			// not full-stop (running=0). Established desyncs charge the
+			// episode bucket and may stop the motor.
+			if (zc_at_desync > 100) {
 				faultDesyncEpisodeCharge(DESYNC_EPISODE_JUMP);
+				if ((!eepromBuffer.bi_direction && (input > DSHOT_CMD_MAX)) || commutation_interval > 1000) {
+					running = 0;
+				}
+#ifndef MCU_F051
+				/* F051: skip — historical post-clear reseed was dead
+				 * (zero_crosses already 0) and LTO dropped it; restoring
+				 * live reseed overflows the 99.8% flash gate. */
+				average_interval = 5000;
+#endif
 			} else {
-				// Acquisition-regime desyncs are not charged directly
-				// (that is what the gate above exists to prevent), but
-				// they must not be free either: without this the loop
-				// can desync forever below zc 100 with every rail and
-				// counter reading zero. See faultNoteEarlyDesync.
 				faultNoteEarlyDesync();
-			}
-			/*
-			 * Full stop (running=0 → ARMED_IDLE) only after an
-			 * established run. Acquisition jump-desyncs on slow/low-BEMF
-			 * motors (low kV, low duty) are common; force open-loop
-			 * re-acquire without killing the start attempt.
-			 */
-			if (established && ((!eepromBuffer.bi_direction && (input > DSHOT_CMD_MAX)) || commutation_interval > 1000)) {
-				running = 0;
 			}
 			/* Always fall back to poll-ZC path after a desync event. */
 			escNoteStallOrDesync(0);
-			if (established) {
-				average_interval = 5000;
-			}
 			last_duty_cycle = min_startup_duty / 2;
 			if (faultDesyncRestartHoldoffActive() || escIsFault()) {
 				running = 0;
