@@ -111,6 +111,7 @@ static struct PACKED {
 } debug1;
 
 static void can_printf(const char *fmt, ...);
+static uint32_t millis32(void);
 
 // some convenience macros
 #	define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -245,6 +246,25 @@ static void save_settings(void)
 {
 	saveEEpromSettings();
 	can_printf("saved settings");
+	debugUartPrint("param: saved settings\r\n");
+}
+
+/*
+  pending deferred save state. Param sets only mark settings dirty;
+  the main DroneCAN_update loop coalesces bursts into a single flash
+  write once the bus has been quiet for SETTINGS_SAVE_QUIET_MS.
+  (from am32-firmware/AM32#359)
+ */
+#	define SETTINGS_SAVE_QUIET_MS 500
+static struct {
+	bool dirty;
+	uint32_t last_change_ms;
+} pending_save;
+
+static void mark_settings_dirty(void)
+{
+	pending_save.dirty = true;
+	pending_save.last_change_ms = millis32();
 }
 
 /*
@@ -444,6 +464,9 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 			armed = 0;
 			set_input(0);
 		}
+
+		/* Coalesce flash writes: deferred save in DroneCAN_update (AM32#359). */
+		mark_settings_dirty();
 	}
 
 	/*
@@ -555,6 +578,7 @@ static void handle_param_ExecuteOpcode(CanardInstance *ins, CanardRxTransfer *tr
 			save_flash_nolib(eepromBuffer.buffer, sizeof(eepromBuffer.buffer), eeprom_address);
 			loadEEpromSettings();
 			load_settings();
+			pending_save.dirty = false;
 			pkt.ok = true;
 		}
 	}
@@ -562,6 +586,7 @@ static void handle_param_ExecuteOpcode(CanardInstance *ins, CanardRxTransfer *tr
 		if (!safe_to_write_settings()) {
 			can_printf("No save while running");
 		} else {
+			pending_save.dirty = false;
 			save_settings();
 			pkt.ok = true;
 		}
@@ -1246,6 +1271,12 @@ void DroneCAN_update()
 	}
 
 	DroneCAN_processTxQueue();
+
+	/* Deferred settings save: quiet window + safe to write flash (AM32#359). */
+	if (pending_save.dirty && (millis32() - pending_save.last_change_ms) >= SETTINGS_SAVE_QUIET_MS && safe_to_write_settings()) {
+		pending_save.dirty = false;
+		save_settings();
+	}
 
 	if (canstats.last_raw_command_us != 0 && ts - canstats.last_raw_command_us > 250000ULL) {
 		/*
