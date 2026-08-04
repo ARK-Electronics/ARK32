@@ -169,8 +169,9 @@ void faultErrorCountReset(void);
  *
  * When USE_DRV_NFAULT is defined: if nFAULT is low (VDS OCP, UVLO, OTW,
  * gate-drive fault — threshold is board hardware), cut PWM, latch
- * ESC_FAULT_STUCK, and at zero throttle pulse DRV ENABLE so latched VDS
- * trips can clear. No-op on targets without the pin.
+ * ESC_FAULT_STUCK, and at zero throttle pulse DRV ENABLE (or clear the
+ * software latch after ENABLE-low sleep) so latched trips can clear
+ * without reboot. No-op on targets without the pin.
  *
  * Call from the main loop (not the 20 kHz path).
  */
