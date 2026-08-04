@@ -120,11 +120,10 @@ SRC_COMMON_BASE := $(filter-out $(SRC_OPTIONAL_BRUSHED) $(SRC_OPTIONAL_HWCI),$(S
 # with .incbin (Src/bl_image.S) rather than a generated C array, so the linked
 # bytes stay verifiable against the ARK32-bootloader release they came from
 # (see Bootloaders/README.md). .S, not .[cs]: the wildcard above skips it.
-# F051 embeds by default (including HWCI_PERF=1); LTO leaves enough flash for
-# both the 4 KiB image and the perf struct. Kill switches for size A/Bs:
+# F051 release embeds by default. HWCI_PERF=1 does not embed (4 KiB goes to the
+# perf struct / feature headroom; the rig already has a BL on-chip). Kill switches:
 #   make ARK_4IN1_F051 EMBED_BOOTLOADER=0
 #   make ARK_4IN1_F051 NO_EMBED_BL=1
-#   make ARK_4IN1_F051 HWCI_PERF=1 NO_EMBED_BL=1
 # Bumping the bootloader means dropping the new .bin (from the release .hex)
 # and editing this one line if the name changes.
 SRC_OPTIONAL_BL_IMAGE := $(MAIN_SRC_DIR)/bl_image.S
@@ -134,7 +133,8 @@ SRC_OPTIONAL_BL_IMAGE := $(MAIN_SRC_DIR)/bl_image.S
 BL_IMAGE_F051 := Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
 # 0x08000000..ORIGIN(FLASH_VECTAB); the F051 linker script asserts the match.
 BL_REGION_SIZE_F051 := 4096
-# Default on; set EMBED_BOOTLOADER=0 or NO_EMBED_BL=1 to strip the image.
+# Default on for release; set EMBED_BOOTLOADER=0 or NO_EMBED_BL=1 to strip.
+# Also stripped automatically when HWCI_PERF=1 (see xEMBED_BL below).
 EMBED_BOOTLOADER ?= 1
 
 # configure some directories that are relative to wherever ROOT_DIR is located
@@ -190,9 +190,10 @@ $(eval xLDSCRIPT := $$(if $$(call has_can_suffix,$$(2)),$(LDSCRIPT_CAN_$(1)),$(L
 $(eval xCFLAGS := $$(if $$(call has_can_suffix,$$(2)),$(CFLAGS_CAN_$(1))))
 $(eval xSRC := $$(if $$(call has_can_suffix,$$(2)),$(SRC_CAN_$(1))))
 
-# Embed the bootloader image on F051 by default (release and HWCI_PERF). Either
-# EMBED_BOOTLOADER=0 or NO_EMBED_BL=1 strips it for size emergencies / pure A/Bs.
-$(eval xEMBED_BL := $(if $(filter F051,$(1)),$(if $(or $(filter 0,$(EMBED_BOOTLOADER)),$(filter 1,$(NO_EMBED_BL))),,1)))
+# Embed the bootloader image on F051 release builds by default. Strip when
+# EMBED_BOOTLOADER=0, NO_EMBED_BL=1, or HWCI_PERF=1 (HWCI needs flash for the
+# perf instrumentation; field BL rewrite is a release feature).
+$(eval xEMBED_BL := $(if $(filter F051,$(1)),$(if $(or $(filter 0,$(EMBED_BOOTLOADER)),$(filter 1,$(NO_EMBED_BL)),$(filter 1,$(HWCI_PERF))),,1)))
 
 # Per-target app sources: drop brushed/hwci unless the product asks for them
 $(eval SRC_APP_$(2) := $(SRC_COMMON_BASE)$(if $(call has_brushed_suffix,$(2)), $(SRC_OPTIONAL_BRUSHED))$(if $(filter 1,$(HWCI_PERF)), $(SRC_OPTIONAL_HWCI))$(if $(xEMBED_BL), $(SRC_OPTIONAL_BL_IMAGE)))
@@ -262,13 +263,11 @@ codegen-check-ark:
 # Build ARK F051 and enforce flash/RAM headroom (F051 is tight).
 # -B forces a rebuild so a prior image is not size-checked by mistake.
 .PHONY : size-check-ark
-# Worst case is HWCI_PERF=1 with the embedded bootloader (default): it carries
-# both the perf struct and the 4 KiB .bl_image. That bounds release flash/RAM.
-# A second release-only build still runs so a pure release link regression is
-# not hidden by HWCI-only code paths. Strip the image with NO_EMBED_BL=1 /
-# EMBED_BOOTLOADER=0 if you need a headroom A/B outside this gate.
+# Two bounds: HWCI_PERF (no .bl_image) and release (with .bl_image). Each is
+# the production shape of that product path; neither is forced to carry both
+# the 4 KiB BL blob and the HWCI perf struct.
 size-check-ark:
-	$(QUIET)$(ECHO) "--- ARK_4IN1_F051 HWCI_PERF=1 (embedded bootloader, default) ---"
+	$(QUIET)$(ECHO) "--- ARK_4IN1_F051 HWCI_PERF=1 (no embedded bootloader) ---"
 	$(QUIET)$(MAKE) -B ARK_4IN1_F051 HWCI_PERF=1
 	$(QUIET)bash scripts/check-size-ark.sh
 	$(QUIET)$(ECHO) "--- ARK_4IN1_F051 release (embedded bootloader) ---"
