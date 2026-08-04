@@ -11,6 +11,8 @@
 #	include "motor_runtime.h"
 #	include "targets.h"
 
+/* Datasheet tWAKE: after nSLEEP/ENABLE rises, wait before gate inputs are valid.
+ * Pin stays high; this is not a toggle hold — bias/charge pump must come up. */
 #	define GD_WAKE_US 1000u
 #	define GD_FAULT_RST_US 50u
 
@@ -40,10 +42,10 @@ void gateDriverInit(void)
 void gateDriverWakeBlocking(void)
 {
 	if (gate_driver_awake) {
-		return;
+		return; /* already high; no delay */
 	}
 	GD_PORT->BSRR = GD_PIN;
-	delayMicros(GD_WAKE_US);
+	delayMicros(GD_WAKE_US); /* tWAKE — see GD_WAKE_US */
 	gate_driver_awake = 1;
 }
 
