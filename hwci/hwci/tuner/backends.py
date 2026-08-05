@@ -130,7 +130,7 @@ class HwTuneBackend(TuneBackend):
     mode = "hw"
 
     def __init__(self, rig: RigConfig, *, tare: bool = True):
-        from ..debugger.openocd import OpenOcdDebugger
+        from ..debugger.factory import openocd_from_rig
         self.rig = rig
         self.tare = tare
         elf = rig.resolved_elf()
@@ -142,9 +142,7 @@ class HwTuneBackend(TuneBackend):
         # Layout drift between EEPROM_FIELDS and the flashed firmware is
         # caught HERE, before any page is written.
         check_eeprom_layout(self.elf_path)
-        self._make_dbg = lambda: OpenOcdDebugger(
-            rig.openocd_configs, openocd_bin=rig.openocd_bin,
-            search_dirs=rig.openocd_search_dirs)
+        self._make_dbg = lambda: openocd_from_rig(rig)
         dbg = self._make_dbg().open()
         try:
             self.eeprom_address = resolve_eeprom_address(dbg, self.elf_path)

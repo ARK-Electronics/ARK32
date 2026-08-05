@@ -1,15 +1,18 @@
-# AM32 Hardware-CI Harness (ARK 4IN1 ESC)
+# AM32 Hardware-CI Harness (ARK 4IN1 + ARK 12S CAN ESC)
 
-A hardware-in-the-loop test harness for improving AM32 on the **ARK 4IN1 ESC**.
-It builds and flashes firmware, drives a motor through a **Tyto Robotics Flight
-Stand 50**, and at the same time reads firmware **CPU-load / loop-time**
-instrumentation off the MCU over **SWD**, then turns it all into metrics, a
-baseline, and a pass/fail report you can gate pull requests on.
+A hardware-in-the-loop test harness for improving AM32 on **ARK ESC** products
+(4IN1 F051 and **12S CAN G431/G491**). It builds and flashes firmware, drives a
+motor through a **Tyto Robotics Flight Stand 50**, and at the same time reads
+firmware **CPU-load / loop-time** instrumentation off the MCU over **SWD**, then
+turns it all into metrics, a baseline, and a pass/fail report you can gate pull
+requests on.
 
 ```
                  ┌───────────────────────── Ubuntu 24.04 host ─────────────────────────┐
                  │                                                                       │
   ST-Link  ◄─SWD─┤  OpenOCD ──background RAM reads──►  hwci_perf struct (loop µs, iters) │
+                 │                                                                       │
+  ST-Link VCP ◄──┤  G4 debug UART (PB3 @ 115200)  ──  state / nFAULT / desync text       │
                  │                                                                       │
   USB-serial ◄───┤  KISS telemetry reader  ◄────────  ESC telem wire (eRPM, V, A, °C)    │
                  │                                                                       │
@@ -18,7 +21,7 @@ baseline, and a pass/fail report you can gate pull requests on.
                  │                                                                       │
                  │  runner → metrics → baseline compare → report.md + plots + exit code  │
                  └───────────────────────────────────────────────────────────────────────┘
-            ARK 4IN1 ESC (4× STM32F051 / Cortex-M0) ── motor ── prop ── Flight Stand 50
+  ARK 4IN1 (F051) or ARK 12S CAN ESC (G431/G491) ── motor ── prop ── Flight Stand 50
 ```
 
 ## Two exclusive bench setups
@@ -27,20 +30,23 @@ baseline, and a pass/fail report you can gate pull requests on.
 |--|----------------------------|------------------------------|
 | ESC signal | Stand ESC out (uni DShot) | FPV motor out (BDShot) |
 | Motor command | `hwci run --profile noprop_…` | `scripts/px4_motor_stream.py` |
-| Rig file | `rig.yaml` / `config/rig.flightstand.yaml` | `config/rig.px4_bdshot.yaml` |
+| Rig file | `rig.yaml` / `config/rig.g431_can.yaml` / `config/rig.flightstand.yaml` | `config/rig.px4_bdshot.yaml` |
 | Docs | this README | [docs/BENCH_SETUPS.md](docs/BENCH_SETUPS.md), [docs/setup_px4_bdshot.md](docs/setup_px4_bdshot.md) |
 
 Use **one setup at a time** (only one host on the signal wire). Full table and
-switch procedure: **[docs/BENCH_SETUPS.md](docs/BENCH_SETUPS.md)**.
+switch procedure: **[docs/BENCH_SETUPS.md](docs/BENCH_SETUPS.md)** (includes
+**F051 vs G4** OpenOCD/app-base and debug-UART wiring).
 
 ## Why it's built this way (read this first)
 
-The ARK 4IN1 runs **four independent STM32F051 MCUs** (one per channel), each a
-**Cortex-M0 (ARMv6-M)**. The M0 has **no DWT cycle counter, no ITM, and no SWO**
-— so the usual "profile over SWO/ITM trace" approach is **impossible on any
-debug probe**, ST-Link or J-Link alike.
+The original ARK 4IN1 runs **four independent STM32F051 MCUs** (one per channel),
+each a **Cortex-M0 (ARMv6-M)**. The M0 has **no DWT cycle counter, no ITM, and no
+SWO** — so the usual "profile over SWO/ITM trace" approach is **impossible on
+that part**. The **ARK 12S CAN ESC (G431/G491, Cortex-M4)** *does* have DWT/ITM,
+but the harness still uses the same non-halting `hwci_perf` RAM poll so both
+products share one code path (with a higher SWD clock and correct app base on G4).
 
-So CPU load and loop times are recovered a different way:
+CPU load and loop times are recovered this way on both MCUs:
 
 1. The firmware keeps a tiny instrumentation struct (`hwci_perf`) in RAM,
    updated from the 20 kHz control loop and the main loop using the existing
@@ -206,9 +212,10 @@ python -m pytest                 # 75 offline tests
 
 ```bash
 hwci profiles                                   # list test profiles
-hwci build --config rig.yaml                    # make ARK_4IN1_F051 HWCI_PERF=1
-hwci flash --config rig.yaml                    # OpenOCD program @ 0x08001000
-hwci run  --profile efficiency_sweep --config rig.yaml --battery-cells 6 --out runs/r1
+hwci build --config rig.yaml                    # make <target> HWCI_PERF=1
+hwci flash --config rig.yaml                    # OpenOCD @ app_load_addr (F0: 0x08001000, G4: 0x08004000)
+hwci debug-uart --config rig.yaml               # G4: tail PB3 console via ST-Link VCP
+hwci run  --profile noprop_smoke --config rig.yaml --battery-cells 6 --out runs/r1
 hwci analyze runs/r1                            # -> metrics.json
 hwci report runs/r1 --baseline baselines/ARK_4IN1_F051.json
 hwci ci   --profile ci_smoke --config rig.yaml --battery-cells 6 \

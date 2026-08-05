@@ -14,7 +14,8 @@ from pathlib import Path
 import yaml
 
 from .build import find_artifact
-from .debugger.openocd import APP_LOAD_ADDR, DEFAULT_CONFIGS
+from .debugger.openocd import (APP_LOAD_ADDR, DEFAULT_CONFIGS, G4_APP_LOAD_ADDR,
+                               G4_CONFIGS)
 from .flightstand.base import SafetyLimits
 
 PROFILES_DIR = Path(__file__).parent / "profiles"
@@ -25,6 +26,8 @@ DEFAULT_TARGET = "ARK_4IN1_F051"
 BACKEND_CHOICES: dict[str, set[str]] = {
     "debugger_backend": {"openocd", "sim", "none"},
     "telem_backend": {"serial", "sim", "none"},
+    # Text console on ARK_G431_CAN (USART2 TX PB3 → ST-Link VCP). Not KISS.
+    "debug_uart_backend": {"serial", "sim", "none"},
     # "none" = ESC signal driven outside the harness (e.g. ARK FPV BDShot);
     # use only with setup B — see docs/BENCH_SETUPS.md.
     "throttle_backend": {"flightstand", "external", "none", "sim"},
@@ -32,6 +35,31 @@ BACKEND_CHOICES: dict[str, set[str]] = {
 }
 _SIM_ONLY = {"sim"}
 
+
+@dataclass(frozen=True)
+class TargetPreset:
+    """MCU-family defaults applied when a rig omits openocd / load-address keys."""
+    openocd_configs: tuple[str, ...]
+    app_load_addr: int
+    adapter_speed_khz: int | None = None
+
+
+# Keys that load_rig() fills from TARGET_PRESETS when absent from the YAML.
+_PRESET_FILL_KEYS = ("openocd_configs", "app_load_addr", "adapter_speed_khz")
+
+TARGET_PRESETS: dict[str, TargetPreset] = {
+    "ARK_4IN1_F051": TargetPreset(
+        openocd_configs=tuple(DEFAULT_CONFIGS),
+        app_load_addr=APP_LOAD_ADDR,
+        adapter_speed_khz=2000,
+    ),
+    "ARK_G431_CAN": TargetPreset(
+        openocd_configs=tuple(G4_CONFIGS),
+        app_load_addr=G4_APP_LOAD_ADDR,
+        # G4 SWD is solid well above F0 rates; 8 MHz cuts perf-poll latency.
+        adapter_speed_khz=8000,
+    ),
+}
 
 @dataclass
 class Segment:
@@ -188,10 +216,18 @@ class RigConfig:
     openocd_search_dirs: list[str] = field(default_factory=list)
     openocd_bin: str = "openocd"
     app_load_addr: int = APP_LOAD_ADDR
+    # None = OpenOCD default for the target cfg; set via target preset or YAML.
+    adapter_speed_khz: int | None = None
 
     telem_backend: str = "sim"              # "serial" | "none" (| "sim" offline)
     telem_port: str = "/dev/ttyUSB0"
     telem_baud: int = 115200
+
+    # ARK_G431_CAN debug console (USART2 TX PB3 @ 115200 via ST-Link VCP).
+    # Not KISS telemetry — state transitions and fault events as text lines.
+    debug_uart_backend: str = "none"        # "serial" | "none" (| "sim" offline)
+    debug_uart_port: str = "/dev/esc-debug-uart"
+    debug_uart_baud: int = 115200
 
     # flightstand = SETUP A; external = serial bridge; none = SETUP B (PX4/BDShot owns pin)
     throttle_backend: str = "sim"
@@ -234,6 +270,26 @@ class RigConfig:
                 "stand-less bench")
 
 
+def apply_target_preset(cfg: RigConfig, *, explicit_keys: set[str] | None = None
+                        ) -> RigConfig:
+    """Fill openocd/app_load/adapter defaults from :data:`TARGET_PRESETS`.
+
+    Only keys *not* listed in ``explicit_keys`` are overwritten, so a rig YAML
+    can pin any of them. Call with ``explicit_keys=set(yaml)`` after load.
+    """
+    preset = TARGET_PRESETS.get(cfg.target)
+    if preset is None:
+        return cfg
+    explicit = explicit_keys or set()
+    if "openocd_configs" not in explicit:
+        cfg.openocd_configs = list(preset.openocd_configs)
+    if "app_load_addr" not in explicit:
+        cfg.app_load_addr = preset.app_load_addr
+    if "adapter_speed_khz" not in explicit:
+        cfg.adapter_speed_khz = preset.adapter_speed_khz
+    return cfg
+
+
 def load_rig(path: str | None) -> RigConfig:
     if not path:
         return RigConfig()
@@ -247,6 +303,9 @@ def load_rig(path: str | None) -> RigConfig:
     cfg = RigConfig()
     for key, value in data.items():
         setattr(cfg, key, value)
+    # Target-family SWD defaults (G4 app @ 0x08004000, stm32g4x, …) unless
+    # the YAML pinned those keys explicitly.
+    apply_target_preset(cfg, explicit_keys=set(data.keys()) & set(_PRESET_FILL_KEYS))
     # A rig FILE describes hardware: simulator backends in it are almost
     # certainly a typo'd or half-edited config, and silently simulating a
     # "hardware" run is the worst possible failure mode.
