@@ -285,11 +285,12 @@ class ModelBuilderDialog(QDialog):
                   'the spec sheet. Typical: ~2400 (5-inch racer), '
                   '900-1000 (2216/2218 class), 400-700 (heavy lift).')
         self.poles = QSpinBox()
-        self.poles.setRange(2, 64)
+        self.poles.setRange(2, 128)
         self.poles.setValue(14)
         self.poles.setToolTip('Magnet pole count (not stator slots). Almost '
                               'all multirotor outrunners are 14; some large '
-                              'motors are 22 or 28.')
+                              'motors are 22 or 28, and direct-drive / hub '
+                              'motors run well past 36.')
         form.addRow('Poles', self.poles)
         field('resistance', 'Resistance line-to-line (mOhm)', '100',
               tip='Winding resistance line-to-line, milliohms, from the '
