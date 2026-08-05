@@ -195,7 +195,9 @@ static const struct parameter {
 	{"BRAKE_ON_STOP", T_BOOL, 0, 1, 1, &eepromBuffer.brake_on_stop},
 	{"DRIVING_BRAKE_STRENGTH", T_UINT8, 1, 10, 10, &eepromBuffer.driving_brake_strength},
 	{"DRAG_BRAKE_STRENGTH", T_UINT8, 1, 10, 10, &eepromBuffer.drag_brake_strength},
-	{"INPUT_SIGNAL_TYPE", T_UINT8, 0, 5, 5, &eepromBuffer.input_type},
+	/* 0=AUTO (detect DShot/PWM; DroneCAN wins while RawCommand is live),
+	 * 1=DSHOT, 2=SERVO, 3=SERIAL, 4=EDT_ARM, 5=DRONECAN-only (DShot/PWM IRQ off). */
+	{"INPUT_SIGNAL_TYPE", T_UINT8, 0, 5, 0, &eepromBuffer.input_type},
 	{"INPUT_FILTER_HZ", T_UINT8, 0, 100, 0, &eepromBuffer.can.filter_hz},
 #	ifdef CAN_TERM_PIN
 	{"CAN_TERM_ENABLE", T_BOOL, 0, 1, 0, &eepromBuffer.can.term_enable},
@@ -335,9 +337,11 @@ static uint32_t millis32(void)
   default settings, based on public/assets/eeprom_default.bin in AM32 configurator
   update to 2.19 default
  */
+/* Byte 46 = input_type: AUTO_IN (0) — first available of DShot/PWM; DroneCAN
+ * prioritised while RawCommand stream is live (see DroneCAN_active). */
 static const uint8_t default_settings[] = {0x01, 0x03, 0x01, 0x01, 0x23, 0xa0, 0x04, 0x00, 0x0a, 0x64, 0x00, 0x32, 0x02, 0x30, 0x35, 0x31,
 					   0x20, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x1a, 0x18, 0x64, 0x37, 0x0e, 0x00, 0x00, 0x05, 0x00,
-					   0x80, 0x80, 0x80, 0x32, 0x00, 0x32, 0x00, 0x00, 0x0f, 0x0a, 0x0a, 0x8d, 0x66, 0x06, 0x01, 0x00};
+					   0x80, 0x80, 0x80, 0x32, 0x00, 0x32, 0x00, 0x00, 0x0f, 0x0a, 0x0a, 0x8d, 0x66, 0x06, 0x00, 0x00};
 
 #	ifdef MCU_SITL
 // let the SITL eeprom emulation seed a missing eeprom file with defaults
@@ -1298,10 +1302,13 @@ static void DroneCAN_Startup(void)
 	// initialise low level CAN peripheral hardware
 	sys_can_init();
 
+	/*
+	 * DRONECAN_IN (5) is exclusive: disable DShot/PWM IRQs so noise on the
+	 * signal pin cannot fight CAN. AUTO (0) and the fixed wire types keep
+	 * capture live; when both CAN and wire are present, DroneCAN_active()
+	 * makes RawCommand win until the stream times out (~250 ms).
+	 */
 	if (eepromBuffer.input_type == DRONECAN_IN) {
-		/*
-          disable interrupts for DShot and PWM
-         */
 #	ifdef MCU_L431
 		NVIC_DisableIRQ(DMA1_Channel5_IRQn);
 		NVIC_DisableIRQ(EXTI15_10_IRQn);
@@ -1414,7 +1421,13 @@ void DroneCAN_update()
 
 bool DroneCAN_active(void)
 {
-	return canstats.total_commands != 0;
+	/*
+	 * True while a RawCommand stream is live (refreshed by handle_RawCommand
+	 * and cleared by the 250 ms failsafe above). Sticky total_commands is
+	 * NOT used: after CAN drops out, DShot/PWM under AUTO must be able to
+	 * take over without a reboot.
+	 */
+	return canstats.last_raw_command_us != 0;
 }
 
 #endif // DRONECAN_SUPPORT
