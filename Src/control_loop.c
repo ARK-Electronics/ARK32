@@ -580,7 +580,8 @@ RAM_FUNC void tenKhzRoutine()
 						 */
 						const uint8_t zero_ok = (zero_input_count > 30)
 #if DRONECAN_SUPPORT
-									|| (eepromBuffer.input_type == DRONECAN_IN)
+									/* Pure CAN mode, or AUTO with a live RawCommand stream. */
+									|| (eepromBuffer.input_type == DRONECAN_IN) || DroneCAN_active()
 #endif
 							;
 						if (zero_ok) {
