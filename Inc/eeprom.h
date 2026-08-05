@@ -5,6 +5,20 @@
 #ifndef EEPROM_H_
 #	define EEPROM_H_
 
+/*
+ * Configurable magnet pole count (eeprom byte 27, not pole pairs).
+ *
+ * The minimum keeps the pole-pair math (motor_poles / 2) non-zero. The maximum
+ * is what the DroneCAN MOTOR_POLES parameter accepts and what the kv-derived
+ * schedules in settings.c treat as a plausible pole count; it covers the large
+ * high-pole-count outrunners and direct-drive/hub motors that go well past the
+ * 36 poles the configurators historically allowed. It stays below 0xff so an
+ * erased eeprom (0 or 0xff) still reads as out of range and the derived
+ * schedules fall back to their unrestricted / duty-proxy behavior.
+ */
+#	define MOTOR_POLES_MIN 2
+#	define MOTOR_POLES_MAX 128
+
 typedef union EEprom_u {
 	struct {
 		uint8_t reserved_0;	//0
