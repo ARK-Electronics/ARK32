@@ -272,7 +272,8 @@ RAM_FUNC void interruptRoutine()
 	// through isolated glitches while a genuinely un-crossed level still
 	// rejects via the early-out; the full window length (and so the
 	// sustained-noise immunity of the filter_level retune) is unchanged.
-	// Same path on ARK_G431_CAN (MCU_G431) so the 12S CAN ESC gets the fix.
+	// Same path on ARK_G431_CAN (MCU_G431); G431 filter_level schedule is
+	// scaled in runtime_loop.c for 160 MHz wall-clock.
 	{
 		int bad = 0;
 		const int tolerance = filter_level >> 2;
@@ -331,9 +332,13 @@ RAM_FUNC void interruptRoutine()
 	//    Hump band: ci < 2 * pwm_period => ci * 12 < arr.
 	//  - G431: TIM1 @ 160 MHz => 80 TIM1 ticks / INTERVAL tick; half off-window
 	//    is N/160 INTERVAL ticks => (N * 409) >> 16 (~1/160 Q16).
-	//    Hump band: ci * 40 < arr.
+	//    Hump band was ci * 40 < arr (~2 PWM periods), matching the F051
+	//    scale. Free-run 1800 KV map (noprop_zc_map, 48 kHz) put the measured
+	//    jitter peak at ~2.3–3.2 PWM periods (50–70% thr, ~150–210k eRPM) —
+	//    outside that band so the compensator never armed. Use ~3.5 PWM
+	//    periods: ci * 24 < arr (at 48 kHz arr≈3332 → ci < ~139 ticks).
 #	ifdef MCU_G431
-	const uint32_t zc_hump_mult = 40u;
+	const uint32_t zc_hump_mult = 24u;
 	const uint32_t zc_half_off_q16 = 409u;
 #	else
 	const uint32_t zc_hump_mult = 12u;

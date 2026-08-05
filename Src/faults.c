@@ -245,6 +245,26 @@ void faultUpdateBemfTimeoutPolicy(void)
 		desync_restart_holdoff_ms = 0;
 		acq_fail_desyncs = 0;
 	}
+#	if defined(MCU_G431)
+	/*
+	 * ARK 12S CAN free-run restarts thrash in the acquisition window
+	 * (zero_crosses reset each stall) while still commanded throttle.
+	 * Accumulating bemf_timeout_happened across those kicks latched
+	 * stuck_rotor after a few start* cycles on the stand. F051 4IN1 does
+	 * not show this with the same shared rails. Forgive acquisition-only
+	 * stalls; keep the counter once the loop is established (zc > 100).
+	 *
+	 * Throttle-gated on purpose: a truly locked rotor never reaches
+	 * zc >= 100, so an ungated clear would disable stuck_rotor entirely
+	 * during acquisition and let a jammed 12S prop re-kick forever. All
+	 * observed free-run thrash sits in the 5-20% tiers (input ~100-400),
+	 * so 400 covers the bench cases and matches the bemf_timeout budget
+	 * below. Above it, the stock latch still arms.
+	 */
+	if (zero_crosses < 100 && adjusted_input < 400) {
+		bemf_timeout_happened = 0;
+	}
+#	endif
 	if (zero_crosses > 100 && adjusted_input < 200) {
 		bemf_timeout_happened = 0;
 	}
@@ -257,11 +277,26 @@ void faultUpdateBemfTimeoutPolicy(void)
 			bemf_timeout_happened = 0;
 		}
 	} else {
+#	if defined(MCU_G431)
+		/*
+		 * ARK 12S CAN (G4): free-run high-KV crawl lives above DShot~150 while
+		 * BEMF is still weak. F051 gets clean edges from COMP hysteresis there;
+		 * until G4 hysteresis settles, keep the soft stall budget (100) out to
+		 * input 400 so restart thrash does not latch stuck_rotor in 10 kicks.
+		 * Established high-throttle stuck detection still uses 10.
+		 */
+		if (adjusted_input < 400) {
+			bemf_timeout = 100;
+		} else {
+			bemf_timeout = 10;
+		}
+#	else
 		if (adjusted_input < 150) { // startup duty cycle should be low enough to not burn motor
 			bemf_timeout = 100;
 		} else {
 			bemf_timeout = 10;
 		}
+#	endif
 	}
 #endif
 }
