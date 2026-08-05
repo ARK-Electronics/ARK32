@@ -1,5 +1,5 @@
 {
-  "_comment": "ARK G431 12S CAN production EEPROM defaults. Same ARK vehicle policy as ARK_4IN1_F051 (2%/ms ramp, 1020 kV, 15° fixed, PWM-by-RPM) with input_type=DRONECAN_IN. Encoded by scripts/build_factory_image.py into the EEprom_t page (Inc/eeprom.h).",
+  "_comment": "ARK G431 12S CAN production EEPROM defaults. Same ARK vehicle policy as ARK_4IN1_F051 (2%/ms ramp, 1020 kV, 15° fixed, PWM-by-RPM) with input_type=AUTO_IN (detect DShot/PWM; DroneCAN prioritised while RawCommand is live). Encoded by scripts/build_factory_image.py into the EEprom_t page (Inc/eeprom.h).",
   "product": "ARK_G431_CAN",
   "eeprom_version": 3,
   "flash_map": {
@@ -34,8 +34,8 @@
     "pwm_frequency_khz": 24,
     "startup_power": 100,
     "beep_volume": 5,
-    "input_type": 5,
-    "input_type_meaning": "5 = DRONECAN_IN (Inc/common.h)",
+    "input_type": 0,
+    "input_type_meaning": "0 = AUTO_IN — first wire protocol detected; DroneCAN wins while RawCommand is live (Inc/common.h). Use 5=DRONECAN_IN to disable DShot/PWM IRQs.",
     "dir_reversed": 0,
     "bi_direction": 0,
     "use_sine_start": 0,

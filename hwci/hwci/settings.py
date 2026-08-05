@@ -240,7 +240,7 @@ def default_blob() -> bytes:
     d[37] = 30     # low_cell_volt_cutoff (3.0v)
     d[43], d[44] = 141, 102   # limits (off)
     d[45] = 5      # sine_mode_power
-    d[46] = 1      # input_type
+    d[46] = 0      # input_type AUTO_IN (detect DShot/PWM; CAN prioritised if live)
     return bytes(d)
 
 
