@@ -32,6 +32,7 @@
 #include "comparator.h"
 
 #include "common.h"
+#include "motor_runtime.h"
 #include "targets.h"
 
 COMP_TypeDef *active_COMP = COMP2;
@@ -80,6 +81,21 @@ void changeCompInput()
 		active_COMP = PHASE_B_COMP_NUMBER;
 
 		LL_COMP_ConfigInputs(active_COMP, PHASE_B_COMP, PHASE_B_INPUT_PLUS);
+	}
+	/*
+	 * G4 dual-COMP path: F051 enables hyst whenever CI is slow. On this 12S
+	 * free-run high-KV article, pure free-run BEMF can sit near/under 10 mV
+	 * at crawl RPM — always-on 10 mV hyst blocked real edges and latched
+	 * stuck-rotor at 5–6% (bench 2026-08). Only add hyst when the interval
+	 * is slow AND duty is already into a real drive (loaded start / prop),
+	 * where F051 is clean and BEMF is larger. Free-run crawl stays NONE.
+	 */
+	if (average_interval >= 400 && duty_cycle > 200) {
+		LL_COMP_SetInputHysteresis(COMP1, LL_COMP_HYSTERESIS_10MV);
+		LL_COMP_SetInputHysteresis(COMP2, LL_COMP_HYSTERESIS_10MV);
+	} else {
+		LL_COMP_SetInputHysteresis(COMP1, LL_COMP_HYSTERESIS_NONE);
+		LL_COMP_SetInputHysteresis(COMP2, LL_COMP_HYSTERESIS_NONE);
 	}
 	if (rising) {
 		LL_EXTI_DisableRisingTrig_0_31(LL_EXTI_LINE_22);
