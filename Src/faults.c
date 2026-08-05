@@ -34,6 +34,7 @@ extern void resetInputCaptureTimer(void);
 
 /* See the comments on the declarations in faults.h. */
 volatile uint32_t fault_stall_trips = 0;
+volatile uint8_t fault_run_established = 0;
 
 /* Acquisition-rail early-desync count (see faultNoteEarlyDesync). */
 static uint8_t acq_fail_desyncs;
@@ -62,6 +63,8 @@ void faultErrorCountReset(void)
 	fault_stall_trips = 0;
 	desync_happened = 0;
 	acq_fail_desyncs = 0;
+	/* Lifetimes must match the counters this latch gates. */
+	fault_run_established = 0;
 }
 
 uint8_t faultGateDriverFaultActive(void)
@@ -533,7 +536,9 @@ void faultHandleBemfIntervalStall(void)
 			// INTERVAL_TIMER to 46000 with comparator interrupts masked, so
 			// this rail is guaranteed to run next pass): blind stepping only
 			// arms at zero_crosses >= 100, so those episodes always charge.
-			if (zero_crosses > 100) {
+			// Latched per arm cycle rather than read live: this rail also
+			// runs after paths that have already zeroed zero_crosses.
+			if (fault_run_established) {
 				/* Established run died here. This is the ONLY place the
 				 * stall rail is counted, and it is the aggregation point
 				 * for the grind rail and the blind/miss-limit handoff,
