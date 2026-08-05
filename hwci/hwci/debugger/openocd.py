@@ -4,10 +4,15 @@ Drives a persistent ``openocd`` process and talks to its Tcl-RPC port (6666) to
 read/write target memory while the firmware runs. Cortex-M memory access goes
 through the AHB-AP and does not require halting the core, which is what makes
 non-intrusive CPU-load/loop-time sampling possible (the same mechanism VS Code
-"live watch" uses; note ``-gdb-max-connections`` in Mcu/f051/openocd.cfg).
+"live watch" uses; note ``-gdb-max-connections`` in Mcu/f051/openocd.cfg and
+Mcu/g431/openocd.cfg).
 
 Flashing is done with a separate one-shot ``openocd`` invocation so the
 persistent read session is never left in a halted state.
+
+App base is target-dependent (F051 4 KiB BL → 0x08001000; G431 CAN 16 KiB BL →
+0x08004000). Pass ``app_load_addr`` so post-flash vector handoff and BL escape
+use the correct image base.
 
 This backend cannot be unit-tested without hardware; the offline test path uses
 :class:`hwci.debugger.base.MockDebugger`. The Tcl-RPC framing and command set
@@ -28,9 +33,13 @@ from .base import Debugger, DebuggerError
 # OpenOCD Tcl-RPC terminates every command and reply with this byte.
 _RPC_SEP = b"\x1a"
 
-# Default config matching Mcu/f051/openocd.cfg (ST-Link + STM32F0 target).
+# F051 defaults (historical). Prefer RigConfig / target presets for G4.
 DEFAULT_CONFIGS = ["interface/stlink.cfg", "target/stm32f0x.cfg"]
-APP_LOAD_ADDR = 0x08001000  # AM32 app sits above the bootloader
+APP_LOAD_ADDR = 0x08001000  # F051 app above 4 KiB bootloader
+
+# G431 / G491 CAN (16 KiB bootloader — Mcu/g431/ldscript_CAN.ld).
+G4_CONFIGS = ["interface/stlink.cfg", "target/stm32g4x.cfg"]
+G4_APP_LOAD_ADDR = 0x08004000
 
 
 class OpenOcdDebugger(Debugger):
@@ -42,12 +51,18 @@ class OpenOcdDebugger(Debugger):
         tcl_port: int = 6666,
         search_dirs: list[str] | None = None,
         connect_timeout: float = 10.0,
+        app_load_addr: int = APP_LOAD_ADDR,
+        adapter_speed_khz: int | None = None,
     ):
         self.configs = configs or list(DEFAULT_CONFIGS)
         self.openocd_bin = openocd_bin
         self.tcl_port = tcl_port
         self.search_dirs = search_dirs or []
         self.connect_timeout = connect_timeout
+        # Vector-table base for post-flash boot handoff and BL escape.
+        self.app_load_addr = int(app_load_addr)
+        # Optional adapter kHz (G4 is happy at 4–8 MHz; leave None for OpenOCD default).
+        self.adapter_speed_khz = adapter_speed_khz
         self._proc: subprocess.Popen | None = None
         self._sock: socket.socket | None = None
         self._log_tail: collections.deque[str] = collections.deque(maxlen=200)
@@ -58,7 +73,6 @@ class OpenOcdDebugger(Debugger):
         self._rpc_lock = threading.Lock()
         if shutil.which(openocd_bin) is None:
             raise DebuggerError(f"{openocd_bin!r} not found on PATH")
-
     # --- config helpers ----------------------------------------------
     def _base_args(self) -> list[str]:
         args = [self.openocd_bin]
@@ -66,10 +80,12 @@ class OpenOcdDebugger(Debugger):
             args += ["-s", d]
         for c in self.configs:
             args += ["-f", c]
+        if self.adapter_speed_khz is not None:
+            args += ["-c", f"adapter speed {int(self.adapter_speed_khz)}"]
         return args
 
     # --- flashing (one-shot) -----------------------------------------
-    def flash(self, bin_path: str, load_addr: int = APP_LOAD_ADDR) -> None:
+    def flash(self, bin_path: str, load_addr: int | None = None) -> None:
         # After program+reset the AM32 bootloader can stick in programming
         # mode when the Flight Stand holds DShot idle on the signal line
         # (observed 2026-07-13: eeprom_address stays 0, PC in BL @ 0x08000b42).
@@ -77,7 +93,9 @@ class OpenOcdDebugger(Debugger):
         # trials (and firmware flashes) always leave the core running main.
         # Vectors live at the app base even when ``load_addr`` is the EEPROM
         # page (settings-only program).
-        app = APP_LOAD_ADDR
+        if load_addr is None:
+            load_addr = self.app_load_addr
+        app = self.app_load_addr
         boot_app = (
             f"reset halt; "
             f"set _sp [mrw 0x{app:08x}]; "
@@ -155,7 +173,7 @@ class OpenOcdDebugger(Debugger):
                         break
                 except ValueError:
                     continue
-            if pc is not None and pc < APP_LOAD_ADDR:
+            if pc is not None and pc < self.app_load_addr:
                 self._boot_app_from_vectors()
                 return
         except DebuggerError:
@@ -175,8 +193,8 @@ class OpenOcdDebugger(Debugger):
             self._boot_app_from_vectors()
 
     def _boot_app_from_vectors(self) -> None:
-        """Load MSP/PC from the app vector table at APP_LOAD_ADDR and resume."""
-        app = APP_LOAD_ADDR
+        """Load MSP/PC from the app vector table at app_load_addr and resume."""
+        app = self.app_load_addr
         self._rpc("halt")
         sp = struct.unpack("<I", self.read_memory(app, 4))[0]
         rv = struct.unpack("<I", self.read_memory(app + 4, 4))[0]
@@ -185,7 +203,6 @@ class OpenOcdDebugger(Debugger):
         self._rpc(f"reg pc 0x{pc:08x}")
         self._rpc("resume")
         time.sleep(0.3)  # let loadEEpromSettings run
-
     def _drain_stdout(self) -> None:
         proc = self._proc
         if proc is None or proc.stdout is None:

@@ -10,9 +10,38 @@ only one device may drive the ESC signal wire.
 | **BDShot replies** | No (stand is not a BDShot master) | Yes (eRPM / EDT on signal wire) |
 | **Thrust / torque / optical RPM** | Flight Stand gRPC | Optional (stand sensors only; pin disconnected from stand ESC out) |
 | **SWD `hwci_perf`** | Yes (ST-Link) | Optional (same ST-Link) |
-| **Primary rig file** | `rig.yaml` or `config/rig.flightstand.yaml` | `config/rig.px4_bdshot.yaml` |
+| **Primary rig file** | `rig.yaml` / `config/rig.g431_can.yaml` / `config/rig.flightstand.yaml` | `config/rig.px4_bdshot.yaml` |
 | **How to command motor** | `hwci run --profile noprop_…` | `scripts/px4_motor_stream.py` (+ capture) |
 | **Typical profiles** | `noprop_smoke*`, `efficiency_sweep`, demag, … | `bdshot_smoke` (SWD log only; throttle is PX4) |
+
+## MCU family (F051 vs G4)
+
+| | **ARK_4IN1_F051** | **ARK_G431_CAN** (12S CAN ESC) |
+|--|-------------------|--------------------------------|
+| Core | Cortex-M0 | Cortex-M4 (DWT available; harness still uses `hwci_perf` RAM poll) |
+| OpenOCD target | `target/stm32f0x.cfg` | `target/stm32g4x.cfg` |
+| App load address | `0x08001000` (4 KiB BL) | `0x08004000` (16 KiB BL) |
+| Typical SWD clock | 2 MHz | 8 MHz |
+| Debug console | none | USART2 TX **PB3** @ 115200 → ST-Link VCP |
+| Rig template | `config/rig.flightstand.yaml` | `config/rig.g431_can.yaml` (active `rig.yaml` on G4 bench) |
+
+Known targets fill `openocd_configs`, `app_load_addr`, and `adapter_speed_khz`
+automatically via `TARGET_PRESETS` when those keys are omitted from the YAML.
+
+### G4 debug UART (ST-Link VCP)
+
+Firmware (`USE_DEBUG_UART`) prints state transitions and faults on PB3.
+Wire PB3 → ST-Link V3 VCP RX (and common GND). Install udev rules so the VCP
+appears as `/dev/esc-debug-uart` (`scripts/99-hwci.rules`, interface 01).
+
+```bash
+# Live console (boot banner, esc: A -> B, fault: nFAULT / desync, …)
+hwci debug-uart --config rig.yaml
+
+# Each hardware run with debug_uart_backend: serial also writes
+#   <run_dir>/debug_uart.log
+# and aborts on fault: nFAULT / desync / stuck / stall / acq_desync.
+```
 
 ## SETUP A — Flight Stand throttle (no PX4 / no BDShot)
 
