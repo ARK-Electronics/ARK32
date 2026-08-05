@@ -135,6 +135,12 @@ void runtimeProcessDesyncCheck(void)
 	if (zero_crosses <= 10) {
 		slow_avg_revs = 0;
 	}
+	/* Latch "this arm cycle reached an established loop" while the count is
+	 * still intact. Runs at 10 kHz, so it always samples the peak before a
+	 * desync/stall reset can clear it - see fault_run_established. */
+	if (zero_crosses > 100) {
+		fault_run_established = 1;
+	}
 	if (desync_check && zero_crosses > 10) {
 		uint8_t desynced = (getAbsDif(last_average_interval, average_interval) > average_interval >> 1) &&
 				   (average_interval < 2000); // throttle resitricted before zc 20.
@@ -168,7 +174,11 @@ void runtimeProcessDesyncCheck(void)
 		}
 		if (desynced) {
 			slow_avg_revs = 0;
+#ifdef USE_DEBUG_UART
+			/* Only read by the desync log line below; the error-count
+			 * gate uses fault_run_established, not the live count. */
 			const uint32_t zc_at_desync = zero_crosses;
+#endif
 			// Freeze the throttle ceiling briefly: k_erpm is about to
 			// collapse because the ESTIMATE died, not because the rotor
 			// did, and re-deriving the ceiling from the collapsed
@@ -200,7 +210,10 @@ void runtimeProcessDesyncCheck(void)
 			// episode bucket and may stop the motor.
 			// desync_happened / esc.Status.error_count / NodeStatus WARNING
 			// only count established jumps — not low-duty acquisition kicks.
-			if (zc_at_desync > 100) {
+			// Gated on the arm-cycle latch, not zc_at_desync: the desync
+			// path itself zeroes zero_crosses, so an established run comes
+			// back through here with a rebuilt count.
+			if (fault_run_established) {
 				desync_happened++;
 				faultDesyncEpisodeCharge(DESYNC_EPISODE_JUMP);
 				if ((!eepromBuffer.bi_direction && (input > 47)) || commutation_interval > 1000) {
