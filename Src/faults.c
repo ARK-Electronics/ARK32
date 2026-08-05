@@ -536,14 +536,23 @@ void faultHandleBemfIntervalStall(void)
 			// INTERVAL_TIMER to 46000 with comparator interrupts masked, so
 			// this rail is guaranteed to run next pass): blind stepping only
 			// arms at zero_crosses >= 100, so those episodes always charge.
-			// Latched per arm cycle rather than read live: this rail also
-			// runs after paths that have already zeroed zero_crosses.
+			//
+			// Reporting and escalation take DIFFERENT gates, for the same
+			// reason as the jump check in runtimeProcessDesyncCheck():
+			//   - fault_stall_trips feeds esc.Status.error_count, so it asks
+			//     "did an established run fault this arm cycle?" -> latch,
+			//     which survives the zero_crosses reset this rail performs.
+			//   - the episode charge asks "is THIS trip an established-run
+			//     failure or acquisition thrash?" -> live count. After the
+			//     first trip the loop is back in acquisition and kicks
+			//     repeatedly; charging those would fill the bucket in a few
+			//     events and latch the ESC during its own recovery.
 			if (fault_run_established) {
-				/* Established run died here. This is the ONLY place the
-				 * stall rail is counted, and it is the aggregation point
-				 * for the grind rail and the blind/miss-limit handoff,
-				 * both of which reach the loop through this trip - see
-				 * faultErrorCount(). */
+				/* Established run died this arm cycle. This is the ONLY
+				 * place the stall rail is counted, and it is the
+				 * aggregation point for the grind rail and the blind/
+				 * miss-limit handoff, both of which reach the loop through
+				 * this trip - see faultErrorCount(). */
 				fault_stall_trips++;
 #ifdef USE_DEBUG_UART
 				/* Single UART line (LogEvent would print "fault: stall" twice). */
@@ -551,6 +560,8 @@ void faultHandleBemfIntervalStall(void)
 						(unsigned)bemf_timeout_happened, (unsigned)bemf_timeout,
 						(unsigned long)commutation_interval);
 #endif
+			}
+			if (zero_crosses > 100) {
 				faultDesyncEpisodeCharge(DESYNC_EPISODE_STALL_RAIL);
 			}
 		}
