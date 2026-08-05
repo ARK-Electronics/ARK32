@@ -116,6 +116,26 @@ uint8_t faultDesyncRestartHoldoffActive(void);
 extern volatile uint32_t fault_stall_trips;
 
 /*
+ * Set once the loop has genuinely established (zero_crosses > 100) at any
+ * point THIS ARM CYCLE; cleared with the other counters in
+ * faultErrorCountReset().
+ *
+ * The error-count rails cannot gate on the instantaneous zero_crosses:
+ * that counter is reset in ten places, including by the desync and stall
+ * handling being measured. An established run that desyncs therefore
+ * re-enters the jump check with a count rebuilt from zero (observed: 75 on
+ * a steady 900-throttle spool), and a > 100 test would misfile it as an
+ * acquisition kick and drop it from esc.Status.error_count / NodeStatus.
+ * A latch has the arm-cycle lifetime the DSDL error_count wants, so the
+ * gate keeps its intent - a start that NEVER got going never sets it -
+ * without depending on a counter the fault path clears.
+ *
+ * volatile: written from tenKhzRoutine (ISR context), read from the main
+ * loop (telemetry).
+ */
+extern volatile uint8_t fault_run_established;
+
+/*
  * Acquisition-rail episode charges this power cycle ("start resisted":
  * batches of early desyncs that never reached acquisition - see
  * faultNoteEarlyDesync).
