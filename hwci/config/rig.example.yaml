@@ -8,26 +8,39 @@
 # `hwci run/ci --sim` (no rig file needed).
 
 # --- firmware / build ---
-target: ARK_4IN1_F051          # AM32 build target (FILE_NAME in Inc/targets.h)
+# AM32 build target (FILE_NAME in Inc/targets.h):
+#   ARK_4IN1_F051  — 4-in-1 F051 (4 KiB BL, app @ 0x08001000, stm32f0x)
+#   ARK_G431_CAN   — 12S CAN ESC G431/G491 (16 KiB BL, app @ 0x08004000, stm32g4x)
+target: ARK_4IN1_F051
 # repo_root: /home/test/AM32   # defaults to the repo this package lives in
 # obj_dir: /home/test/AM32/obj
 # elf_path:                    # auto: newest obj/AM32_<target>_*.elf
-# app_load_addr: 0x08001000    # default matches Mcu/f051 ldscript (app above bootloader)
+#
+# app_load_addr / openocd_configs / adapter_speed_khz are filled from
+# TARGET_PRESETS for known targets when omitted. Override only if needed:
+# app_load_addr: 0x08001000    # F051
+# app_load_addr: 0x08004000    # G431 CAN
 
 # --- debug probe (reads CPU load / loop times over SWD) ---
 debugger_backend: openocd      # openocd | none
 openocd_bin: openocd
-# openocd_configs:             # default: interface/stlink.cfg + target/stm32f0x.cfg
-#   - interface/stlink.cfg     #   (one channel of the ARK 4IN1 10-pin debug header:
-#   - target/stm32f0x.cfg      #    wire ST-Link to the SWDIO/SWCLK pair you test)
-# openocd_search_dirs: []      # extra -s dirs if using custom cfgs
-# For J-Link instead, supply interface/jlink.cfg here (M0 has no SWO, so this is
-# still background-memory-read based, not trace).
+# openocd_configs:             # preset by target if omitted
+#   - interface/stlink.cfg
+#   - target/stm32f0x.cfg      # F051
+#   - target/stm32g4x.cfg      # G431/G491
+# adapter_speed_khz: 2000      # F051 typical; G4 preset uses 8000
+# openocd_search_dirs: []
+# For J-Link: supply interface/jlink.cfg (still background memory-read).
 
-# --- ESC telemetry (KISS serial, the ARK target has USE_SERIAL_TELEMETRY) ---
+# --- ESC telemetry (KISS serial wire; optional) ---
 telem_backend: serial          # serial | none
 telem_port: /dev/esc-telem     # udev symlink recommended (see scripts/99-hwci.rules)
 telem_baud: 115200
+
+# --- G4 debug console (USART2 TX PB3 → ST-Link VCP); ignore on F051 ---
+# debug_uart_backend: serial   # serial | none  (default none)
+# debug_uart_port: /dev/esc-debug-uart
+# debug_uart_baud: 115200
 
 # --- throttle source (what drives the ESC signal wire) ---
 # SETUP A: flightstand (or external serial bridge)
