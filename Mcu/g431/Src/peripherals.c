@@ -157,6 +157,7 @@ void MX_COMP1_Init(void)
 	LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 	COMP_InitStruct.InputPlus = LL_COMP_INPUT_PLUS_IO1;
 	COMP_InitStruct.InputMinus = LL_COMP_INPUT_MINUS_IO1;
+	/* Default none; changeCompInput() enables 10 mV when slow+loaded. */
 	COMP_InitStruct.InputHysteresis = LL_COMP_HYSTERESIS_NONE;
 	COMP_InitStruct.OutputPolarity = LL_COMP_OUTPUTPOL_NONINVERTED;
 	COMP_InitStruct.OutputBlankingSource = LL_COMP_BLANKINGSRC_NONE;
@@ -188,6 +189,7 @@ void MX_COMP2_Init(void)
 	LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 	COMP_InitStruct.InputPlus = LL_COMP_INPUT_PLUS_IO2;
 	COMP_InitStruct.InputMinus = LL_COMP_INPUT_MINUS_IO1;
+	/* Default none; changeCompInput() enables 10 mV when slow+loaded. */
 	COMP_InitStruct.InputHysteresis = LL_COMP_HYSTERESIS_NONE;
 	COMP_InitStruct.OutputPolarity = LL_COMP_OUTPUTPOL_NONINVERTED;
 	COMP_InitStruct.OutputBlankingSource = LL_COMP_BLANKINGSRC_NONE;

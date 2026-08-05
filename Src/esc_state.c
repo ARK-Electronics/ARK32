@@ -11,6 +11,7 @@
 #include "eeprom.h"
 #include "faults.h"
 #include "debug_uart.h"
+#include "comparator.h"
 
 volatile esc_state_t esc_state = ESC_DISARMED;
 volatile uint16_t esc_illegal_edge_count = 0;
@@ -217,6 +218,10 @@ void escToOpenLoop(void)
 	running = 1;
 	old_routine = 1;
 	stepper_sine = 0;
+#if defined(MCU_G431)
+	/* Drop interrupt-ZC while back in poll; otherwise dual-path thrash. */
+	maskPhaseInterrupts();
+#endif
 	escCommitState(ESC_OPEN_LOOP);
 }
 

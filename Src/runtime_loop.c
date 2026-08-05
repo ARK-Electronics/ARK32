@@ -36,11 +36,22 @@
 #endif
 
 /* Zero-cross filter levels (were file-local defines in main.c).
- * F051 was retuned (42/10/7) so a faster confirm loop keeps the same
- * wall-clock window as stock. G431 runs even faster (160 MHz) and already
- * uses the F051 glitch-tolerant confirm path — use the same filter scale
- * so ARK_G431_CAN is not stuck on stock 12/3/2 (too short at low BEMF). */
-#if defined(MCU_F051) || defined(MCU_G431)
+ *
+ * F051 (48 MHz): 42/10/7 — proven on ARK 4IN1 free-run and prop benches.
+ *
+ * G431 (160 MHz / ARK 12S CAN): keep the same RUN_MIN/FAST as F051 (A/B
+ * 2026-08: raising to 14/10 hurt 15–20% free-run jitter). Slightly higher
+ * MAX only for the startup/slow tier (zero_crosses < 100, CI > 500) where
+ * the G4 dual-COMP path is noisier than F051's single muxed COMP.
+ * Turn-on grid hump band is G431-specific in bemf_zc.c (mult 24).
+ */
+#if defined(MCU_G431)
+/* Best free-run pack (2026-08 A/B): MAX slightly above F051 for acq; RUN/FAST
+ * a step above F051 for 160 MHz wall-clock + mid-eRPM hump (w/ mult 24). */
+#	define ZC_FILTER_MAX 48
+#	define ZC_FILTER_RUN_MIN 12
+#	define ZC_FILTER_FAST 9
+#elif defined(MCU_F051)
 #	define ZC_FILTER_MAX 42
 #	define ZC_FILTER_RUN_MIN 10
 #	define ZC_FILTER_FAST 7
