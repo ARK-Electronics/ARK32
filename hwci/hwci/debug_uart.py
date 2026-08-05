@@ -19,13 +19,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Lines that mean the motor/drive path is unhealthy — live desync watch.
+# Host hard-abort on console faults. Free-run BEMF/startup campaigns log
+# many "fault: desync" / "fault: stall" lines during open-loop acquire and
+# map-tier crawl — those are data, not aborts. LiveDesyncWatch + stand
+# safety remain authoritative. Only gate-driver latch aborts the run.
 _ABORT_FAULTS = frozenset({
     "nFAULT",
-    "desync",
-    "acq_desync",
-    "stuck",
-    "stall",
 })
 
 _FAULT_RE = re.compile(r"^fault:\s*(\S+)", re.IGNORECASE)
