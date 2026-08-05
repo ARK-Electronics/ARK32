@@ -137,6 +137,12 @@ void computeDshotDMA()
 			}
 			if (tocheck > 47) {
 				if (EDT_ARMED) {
+#if DRONECAN_SUPPORT
+					/* AUTO dual-path: live RawCommand owns throttle. */
+					if (DroneCAN_active()) {
+						return;
+					}
+#endif
 					newinput = tocheck;
 					dshotcommand = 0;
 					command_count = 0;
@@ -145,6 +151,11 @@ void computeDshotDMA()
 			}
 
 			if ((tocheck <= 47) && (tocheck > 0)) {
+#if DRONECAN_SUPPORT
+				if (DroneCAN_active()) {
+					return;
+				}
+#endif
 				newinput = 0;
 				dshotcommand = tocheck; //  todo
 			}
@@ -154,7 +165,7 @@ void computeDshotDMA()
 				}
 #if DRONECAN_SUPPORT
 				if (DroneCAN_active()) {
-					// allow DroneCAN to override DShot input
+					/* Keep signaltimeout fed; do not zero over CAN demand. */
 					return;
 				}
 #endif

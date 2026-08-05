@@ -13,6 +13,9 @@
 #include "serial_telemetry.h"
 #include "sounds.h"
 #include "targets.h"
+#if DRONECAN_SUPPORT
+#	include "DroneCAN/DroneCAN.h"
+#endif
 int max_servo_deviation = 250;
 int servorawinput;
 uint16_t smallestnumber = 20000;
@@ -33,6 +36,11 @@ uint16_t dshot_frametime_low = 0;
 
 void computeMSInput()
 {
+#if DRONECAN_SUPPORT
+	if (DroneCAN_active()) {
+		return;
+	}
+#endif
 	int lastnumber = dma_buffer[0];
 	for (int j = 1; j < 2; j++) {
 		if (((dma_buffer[j] - lastnumber) < 1500) && ((dma_buffer[j] - lastnumber) > 0)) { // blank space
@@ -102,6 +110,12 @@ void computeServoInput()
 		zero_input_count = 0; // reset if out of range
 	}
 
+#if DRONECAN_SUPPORT
+	/* AUTO dual-path: live RawCommand owns throttle; still refreshed signaltimeout above. */
+	if (DroneCAN_active()) {
+		return;
+	}
+#endif
 	if (servorawinput - newinput > max_servo_deviation) {
 		newinput += max_servo_deviation;
 	} else if (newinput - servorawinput > max_servo_deviation) {

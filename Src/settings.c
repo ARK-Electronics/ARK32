@@ -138,6 +138,8 @@ void loadEEpromSettings(void)
 		if (eepromBuffer.input_type < 10) {
 			switch (eepromBuffer.input_type) {
 				case AUTO_IN:
+					/* Detect first wire protocol (DShot/PWM). DroneCAN still
+					 * runs; while RawCommand is live it wins (DroneCAN_active). */
 					dshot = 0;
 					servoPwm = 0;
 					EDT_ARMED = 1;
@@ -155,6 +157,12 @@ void loadEEpromSettings(void)
 					EDT_ARM_ENABLE = 1;
 					EDT_ARMED = 0;
 					dshot = 1;
+					break;
+				case DRONECAN_IN:
+					/* Wire capture left idle; DroneCAN_Init disables its IRQs. */
+					dshot = 0;
+					servoPwm = 0;
+					EDT_ARMED = 1;
 					break;
 			};
 		} else {
