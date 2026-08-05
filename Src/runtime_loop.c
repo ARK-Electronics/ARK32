@@ -174,11 +174,7 @@ void runtimeProcessDesyncCheck(void)
 		}
 		if (desynced) {
 			slow_avg_revs = 0;
-#ifdef USE_DEBUG_UART
-			/* Only read by the desync log line below; the error-count
-			 * gate uses fault_run_established, not the live count. */
 			const uint32_t zc_at_desync = zero_crosses;
-#endif
 			// Freeze the throttle ceiling briefly: k_erpm is about to
 			// collapse because the ESTIMATE died, not because the rotor
 			// did, and re-deriving the ceiling from the collapsed
@@ -208,13 +204,22 @@ void runtimeProcessDesyncCheck(void)
 			// charge early desyncs softly (faultNoteEarlyDesync), and do
 			// not full-stop (running=0). Established desyncs charge the
 			// episode bucket and may stop the motor.
-			// desync_happened / esc.Status.error_count / NodeStatus WARNING
-			// only count established jumps — not low-duty acquisition kicks.
-			// Gated on the arm-cycle latch, not zc_at_desync: the desync
-			// path itself zeroes zero_crosses, so an established run comes
-			// back through here with a rebuilt count.
+			// REPORTING (esc.Status.error_count / NodeStatus WARNING) is
+			// gated on the arm-cycle latch, not on zc_at_desync: this path
+			// zeroes zero_crosses itself, so an established run that
+			// desyncs comes back through here with a rebuilt count and
+			// would otherwise be misfiled as an acquisition kick and never
+			// reported. A start that never got going never sets the latch.
 			if (fault_run_established) {
 				desync_happened++;
+			}
+			// ESCALATION is deliberately NOT on the latch: it must ask "is
+			// THIS event an established-run failure, or acquisition thrash?"
+			// After a stall the loop drops back to acquisition and kicks
+			// repeatedly; charging those (latch still set for the arm cycle)
+			// fills the bucket in a few events and latches the ESC during
+			// the recovery it should be riding out. Live regime test only.
+			if (zc_at_desync > 100) {
 				faultDesyncEpisodeCharge(DESYNC_EPISODE_JUMP);
 				if ((!eepromBuffer.bi_direction && (input > 47)) || commutation_interval > 1000) {
 					running = 0;
