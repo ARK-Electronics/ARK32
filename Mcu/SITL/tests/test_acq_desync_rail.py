@@ -28,7 +28,7 @@ STATE_MAGIC_CMD = 0x5353
 ZC_STATS_MAGIC = 0x5356
 STATS_FIELDS = ('zero_crosses', 'commutation_interval', 'dropped_edges',
                 'desync_happened', 'old_routine', 'running', 'armed',
-                'zc_blind_steps', 'zc_miss_bucket', 'zc_deadline_armed')
+                'zc_blind_steps', 'zc_stale_q8', 'zc_deadline_armed')
 STATS_FMT = '<HBBIIIIBBBBBB'
 MODELS = os.path.join(SITL_DIR, 'models')
 

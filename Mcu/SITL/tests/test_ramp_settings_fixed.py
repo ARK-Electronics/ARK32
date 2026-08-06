@@ -53,7 +53,7 @@ MODELS = os.path.join(SITL_DIR, 'models')
 
 STATS_FIELDS = ('zero_crosses', 'commutation_interval', 'dropped_edges',
                 'desync_happened', 'old_routine', 'running', 'armed',
-                'zc_blind_steps', 'zc_miss_bucket', 'zc_deadline_armed',
+                'zc_blind_steps', 'zc_stale_q8', 'zc_deadline_armed',
                 'dcm_hold_ms', '_pad2', 'dcm_hold_value',
                 'adv_kerpm_hold_ms', '_pad3', 'adv_kerpm_hold',
                 'zc_trend', 'zc_predicted', 'wait_time', 'advance',

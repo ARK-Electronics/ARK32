@@ -209,7 +209,7 @@ void zcfoundroutine()
 		// flag must not misread the first scheduled commutation.
 		zc_deadline_armed = 0;
 		zc_blind_steps = 0;
-		zc_miss_bucket = 0;
+		zc_blind_ticks = 0;
 		// Fresh closed loop: the interval trend from a previous run (or
 		// from the poll ramp) is not a measurement of this one.
 		bemfZcResetTrend();

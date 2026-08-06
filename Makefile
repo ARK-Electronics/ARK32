@@ -101,42 +101,16 @@ ifeq ($(HWCI_PERF),1)
 CFLAGS_COMMON += -DHWCI_PERF
 endif
 
-# A/B rail switches (opt-in, off by default; production builds are unaffected).
+# Governor A/B switch (opt-in, off by default; production builds unaffected).
 #
-# ARK32 carries three protective rails that upstream AM32 does not, all of
-# which respond to a sustained miss/demag rate by taking authority away from
-# the throttle. On articles where they were tuned they keep the loop out of a
-# mistimed-lock current spiral; on an article that sits at their thresholds
-# they can turn a degraded-but-flying loop into a stop/restart cycle. These
-# switches compile them out one at a time so the difference can be measured
-# rather than argued about.
-#
-#   AB_NO_MISS_RAIL=1       Stop acting on the miss-rate bucket. The bucket is
-#                           still counted, so instrumentation still sees it -
-#                           only the restart it triggers is removed. The
-#                           consecutive-blind-step limit is UNTOUCHED, so
-#                           genuinely lost position still rails. This is the
-#                           "blind-step through a sustained miss rate instead
-#                           of restarting" experiment.
-#   AB_NO_GOVERNOR=1        Pin the BEMF-headroom ceiling at full authority,
-#                           so duty is never capped by the eRPM equilibrium
-#                           estimate. Tests the "rpm sticks at a level and
-#                           will not respond to more throttle" report.
-#   AB_NO_BLIND_DUTY_CUT=1  Remove the 250/500 protective duty cap taken on
-#                           untrusted steps. Needed to make the other two
-#                           legible: with it in, throttle still gets chopped
-#                           on every untrusted step and the A/B cannot tell
-#                           "did not restart" from "restarted less".
-#
-# These remove protection. They are for bench and instrumented flight only.
-ifeq ($(AB_NO_MISS_RAIL),1)
-CFLAGS_COMMON += -DAB_NO_MISS_RAIL
-endif
+# The miss-rate rail and the untrusted-step duty cliff that used to sit
+# alongside this are gone - replaced by the continuous dead-reckoning measure
+# in bemf_zc.c / control_loop.c. The BEMF-headroom governor is untouched by
+# that work and is still a hard ceiling, so keep a way to take it out of the
+# picture while bisecting a "rpm sticks at a level and will not respond to
+# more throttle" report.
 ifeq ($(AB_NO_GOVERNOR),1)
 CFLAGS_COMMON += -DAB_NO_GOVERNOR
-endif
-ifeq ($(AB_NO_BLIND_DUTY_CUT),1)
-CFLAGS_COMMON += -DAB_NO_BLIND_DUTY_CUT
 endif
 
 # Linker options
