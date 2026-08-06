@@ -45,8 +45,8 @@ from hwci.config import load_rig                      # noqa: E402
 from hwci.debugger.openocd import OpenOcdDebugger      # noqa: E402
 from hwci.perf_reader import PerfReader                # noqa: E402
 
-COLS = ("t", "ci", "rpm", "zc", "blind", "reject", "bemfTO", "state",
-        "running", "armed", "input", "duty")
+COLS = ("t", "ci", "rpm", "zc", "blind", "reject", "jitmax", "bemfTO",
+        "state", "running", "armed", "input", "duty")
 
 
 def main() -> int:
@@ -75,9 +75,9 @@ def main() -> int:
     with open(args.out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=COLS)
         w.writeheader()
-        print("%8s %6s %8s %7s %6s %7s %6s %5s %6s" %
-              ("t", "ci", "rpm", "zc", "blind", "reject", "bemfTO", "st",
-               "duty"))
+        print("%8s %6s %8s %7s %6s %7s %6s %6s %5s %6s" %
+              ("t", "ci", "rpm", "zc", "blind", "reject", "jitmax",
+               "bemfTO", "st", "duty"))
         try:
             while True:
                 loop_start = time.monotonic()
@@ -105,6 +105,7 @@ def main() -> int:
                     "zc": zc,
                     "blind": int(raw.get("zc_blind_steps") or 0),
                     "reject": int(raw.get("zc_confirm_reject") or 0),
+                    "jitmax": int(raw.get("zc_jitter_max") or 0),
                     "bemfTO": int(raw.get("bemf_timeout") or 0),
                     "state": state,
                     "running": int(raw.get("running") or 0),
@@ -126,9 +127,10 @@ def main() -> int:
                     or row["state"] != prev.get("state", row["state"])
                 )
                 if interesting or n % 25 == 0:
-                    print("%8.3f %6d %8.0f %7d %6d %7d %6d %5d %6d" %
+                    print("%8.3f %6d %8.0f %7d %6d %7d %6d %6d %5d %6d" %
                           (row["t"], ci, rpm, row["zc"], row["blind"],
-                           row["reject"], row["bemfTO"], state, row["duty"]))
+                           row["reject"], row["jitmax"], row["bemfTO"],
+                           state, row["duty"]))
                 prev = row
                 delay = period - (time.monotonic() - loop_start)
                 if delay > 0:

@@ -377,52 +377,59 @@ RAM_FUNC void interruptRoutine()
 	// is scaled (42/10/7 on F051) to keep the same wall-clock window as the
 	// stock ~56-cycle sampling cadence.
 #ifdef MCU_F051
-	// Glitch-tolerant variant: the ~16-cycle cadence lands on a brief
-	// comparator glitch ~3x more often than stock sampling, and a strict
-	// all-samples-must-agree confirm defers detection to the NEXT
-	// comparator edge - up to a PWM period late. Bench-measured on the
-	// ARK 4IN1: 2-3x higher commutation jitter at 15-20 kHz commutation
-	// rates vs stock cadence (upstream 2.1% vs 5.4% at full throttle).
-	// Tolerating up to filter_level/4 bad samples per window accepts
-	// through isolated glitches while a genuinely un-crossed level still
-	// rejects via the early-out; the full window length (and so the
-	// sustained-noise immunity of the filter_level retune) is unchanged.
 	{
 		/*
-		 * Glitch-tolerant quota: up to filter_level/4 samples may read the
-		 * pre-crossing level. This is an ARK divergence from upstream, which
-		 * rejects on the FIRST bad sample (the #else branch below, still
-		 * used by every other MCU). It exists because 33d93ad moved this
-		 * loop to RAM and inlined getCompOutputLevel, taking the sampling
-		 * cadence from ~56 cycles to ~16; that lands on brief comparator
-		 * glitches about 3x more often, and a strict confirm then defers
-		 * detection to the next comparator edge - up to a PWM period late -
-		 * which bench-measured 2-3x higher commutation jitter at 15-20 kHz
-		 * (23c8387).
+		 * HELD-LEVEL CONFIRM (position-scored), F051 only.
 		 *
-		 * SUSPECT, AND KNOWN TO BE. Scoring the window by COUNT ignores
-		 * WHERE the bad samples fall, so a comparator that never really
-		 * settled can pass with 32 of 42 samples right - and the F051 has no
-		 * hardware comparator blanking (a G0/G4 peripheral feature; the
-		 * STM32F0 COMP has no blanking source at all), so this loop is the
-		 * only noise defence on this silicon.
+		 * This is the entry door to the wrong-phase lock, and the one place
+		 * ARK diverges from upstream on the zero-cross path.
 		 *
-		 * A position-scored replacement was tried - back half of the window
-		 * must be entirely clean, front half unscored, on the grounds that a
-		 * real crossing is a permanent level change while a glitch is
-		 * transient. It was reverted here NOT because it was disproved but
-		 * because it went to the bench in the same build as a duty-fade
-		 * change, so the resulting behaviour could not be attributed to
-		 * either. Reintroduce it on its own.
+		 * Upstream - the non-F051 branch immediately below, still used by
+		 * every other MCU - rejects an edge on the FIRST sample that reads
+		 * the pre-crossing level. ARK replaced that here with a quota: count
+		 * bad samples, accept if fewer than filter_level/4 are wrong.
+		 *
+		 * The quota was not gratuitous. 33d93ad moved this loop to RAM and
+		 * inlined getCompOutputLevel, taking the sampling cadence from ~56
+		 * cycles to ~16, which lands on brief comparator glitches about 3x
+		 * more often; a strict confirm then defers detection to the next
+		 * comparator edge, up to a PWM period late, and bench-measured 2-3x
+		 * higher commutation jitter at 15-20 kHz (23c8387).
+		 *
+		 * But scoring by COUNT ignores WHERE the bad samples fall. Up to ten
+		 * of forty-two may read wrong ANYWHERE, including at the very end of
+		 * the window - where "wrong" means the level never actually held. On
+		 * the F051 that matters more than anywhere else: there is no hardware
+		 * comparator blanking (a G0/G4 peripheral feature; the STM32F0 COMP
+		 * has no blanking source at all), so this loop is the entire filter.
+		 * Bench capture with the rotor STATIONARY showed accepted intervals
+		 * of 54, 103 and 59 ticks - around 200k eRPM - self-sustaining on the
+		 * ESC's own commutation transients, which are exactly the kind of
+		 * never-settled level a count-scored window admits.
+		 *
+		 * Score by POSITION instead. A real zero crossing is a PERMANENT
+		 * level change; a glitch is transient. So the back half of the window
+		 * must be entirely clean and the front half is not scored at all.
+		 * That is simultaneously STRICTER than the quota - which tolerated
+		 * bad samples precisely where they disprove the crossing - and MORE
+		 * FORGIVING than upstream, because glitches cluster in the post-edge
+		 * settling region this now ignores. The quota's purpose (do not
+		 * reject a real crossing over one glitch) is kept; its side effect
+		 * (accept a level that never held) is not.
+		 *
+		 * At filter_level 42 the back half is 21 samples, ~7us of held level
+		 * at this cadence - far longer than commutation-transient ringing,
+		 * and still inside the crossing itself.
+		 *
+		 * MEASURE JITTER when touching this. perf_zc_jitter_max is what the
+		 * quota was bought with; if it regresses, move the scoring boundary
+		 * rather than going back to a count.
 		 */
-		int bad = 0;
-		const int tolerance = filter_level >> 2;
+		const int scored_from = filter_level >> 1;
 		for (int i = 0; i < filter_level; i++) {
-			if (getCompOutputLevel() == rising) {
-				if (++bad > tolerance) {
-					HWCI_PERF_CONFIRM_REJECT();
-					return;
-				}
+			if (getCompOutputLevel() == rising && i >= scored_from) {
+				HWCI_PERF_CONFIRM_REJECT();
+				return;
 			}
 		}
 	}
