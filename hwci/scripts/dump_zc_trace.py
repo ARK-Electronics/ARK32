@@ -54,6 +54,10 @@ KINDS = {0: "-", 1: "ACCEPT", 2: "REJ_MININT", 3: "REJ_CONFIRM",
          4: "BLIND", 5: "BUDGET"}
 # Mirrors HWCI_CMD_ARM_ZC_TRACE / hwci_perf.host_cmd.
 ARM_CMD = 0x5A
+# Mirrors HWCI_PERF_MAGIC in Inc/hwci_perf.h. Lives in .data, so it is only
+# present once the firmware's startup has run - which is exactly what makes it
+# a usable "is this image actually running?" probe.
+HWCI_PERF_MAGIC = 0x31435748
 
 
 def read_trace(dbg, addr: int, size: int):
@@ -144,13 +148,52 @@ def main() -> int:
                           search_dirs=rig.openocd_search_dirs).open()
     try:
         perf = elfmod.find_symbol(str(elf), "hwci_perf")
+        # Health check BEFORE anything else. Reading a trace out of a target
+        # that is not running THIS image yields plausible-looking garbage -
+        # a stale buffer, or another build's RAM at the same address - and
+        # there is no way to tell from the event data alone. A whole bench
+        # session was once logged as 101 "captures" that were one stale
+        # buffer reprinted, because this check did not exist.
+        magic, version, ssize = struct.unpack_from(
+            "<IHH", dbg.read_memory(perf.address, 8), 0)
+        if magic != HWCI_PERF_MAGIC:
+            print(f"error: hwci_perf.magic = 0x{magic:08X}, expected "
+                  f"0x{HWCI_PERF_MAGIC:08X}.\n"
+                  "The target is not running this firmware. Either it is "
+                  "unpowered / held in reset, or the flashed image is not\n"
+                  f"  {elf}\n"
+                  "Flash it first:\n"
+                  f"  hwci flash --config {args.config} --bin "
+                  f"{str(elf).replace('.elf', '.bin')}",
+                  file=sys.stderr)
+            return 2
+        print(f"target ok: hwci_perf v{version}, {ssize} bytes")
         # host_cmd sits at offset 60 in hwci_perf and is frozen there across
         # every struct version, precisely so an A/B session can command any
         # vintage without a layout lookup (see Inc/hwci_perf.h).
         cmd_addr = perf.address + 60
 
-        def rearm():
+        def rearm(verify: bool = True) -> bool:
+            """Re-arm and confirm the firmware consumed it.
+
+            The command is serviced from the main loop, so a target that is
+            wedged - or whose host_cmd offset does not match this ELF - will
+            silently never clear it. Without this check --watch spins on the
+            still-frozen buffer and reprints it every poll.
+            """
             dbg.write_u32(cmd_addr, ARM_CMD)
+            if not verify:
+                return True
+            for _ in range(40):
+                time.sleep(0.05)
+                if not read_trace(dbg, sym.address, sym.size)["frozen"]:
+                    return True
+            print("error: re-arm was not consumed within 2 s - the trace is "
+                  "still frozen.\nThe firmware services host_cmd from the "
+                  "main loop, so this means the target is wedged or is not "
+                  "running this image. Not reprinting the stale buffer.",
+                  file=sys.stderr)
+            return False
 
         print(f"{SYMBOL} @ 0x{sym.address:08x} ({sym.size} bytes)")
         if args.arm:
@@ -164,15 +207,19 @@ def main() -> int:
 
         print("PASSIVE - drive by hand. Waiting for the firmware to trip the "
               "trigger. Ctrl-C to stop.")
-        rearm()
+        if not rearm():
+            return 2
+        n = 0
         try:
             while True:
                 tr = read_trace(dbg, sym.address, sym.size)
                 if tr["frozen"]:
+                    n += 1
+                    print(f"\n=== capture {n} ===")
                     show(tr, args.out)
-                    print("re-arming...\n")
-                    rearm()
-                    time.sleep(0.3)
+                    print("re-arming...")
+                    if not rearm():
+                        return 2
                 time.sleep(0.05)
         except KeyboardInterrupt:
             print("\nstopped")
