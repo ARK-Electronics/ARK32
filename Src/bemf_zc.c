@@ -90,9 +90,55 @@ static int32_t zc_trend;
 /* Last predicted interval used for advance/waitTime (observability + SITL). */
 static uint32_t zc_predicted;
 
+/*
+ * Extrapolated-average taint window (see bemfZcAverageTainted in bemf_zc.h).
+ *
+ * A blind step's inflated interval reaches the jump-desync detector by two
+ * routes, and both have to flush before a comparison means anything:
+ *
+ *   commutation_intervals[] -> e_com_time is a SUM OF SIX entries (main.c), so
+ *   six clean commutations are needed to push the last blind interval out.
+ *
+ *   average_interval is then compared against last_average_interval, which is
+ *   sampled one electrical revolution earlier - so a second clean revolution
+ *   is needed before BOTH endpoints of the comparison are measurements.
+ *
+ * Twelve commutations, i.e. two electrical revolutions. At 5k rpm on a 14-pole
+ * motor that is ~3.4 ms of suppression per blind step, during which the
+ * dead-reckoning budget in this file is still watching - the loop is not
+ * unprotected, the jump check is simply not the rail that owns this case.
+ */
+#define ZC_TAINT_COMMUTATIONS 12
+static uint8_t zc_taint;
+
+/*
+ * Accepted intervals to discard after a blind step before the wrong-phase
+ * lock detector may compare them (see the detector in interruptRoutine).
+ *
+ * A blind step resets INTERVAL_TIMER at the COMMUTATION, not at a crossing,
+ * so the next accepted crossing measures commutation-to-crossing - about
+ * half an interval - rather than crossing-to-crossing. A sustained 50% miss
+ * rate therefore records ci, [blind], 0.5ci, ci, [blind], 0.5ci ... which is
+ * a textbook 2:1 alternation that says nothing about the rotor. It is an
+ * artefact of where the timer is zeroed.
+ *
+ * Two, so a single blind step invalidates BOTH intervals of the next
+ * comparison; under a sustained alternating miss rate the hold is renewed
+ * before it expires and the detector never arms. A genuine wrong-phase lock
+ * produces no blind steps at all - crossings arrive in abundance, that is
+ * its defining property - so the hold is always zero when it matters.
+ */
+#define ZC_ALT_BLIND_HOLD 2u
+static uint8_t zc_alt_hold;
+
 int32_t bemfZcGetTrend(void)
 {
 	return zc_trend;
+}
+
+uint8_t bemfZcAverageTainted(void)
+{
+	return (uint8_t)(zc_taint != 0);
 }
 
 uint32_t bemfZcGetPredicted(void)
@@ -127,17 +173,49 @@ RAM_FUNC void PeriodElapsedCallback()
 			// the startup path on its next main-loop pass, and charges the
 			// episode bucket once. With phase interrupts masked nothing can
 			// reset INTERVAL_TIMER before it runs.
+			HWCI_ZC_TRACE_EV(HWCI_ZC_EV_BUDGET, INTERVAL_TIMER_COUNT);
 			maskPhaseInterrupts();
 			SET_INTERVAL_TIMER_COUNT(BEMF_STALL_TICKS + 1000u);
 			return;
 		}
 		blind = 1;
 		zc_blind_steps++;
+		/* The next two accepted intervals are measured from a
+		 * commutation, not a crossing - see ZC_ALT_BLIND_HOLD. */
+		zc_alt_hold = ZC_ALT_BLIND_HOLD;
 		HWCI_PERF_BLIND_STEP();
-		// Take the full elapsed time as the (late) crossing measurement
-		// and commutate now. The inflated interval feeds the average so
-		// timing hunts slower - the safe direction for a decelerating
-		// rotor - and the next accepted crossing resyncs immediately.
+		/*
+		 * Commutate now on the existing estimate, and record NO interval
+		 * measurement - see the commutation_interval update below.
+		 *
+		 * This deliberately reverses the older behaviour, which took the
+		 * full elapsed deadline time as a "late crossing measurement" on
+		 * the theory that an inflated interval makes timing hunt slower,
+		 * the safe direction for a decelerating rotor, and that the next
+		 * accepted crossing would resync it immediately.
+		 *
+		 * The second half of that is false at any sustained miss rate, and
+		 * the feedback runs away. The deadline is armed at 1.5x the
+		 * estimate, so a blind step's elapsed time is ALWAYS ~1.5x - it is
+		 * a property of the grace period, not a measurement of the rotor.
+		 * Feeding it to the average raises the estimate, which lengthens
+		 * the next deadline, which produces a larger elapsed, and so on.
+		 *
+		 * Measured in SITL under mode-2 fault injection (drop every other
+		 * commutation window, a 50% miss rate on a rotor holding speed):
+		 * commutation_interval went 432 -> 1880 -> 3281 -> 3942 -> 4396 ->
+		 * 5128 -> 5823 -> 6853 in 70 ms, a 16x inflation with the rotor at
+		 * constant rpm, until the stall rail tripped on the ESC's own
+		 * runaway and restarted the loop. Every accepted crossing in
+		 * between cleared zc_blind_ticks exactly as designed - the
+		 * dead-reckoning budget was never the thing that fired.
+		 *
+		 * A blind step's real information content is a LOWER BOUND: "no
+		 * crossing arrived before 1.5x". Treating a lower bound as a point
+		 * estimate is the whole bug. The rotor slowing down is still
+		 * caught, by the next accepted crossing measuring long and by
+		 * zc_blind_ticks if crossings stop arriving altogether.
+		 */
 		maskPhaseInterrupts();
 		uint32_t elapsed = INTERVAL_TIMER_COUNT;
 		if (elapsed > 65535u) {
@@ -154,8 +232,11 @@ RAM_FUNC void PeriodElapsedCallback()
 		 * one frame of slightly-too-generous duty authority.
 		 */
 		zc_blind_ticks += elapsed; // extrapolated time, cleared by a real crossing
-		lastzctime = thiszctime;
-		thiszctime = (uint16_t)elapsed;
+		HWCI_ZC_TRACE_EV(HWCI_ZC_EV_BLIND, elapsed);
+		/* lastzctime/thiszctime deliberately NOT written: they are the
+		 * measured-interval history. Resetting INTERVAL_TIMER still means
+		 * the next accepted crossing measures the window from this blind
+		 * commutation to that crossing, which IS a real measurement. */
 		SET_INTERVAL_TIMER_COUNT(0);
 	} else {
 		// Cancel race: SET_AND_ENABLE_COM_INT clears the peripheral flag,
@@ -171,7 +252,13 @@ RAM_FUNC void PeriodElapsedCallback()
 		}
 	}
 	commutate();
-	commutation_interval = ((commutation_interval) + ((lastzctime + thiszctime) >> 1)) >> 1;
+	/* Only a measured crossing updates the interval estimate. A blind step
+	 * contributes nothing: see the note in the deadline branch above for the
+	 * runaway this prevents. The estimate simply holds, so the next deadline
+	 * stays at 1.5x the last MEASURED interval instead of compounding. */
+	if (!blind) {
+		commutation_interval = ((commutation_interval) + ((lastzctime + thiszctime) >> 1)) >> 1;
+	}
 	/* See zc_trend: predict the interval about to be timed, not the lagging
 	 * average of the ones already measured. */
 	uint32_t predicted = commutation_interval;
@@ -214,6 +301,14 @@ RAM_FUNC void PeriodElapsedCallback()
 			SET_AND_ENABLE_COM_INT((uint16_t)deadline);
 		}
 	}
+	/* Taint the interval average for as long as an extrapolated interval can
+	 * still be inside e_com_time's six-deep window or inside the previous
+	 * endpoint of the jump check's comparison. */
+	if (blind) {
+		zc_taint = ZC_TAINT_COMMUTATIONS;
+	} else if (zc_taint) {
+		zc_taint--;
+	}
 	if (!blind && zero_crosses < 10000) {
 		zero_crosses++;
 	}
@@ -238,10 +333,58 @@ RAM_FUNC void interruptRoutine()
 	// finally accepted.
 	uint16_t zc_pwm_cnt = (uint16_t)TIM1->CNT;
 #endif
-	//   if (average_interval > 125) {
-	//        if ((INTERVAL_TIMER_COUNT < 125) && (duty_cycle < 600) && (zero_crosses < 500)) { // should be impossible, desync?exit anyway
-	//           return;
-	//        }
+	/*
+	 * NO MINIMUM-INTERVAL GATE HERE.
+	 *
+	 * A gate rejecting any edge arriving sooner than a quarter of the tracked
+	 * interval used to sit at this point. It was built on the hypothesis that
+	 * the wrong-phase lock this branch chases is a false lock onto switching-
+	 * transient noise, and the F051 has no hardware defence against that -
+	 * comparator output blanking is a G0/G4 peripheral feature (see the
+	 * MCU_G071 guard in Mcu/f051/Src/peripherals.c enableCorePeripherals);
+	 * the STM32F0 COMP has no blanking source at all, so the software confirm
+	 * loop below is the only filter and it deliberately tolerates
+	 * filter_level/4 bad samples. Upstream AM32 carries the same guard,
+	 * commented out, immediately below ("should be impossible, desync?").
+	 *
+	 * The hypothesis was wrong, and the measurement that killed it is worth
+	 * recording so it is not rebuilt. A PWM-phase histogram of ACCEPTED
+	 * crossings (hwci_perf zc_phase_hist, binned on TIM1->CNT at ISR entry;
+	 * TIM1 is edge-aligned UP so CNT maps monotonically onto the PWM period)
+	 * was taken across healthy running and two hand-provoked grinds on an AOS
+	 * Supernova 2207 1980KV, 6S, 5" tri-blade, ARK 4IN1:
+	 *
+	 *     class   frac@turn-on  frac@turn-off  peak enrich  bins holding 80%
+	 *     healthy         0.5%          22.2%          9.8               6.7
+	 *     grind           0.6%           5.8%          5.7              11.0
+	 *     uniform         3.1%           9.4%          1.0              26
+	 *
+	 * Healthy running is sharply locked to the turn-off edge, which is what a
+	 * genuine crossing looks like when the floating phase is only clean during
+	 * PWM-off. The grind is BROADER than healthy and DEPLETED at both
+	 * switching edges - the opposite of a switching artefact. Nor is it
+	 * broadband noise: the intervals repeat far too tightly (see the detector
+	 * below). The edges the loop accepts during a grind are real BEMF
+	 * crossings at a phase relationship the commutation table does not match.
+	 *
+	 * That is fatal to any per-edge filter. A real crossing cannot be
+	 * rejected on its own merits without also rejecting correct ones, and the
+	 * early edge of the pair is as likely to be the genuine one as the late
+	 * edge. The gate also disarmed itself in practice: rejected edges leave
+	 * commutation_interval alone, but ACCEPTED-but-wrong ones update it, so
+	 * the threshold ratcheted down with the estimate it was derived from -
+	 * measured ci 719 -> 570 -> 527 -> 217 -> 86 -> 52 with the gate
+	 * following 179 -> 142 -> 131 -> 54 -> 21 -> 13. A detector whose
+	 * threshold derives from the quantity the failure corrupts cannot work.
+	 *
+	 * The replacement is a sequence test, not an edge test: see the
+	 * wrong-phase lock detector further down this function.
+	 */
+#ifdef HWCI_PERF
+	/* Interval at ISR entry, for the per-commutation trace only - with the
+	 * gate gone nothing in the control path reads it. */
+	const uint32_t zc_elapsed = INTERVAL_TIMER_COUNT;
+#endif
 	//        stuckcounter++; // stuck at 100 interrupts before the main loop happens
 	//                        // again.
 	//        if (stuckcounter > 100) {
@@ -273,6 +416,7 @@ RAM_FUNC void interruptRoutine()
 		for (int i = 0; i < filter_level; i++) {
 			if (getCompOutputLevel() == rising) {
 				if (++bad > tolerance) {
+					HWCI_ZC_TRACE_EV(HWCI_ZC_EV_REJ_CONFIRM, zc_elapsed);
 					HWCI_PERF_CONFIRM_REJECT();
 					return;
 				}
@@ -286,6 +430,7 @@ RAM_FUNC void interruptRoutine()
 #	else
 		if (getCompOutputLevel() == rising) {
 #	endif
+			HWCI_ZC_TRACE_EV(HWCI_ZC_EV_REJ_CONFIRM, zc_elapsed);
 			HWCI_PERF_CONFIRM_REJECT();
 			return;
 		}
@@ -395,12 +540,107 @@ RAM_FUNC void interruptRoutine()
 	 * escalation. Demag authority is handled separately in control_loop.c.
 	 */
 	zc_blind_ticks = 0;
-	lastzctime = thiszctime;
+	/* Per-commutation trace: this edge passed the minimum-interval gate AND
+	 * the confirm loop, so it is what the loop actually acted on. The
+	 * trigger arms on the entry signature of the false lock - an accepted
+	 * interval less than half the tracked estimate - so the ring freezes
+	 * holding the commutations either side of entry. Instrumentation only:
+	 * it changes no control decision. */
+	HWCI_ZC_TRACE_EV(HWCI_ZC_EV_ACCEPT, zc_elapsed);
 #ifdef MCU_F051
-	thiszctime = (uint16_t)(INTERVAL_TIMER_COUNT - zc_grid_comp);
+	const uint16_t newzctime = (uint16_t)(INTERVAL_TIMER_COUNT - zc_grid_comp);
 #else
-	thiszctime = INTERVAL_TIMER_COUNT;
+	const uint16_t newzctime = (uint16_t)INTERVAL_TIMER_COUNT;
 #endif
+	/*
+	 * WRONG-PHASE LOCK DETECTOR.
+	 *
+	 * Every other rail in this file - the dead-reckoning budget, the stall
+	 * threshold, the demag run - keys on the ABSENCE of crossings. The
+	 * failure this catches is the opposite: an excess of them. The loop
+	 * settles onto real BEMF crossings at a phase relationship the
+	 * commutation table does not match, reports 16-21x the physically
+	 * possible eRPM, and every existing detector reads a healthy motor
+	 * because crossings keep arriving. bemf_timeout_happened stayed at 0
+	 * through every episode captured on the bench.
+	 *
+	 * Bench evidence (F051, AOS 2207 1980KV, 6S, 5in 3-blade), consecutive
+	 * accepted intervals through a grind:
+	 *
+	 *     863 383 712 382 837 330 846 341 753 340 878 311 861 343 ...
+	 *
+	 * Ratio of each to the one before: 0.44 1.86 0.54 2.19 0.39 2.56 0.40
+	 * 2.21 0.45 2.58 0.35 2.77 ... - a hard 2:1 alternation sustained for
+	 * sixteen-plus commutations. A 2207 carrying a prop cannot halve and
+	 * double its speed every 400us; rotor inertia puts that many orders of
+	 * magnitude out of reach. The two-step product stays near 1.0, so the
+	 * loop is running at roughly twice the true commutation rate.
+	 *
+	 * Why the test is on the RATIO of consecutive raw measurements:
+	 *
+	 *  - It is scale-free. It cannot be walked down by the failure it is
+	 *    looking for. The jump check keyed on average_interval and the
+	 *    minimum-interval gate keyed on commutation_interval both derive
+	 *    their threshold from the quantity the false lock corrupts, so as
+	 *    the estimate collapses the threshold collapses with it and the
+	 *    detector disarms itself exactly when it is needed. Measured: ci
+	 *    719 -> 570 -> 527 -> 217 -> 86 -> 52 with the gate tracking it
+	 *    down 179 -> 142 -> 131 -> 54 -> 21 -> 13.
+	 *
+	 *  - It does not need to know WHICH edge is spurious. A PWM-phase
+	 *    histogram of accepted crossings settled that question the other
+	 *    way: in the grind the accepted edges are BROADER in phase than in
+	 *    healthy running (80% of the mass in 11 of 32 bins vs 6.7) and are
+	 *    DEPLETED at both switching edges - 0.6% at turn-on and 5.8% at
+	 *    turn-off against 3.1% and 9.4% for a uniform distribution, where
+	 *    healthy running is sharply locked to turn-off at 22.2%. They are
+	 *    not switching transients and they are not broadband noise (the
+	 *    intervals repeat far too tightly). They are real crossings, and no
+	 *    per-edge filter can reject a real crossing without also rejecting
+	 *    the correct ones. Only the sequence is impossible.
+	 *
+	 * An isolated missed crossing gives T, 2T, 0.5T - one alternation, which
+	 * is legitimate and common, so a run of ZC_ALT_RUN_MIN is required
+	 * before anything is charged. The captures show sixteen-plus.
+	 *
+	 * The response is duty authority, not a rail: this feeds the existing
+	 * position-confidence fade in control_loop.c. Untrusted commutation
+	 * means less power - less energy into a wrong-phase lock, shorter demag,
+	 * and a lock that cannot sustain itself - rather than another trip point
+	 * that restarts the loop through the startup path at full setpoint.
+	 */
+	if (zc_alt_hold != 0u) {
+		/* One of the two intervals under comparison was measured from a
+		 * blind commutation rather than a crossing, so its 2:1 shape is
+		 * an artefact. Discard it and hold the run at zero. */
+		zc_alt_hold--;
+		zc_alt_run = 0;
+	} else if (zero_crosses >= ZC_DEADLINE_MIN_ZC && lastzctime != 0u && thiszctime != 0u) {
+		const uint32_t a = newzctime, b = thiszctime, c = lastzctime;
+		/* 1.6x either way: the grind's short legs measured 0.35-0.54 and
+		 * its long legs 1.86-2.77, so this clears both with margin while
+		 * staying far outside anything rotor inertia permits. */
+		const uint8_t up_ab = (a * 5u) > (b * 8u);
+		const uint8_t dn_ab = (a * 8u) < (b * 5u);
+		const uint8_t up_bc = (b * 5u) > (c * 8u);
+		const uint8_t dn_bc = (b * 8u) < (c * 5u);
+		if ((up_ab && dn_bc) || (dn_ab && up_bc)) {
+			if (zc_alt_run < 255u) {
+				zc_alt_run++;
+			}
+			if (zc_alt_run == ZC_ALT_RUN_MIN) {
+				/* Freeze the per-commutation ring the moment the
+				 * detector arms, so a capture holds the run-up
+				 * into the lock and the first commutations of the
+				 * fade. Instrumentation only. */
+				HWCI_ZC_TRACE_TRIGGER();
+			}
+		} else {
+			zc_alt_run = 0;
+		}
+	}
+	lastzctime = thiszctime;
+	thiszctime = newzctime;
 	SET_INTERVAL_TIMER_COUNT(0);
 	SET_AND_ENABLE_COM_INT(waitTime + 1); // enable COM_TIMER interrupt
 	__enable_irq();
@@ -420,9 +660,12 @@ void startMotor()
 		zc_deadline_armed = 0;
 		zc_blind_steps = 0;
 		zc_blind_ticks = 0;
+		zc_taint = 0;	    // no extrapolated intervals survive a stop
 		bemfZcResetTrend(); // no interval history across a stop
 		zc_pre_seen = 1;
 		zc_demag_run = 0;
+		zc_alt_run = 0; // no interval history survives a stop
+		zc_alt_hold = 0;
 		commutate();
 		commutation_interval = 10000;
 		SET_INTERVAL_TIMER_COUNT(5000);

@@ -18,6 +18,20 @@ void bemfZcResetTrend(void);
 int32_t bemfZcGetTrend(void);
 uint32_t bemfZcGetPredicted(void);
 
+/*
+ * True while commutation_interval / e_com_time still carry EXTRAPOLATED
+ * intervals from blind steps rather than measured crossings.
+ *
+ * The jump-desync check in runtimeProcessDesyncCheck must not evaluate while
+ * this holds: a blind step's interval is a prediction the firmware made, not
+ * a measurement of the rotor, so feeding it to a detector that asks "did the
+ * measured interval jump?" makes our own dead reckoning look like evidence of
+ * desync. Upstream AM32 has no such detector interaction because it has no
+ * blind steps at all - suppressing here is what KEEPS upstream's jump-check
+ * semantics intact once blind stepping exists, not a divergence from them.
+ */
+uint8_t bemfZcAverageTainted(void);
+
 /* Saturating waitTime = interval/2 - advance (never underflows). Inline so
  * PeriodElapsedCallback (RAM_FUNC) does not call out to flash for it. */
 static inline uint16_t bemfZcWaitTimeFromInterval(uint32_t interval, uint16_t advance_ticks)

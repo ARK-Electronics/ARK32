@@ -1,0 +1,41 @@
+name: prop5_smoke
+description: >
+  Loaded bring-up and limit calibration for the 5" 3-blade on the AOS
+  Supernova 2207 1980KV at 6S. Deliberately modest - 10/20/30% steady holds
+  with gentle ramps - because nothing on this bench has run this article
+  loaded yet and the step-stress profile's current and thrust caps have to be
+  set from measured draw rather than guessed. Read max thrust and max current
+  per hold out of the report, then size prop5_setpoint_steps from them.
+  Never raise this profile's ceiling; make a new one. ~28 s.
+sample_rate_hz: 100
+arm_settle_s: 3.0
+steady_tail_fraction: 0.5
+
+safety:
+  # Sized to abort well before the article's full-throttle envelope: a 2207
+  # 1980KV on 6S with a 5" tri-blade makes roughly 18-22 N and pulls 45-55 A
+  # at 100%, and this profile never commands above 30%, where square/cube
+  # scaling puts thrust near 2 N and current in the low single digits. A trip
+  # here means the article is drawing far more than the operating point can
+  # account for, which is the abort we want.
+  max_current_a: 35.0
+  max_thrust_n: 14.0
+  max_motor_temp_c: 80.0
+  # NO max_rpm ON THIS BENCH, deliberately. The optical sensor cannot read
+  # this bell, so RPM comes from the ESC's own estimate (rig rpm_source
+  # esc_perf), and that estimate is garbage below the drive threshold: every
+  # spin-up ramps up through 0.3-0.5% commanded throttle where the comparator
+  # picks up artifact edges, commutation_interval collapses to ~38 (19 us),
+  # and the derived RPM reads 70-77k on a rotor making ~0.03 N of thrust.
+  # Four runs aborted on that before it was removed. Raising the running duty
+  # floor to 2% did NOT fix it - the artifact is below the threshold at which
+  # any floor applies. Thrust and current are the real guards here and, unlike
+  # RPM, both are measured independently of the ESC.
+
+segments:
+  - {label: idle,   throttle: 0.00, duration_s: 2.0}
+  - {label: t10,    throttle: 0.10, duration_s: 5.0, ramp: true,  steady: true}
+  - {label: t20,    throttle: 0.20, duration_s: 5.0, ramp: true,  steady: true}
+  - {label: t30,    throttle: 0.30, duration_s: 5.0, ramp: true,  steady: true}
+  - {label: rampdn, throttle: 0.00, duration_s: 3.0, ramp: true}
+  - {label: stop,   throttle: 0.00, duration_s: 2.0}

@@ -49,7 +49,13 @@
  * v4: appended the 32-bin PWM-phase histogram of accepted zero-crossings.
  * v5: appended esc_state + illegal edge counter (drive state machine).
  * v6: appended bidirectional DShot (BDShot) RX/TX health counters.
- * v7: appended zc_blind_steps (missed-ZC blind commutation counter). */
+ * v7: appended zc_blind_steps (missed-ZC blind commutation counter).
+ * v8: appended zc_demag_run + zc_demag_accepts, then REMOVED again. They were
+ *     added to test whether the wrong-phase grind was a demag-late lock; the
+ *     bench answered no (zc_demag_accepts froze through both captured
+ *     episodes), and the 8 bytes were needed for the per-commutation ZC trace
+ *     below, which is what the grind actually needs. Version stays at 7: the
+ *     layout is identical to v7 again. */
 #	define HWCI_PERF_VERSION 7u
 
 /* PWM-phase histogram bins (power of two: the binning multiply-shift and the
@@ -58,7 +64,8 @@
 
 /* Commands the host may write to hwci_perf.host_cmd (cleared by firmware). */
 #	define HWCI_CMD_NONE 0u
-#	define HWCI_CMD_RESET_STATS 0xA5u /* clear the min/max accumulators */
+#	define HWCI_CMD_RESET_STATS 0xA5u  /* clear the min/max accumulators */
+#	define HWCI_CMD_ARM_ZC_TRACE 0x5Au /* re-arm the per-commutation ZC trace */
 
 /*
  * Naturally-aligned layout (NOT packed): Cortex-M0 faults on unaligned word
@@ -160,9 +167,115 @@ typedef struct hwci_perf_s {
      * the BLHeli-style timeout-commutation path (zero on a healthy loop;
      * a short burst at commanded stop is the designed teardown). */
 	uint32_t zc_blind_steps; /* off 168: blind commutations       */
-} hwci_perf_t;			 /* total size: 172 bytes             */
+
+} hwci_perf_t; /* total size: 172 bytes             */
 
 extern volatile hwci_perf_t hwci_perf;
+
+/*
+ * =========================================================================
+ * PER-COMMUTATION ZC TRACE
+ * =========================================================================
+ *
+ * A separate symbol, NOT part of hwci_perf, deliberately: the 50 Hz perf poll
+ * must stay a small SWD read, and this buffer is read on demand by its own
+ * script only after a capture has triggered.
+ *
+ * WHY IT EXISTS. The false lock this bench reproduces on hard step inputs
+ * establishes itself faster than the perf poll can see. At ~2700 commutations
+ * per second, a 50 Hz poll is one sample per ~80 commutations, so the measured
+ * collapse (commutation_interval 527 -> 217 in one sample) is not one bad edge
+ * but dozens that cannot be separated. Every threshold in the minimum-interval
+ * gate has to be set against what the loop actually saw per commutation, and
+ * the first attempt at that gate was set by inference and was too loose: it
+ * tolerated 4x-early edges while the lock entered at ~2.4x, and because an
+ * ACCEPTED bogus edge still updates commutation_interval, the gate's own
+ * threshold ratcheted down with the lock (179 -> 142 -> 54 -> 21 -> 13 ticks).
+ *
+ * TRIGGER. Free-running ring while armed; the firmware freezes it ITSELF on
+ * the first accepted crossing whose interval is less than half the tracked
+ * estimate - the entry event - then records HWCI_ZC_TRACE_POST more events and
+ * stops. The buffer therefore holds the commutations either side of entry
+ * rather than the steady-state lock, which is what a host-side freeze would
+ * have caught (its detection latency is a whole poll period, ~20-40 ms, by
+ * which time the lock is long established).
+ *
+ * The trigger is INSTRUMENTATION ONLY. It reads state, freezes a buffer, and
+ * changes no control decision.
+ */
+#	define HWCI_ZC_TRACE_N 32u   /* power of two: index masks */
+#	define HWCI_ZC_TRACE_POST 8u /* events kept after the trigger */
+
+/* Event kinds. */
+#	define HWCI_ZC_EV_NONE 0u
+#	define HWCI_ZC_EV_ACCEPT 1u	  /* crossing passed gate + confirm loop */
+#	define HWCI_ZC_EV_REJ_MININT 2u  /* rejected: minimum-interval gate      */
+#	define HWCI_ZC_EV_REJ_CONFIRM 3u /* rejected: glitch-tolerant confirm    */
+#	define HWCI_ZC_EV_BLIND 4u	  /* blind (deadline-extrapolated) step   */
+#	define HWCI_ZC_EV_BUDGET 5u	  /* dead-reckoning budget handed off     */
+
+/*
+ * FOUR BYTES PER EVENT, and the omission is deliberate. The obvious extra
+ * field - the commutation_interval estimate at each event - is RECONSTRUCTIBLE
+ * on the host: every accepted interval is logged here and the estimate evolves
+ * from them by the fixed IIR in PeriodElapsedCallback, anchored on ci_at_arm
+ * below. Storing it per event cost 2 bytes x 64 slots and blew both the FLASH
+ * and RAM gates on the F051 (93.1% RAM against a 90% limit).
+ */
+typedef struct hwci_zc_ev_s {
+	uint16_t interval; /* INTERVAL_TIMER at the event, 0.5 us ticks   */
+	uint8_t kind;	   /* HWCI_ZC_EV_*                                 */
+	uint8_t duty8;	   /* duty_cycle >> 3, cheap applied-drive context */
+} hwci_zc_ev_t;		   /* 4 bytes */
+
+/*
+ * NO INITIALIZED FIELDS. This lives in .bss deliberately: any initializer,
+ * even just a magic word, puts the whole 400-byte object in .data and costs
+ * that much FLASH for its ROM copy - which overflowed the F051 image by 364
+ * bytes when it was tried. The host locates the buffer by ELF symbol and
+ * takes the entry count from the symbol size, exactly as it already does for
+ * hwci_perf, so neither a magic word nor a stored length is needed here.
+ */
+typedef struct hwci_zc_trace_s {
+	uint16_t write_idx; /* next slot; oldest entry when frozen+wrapped */
+	uint8_t frozen;	    /* 1 = trigger fired, buffer holds the entry   */
+	uint8_t post;	    /* events still to record after the trigger    */
+	uint32_t total;	    /* monotonic events ever written               */
+	uint8_t wrapped;    /* 1 = ring has filled at least once           */
+	uint8_t _pad;
+	uint16_t ci_at_arm; /* commutation_interval when the ring was armed;
+			     * the anchor the host replays the IIR from     */
+	hwci_zc_ev_t ev[HWCI_ZC_TRACE_N];
+} hwci_zc_trace_t;
+
+extern volatile hwci_zc_trace_t hwci_zc_trace;
+
+/* Record one event. Cheap enough for ISR context: a masked index increment and
+ * three stores, no division and no branch beyond the frozen check. */
+#	define HWCI_ZC_TRACE_EV(_kind, _interval)                                                                                         \
+		do {                                                                                                                       \
+			if (!hwci_zc_trace.frozen) {                                                                                       \
+				uint16_t _i = hwci_zc_trace.write_idx;                                                                     \
+				hwci_zc_trace.ev[_i].interval = (uint16_t)((_interval) > 65535u ? 65535u : (_interval));                   \
+				hwci_zc_trace.ev[_i].kind = (uint8_t)(_kind);                                                              \
+				hwci_zc_trace.ev[_i].duty8 = (uint8_t)(duty_cycle >> 3);                                                   \
+				_i = (uint16_t)((_i + 1u) & (HWCI_ZC_TRACE_N - 1u));                                                       \
+				hwci_zc_trace.write_idx = _i;                                                                              \
+				if (_i == 0u)                                                                                              \
+					hwci_zc_trace.wrapped = 1u;                                                                        \
+				hwci_zc_trace.total++;                                                                                     \
+				if (hwci_zc_trace.post && --hwci_zc_trace.post == 0u)                                                      \
+					hwci_zc_trace.frozen = 1u;                                                                         \
+			}                                                                                                                  \
+		} while (0)
+
+/* Arm the post-trigger countdown once, on the entry event. Called only from
+ * the accepted-crossing path, after the event above is recorded. */
+#	define HWCI_ZC_TRACE_TRIGGER()                                                                                                    \
+		do {                                                                                                                       \
+			if (!hwci_zc_trace.frozen && hwci_zc_trace.post == 0u)                                                             \
+				hwci_zc_trace.post = (uint8_t)HWCI_ZC_TRACE_POST;                                                          \
+		} while (0)
 
 /* Q16 phase-binning factor, (HWCI_ZC_PHASE_BINS << 16) / (tim1_arr + 1).
  * Recomputed from the main loop (HWCI_PERF_MAIN_LOOP snapshot branch, one
@@ -394,6 +507,12 @@ void hwci_perf_reset_stats(void);
 		do {                                                                                                                       \
 		} while (0)
 #	define HWCI_PERF_BLIND_STEP()                                                                                                     \
+		do {                                                                                                                       \
+		} while (0)
+#	define HWCI_ZC_TRACE_EV(_kind, _interval)                                                                                         \
+		do {                                                                                                                       \
+		} while (0)
+#	define HWCI_ZC_TRACE_TRIGGER()                                                                                                    \
 		do {                                                                                                                       \
 		} while (0)
 #	define HWCI_PERF_ZC_PHASE_CAPTURE()                                                                                               \

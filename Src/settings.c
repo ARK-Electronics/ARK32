@@ -166,8 +166,8 @@ void loadEEpromSettings(void)
 		// Reset to compile defaults first so this load is idempotent: the
 		// eeprom value below only lowers (min semantics). Nothing at
 		// runtime writes these - the ramp an ESC flies is the ramp
-		// configured here (see faultDesyncEpisodeCharge for why the
-		// learned back-off that used to clamp them was removed).
+		// configured here (see the note at the top of faults.c for why
+		// the learned back-off that used to clamp them was removed).
 		//
 		// NOTE the min semantics flatten the graded schedule: max_ramp 20
 		// (the current factory default, 2.0 %/ms) clamps ALL THREE regimes

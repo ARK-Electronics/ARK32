@@ -1,0 +1,55 @@
+name: noprop_setpoint_steps
+description: >
+  Hard setpoint steps with NO propeller, both directions, for the PR #85
+  degrade-instead-of-restart work. The vector is the free-run snap-UP: with no
+  aerodynamic load the rotor accelerates fast enough that average_interval can
+  move more than 50% between electrical revolutions, which is exactly what the
+  jump-desync check in runtimeProcessDesyncCheck keys on - and with blind
+  stepping armed (zero_crosses >= 100) the extrapolated intervals feed that
+  same average. Snap-DOWN is the complementary case: a free bell coasts a long
+  time with no drag, so commanded duty collapses while the rotor is still fast.
+  What to read from a run: any allOff/power-cut segment (esc_state, perf_running
+  dropping while throttle is commanded high), blind-step count, and whether
+  zero_crosses ever goes backwards. Capped at 55% - 1980 KV on 6S free-runs
+  ~50k RPM at full throttle, so this profile must never approach 100%. ~20 s.
+sample_rate_hz: 200
+arm_settle_s: 2.0
+demag_commutation_spike: 3.0
+demag_rpm_drop_fraction: 0.25
+
+safety:
+  # A 10->50 snap on this article measured a legitimate 75 A inrush: at
+  # 5.1k RPM the bell makes only 2.6 V of BEMF against ~12.4 V commanded,
+  # across roughly 30 mOhm of phase resistance, and it accelerates out of it
+  # in ~10 ms. The first run of this profile aborted at a 20 A cap on exactly
+  # that transient with zero_crosses still climbing monotonically - the cap
+  # was wrong, not the firmware. 90 A clears it while still aborting below
+  # both the firmware's own limiter (eeprom limits.current = 102 A) and the
+  # 100-165 A wrong-phase runaways this rig has recorded historically.
+  max_current_a: 90.0
+  max_thrust_n: 2.0      # ~0 expected without a prop; trips on sensor faults
+  # NOT the overspeed guard on this bench - the 55% throttle cap above is,
+  # since 1980 KV on 6S cannot exceed ~27.4k mech at that duty. This limit is
+  # set above the 50k full-throttle free-run ceiling so it only catches a
+  # genuinely impossible reading, because with rpm_source esc_perf the RPM
+  # channel is the ESC's own estimate and that estimate is NOT trustworthy at
+  # very low throttle: measured on this article during rampdn at 2.5% duty and
+  # -0.04 A, it ran 643 -> 4886 -> 33743 in 60 ms with commutation_interval
+  # collapsing to 63 (31 us/commutation) - a false lock on artifact edges below
+  # usable BEMF, not an overspeed. Restore a tight limit here if the optical
+  # sensor is ever made to read this bell.
+  max_rpm: 55000
+  max_motor_temp_c: 80.0
+
+segments:
+  - {label: idle,    throttle: 0.00, duration_s: 2.0}
+  - {label: pre,     throttle: 0.10, duration_s: 3.0, ramp: true, steady: true}
+  - {label: up50,    throttle: 0.50, duration_s: 2.0}   # snap 10->50
+  - {label: dn10a,   throttle: 0.10, duration_s: 2.0}   # snap 50->10
+  - {label: up55,    throttle: 0.55, duration_s: 2.0}   # snap 10->55
+  - {label: dn15,    throttle: 0.15, duration_s: 2.0}   # snap 55->15
+  - {label: up40,    throttle: 0.40, duration_s: 1.5}   # mid-band snap
+  - {label: up55b,   throttle: 0.55, duration_s: 1.5}   # stacked snap, no settle
+  - {label: dn05,    throttle: 0.05, duration_s: 2.0}   # snap to near-idle
+  - {label: rampdn,  throttle: 0.00, duration_s: 2.0, ramp: true}
+  - {label: stop,    throttle: 0.00, duration_s: 1.0}

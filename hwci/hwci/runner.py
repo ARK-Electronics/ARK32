@@ -22,6 +22,7 @@ at zero throttle, because AM32 beeps the motor whenever it has no input.
 """
 from __future__ import annotations
 
+import dataclasses
 import sys
 import threading
 import time
@@ -50,6 +51,10 @@ class Sources:
     telem_source: TelemSourceFn
     perf_reader: Optional[PerfReader] = None
     closers: list = field(default_factory=list)
+    # RigConfig.rpm_source / RigConfig.pole_pairs, carried here so run_profile
+    # can substitute the ESC-derived RPM without taking a rig dependency.
+    rpm_source: str = "stand"
+    pole_pairs: int = 7
 
     def close(self) -> None:
         for c in reversed(self.closers):
@@ -77,6 +82,59 @@ def _segment_throttle(seg, tick_in_seg: int, n_ticks: int, prev: float) -> float
         return seg.throttle
     frac = tick_in_seg / (n_ticks - 1)
     return prev + (seg.throttle - prev) * min(1.0, frac)
+
+
+#: hwci_perf.esc_state == ESC_CLOSED_LOOP (Inc/esc_state.h).
+_ESC_CLOSED_LOOP = 5
+
+
+def esc_perf_rpm(pf: PerfSample | None, pole_pairs: int) -> float | None:
+    """Mechanical RPM from the firmware's own e_rpm (hwci_perf, read over SWD).
+
+    CLOSED LOOP ONLY, and that restriction is load-bearing. In closed loop the
+    firmware computes ``e_rpm = 600000 / e_com_time`` (runtime_loop.c), which
+    is electrical RPM / 100 as Inc/hwci_perf.h documents, so mechanical RPM is
+    ``field * 100 / pole_pairs``. The open-loop startup path writes the SAME
+    field on a DIFFERENT scale - ``e_rpm = 600 / step_delay``, commented "in
+    hundreds" - so reading it there overstates speed by orders of magnitude.
+    That is not theoretical: it aborted a bench run with "rpm 73257 > limit
+    30000" on a motor whose free-run ceiling at 6S is ~50k, out of a startup
+    transient.
+
+    Returns None whenever the value cannot be trusted (no perf sample, no pole
+    count, not in closed loop). The caller leaves the stand's own RPM in place
+    in that case rather than substituting a zero, which would read as a
+    collapse and trip the desync watch on every normal spin-up.
+    """
+    if pf is None or pole_pairs <= 0:
+        return None
+    raw = getattr(pf, "raw", None) or {}
+    if int(raw.get("esc_state") or 0) != _ESC_CLOSED_LOOP:
+        return None
+    try:
+        erpm = float(pf.e_rpm)
+    except Exception:
+        try:
+            erpm = float(raw.get("e_rpm") or 0) * 100.0
+        except Exception:
+            return None
+    return erpm / float(pole_pairs)
+
+
+def substitute_esc_rpm(stand: StandSample | None, pf: PerfSample | None,
+                       pole_pairs: int) -> StandSample | None:
+    """Replace a stand sample's optical RPM with the ESC-derived one.
+
+    Applied before safety, the desync watch and the saved row, so every
+    downstream consumer sees one consistent RPM channel and needs no knowledge
+    of where it came from.
+    """
+    if stand is None:
+        return None
+    rpm = esc_perf_rpm(pf, pole_pairs)
+    if rpm is None:
+        return stand
+    return dataclasses.replace(stand, rpm=rpm)
 
 
 def enforce_safety(limits: SafetyLimits, stand: StandSample | None,
@@ -343,6 +401,7 @@ def run_profile(profile: Profile, sources: Sources, *,
     period = 1.0 / profile.sample_rate_hz
     rows: list[dict] = []
     aborted: str | None = None
+    rpm_from_esc = sources.rpm_source == "esc_perf"
 
     sources.throttle.arm()
     if sources.perf_reader is not None:
@@ -407,13 +466,21 @@ def run_profile(profile: Profile, sources: Sources, *,
                 sources.throttle.set(throttle)
                 stand = sources.stand.read_sample() if sources.stand is not None else None
                 pf = perf_get()
+                if rpm_from_esc:
+                    stand = substitute_esc_rpm(stand, pf, sources.pole_pairs)
                 tm = _safe(sources.telem_source)
-                enforce_safety(profile.safety, stand, tm)
                 # Record the ACTUAL sample time: after a host stall the
                 # schedule time would lie about how much wall clock the
                 # sample covers (and corrupt counter-rate math downstream).
                 t = (time.monotonic() - start) if realtime else t_sched
+                # Append BEFORE the safety and desync checks, so the sample
+                # that trips an abort is in the saved data. It used to be
+                # appended after, which meant every abort discarded exactly
+                # the one sample needed to diagnose it - the reported value
+                # appeared nowhere in samples.csv and the run looked healthy
+                # right up to the last row.
                 rows.append(make_row(t, seg.label, throttle, stand, tm, pf))
+                enforce_safety(profile.safety, stand, tm)
                 # Cut throttle immediately on live desync — do not finish the
                 # remaining profile segments into a freewheeling/desynced rotor.
                 desync_watch.check(throttle, stand, pf)
@@ -667,7 +734,8 @@ def build_live_sources(rig: RigConfig, profile: Profile, *,
 
     sources = Sources(throttle=throttle, stand=stand, perf_source=perf_source,
                       telem_source=telem_source, perf_reader=perf_reader,
-                      closers=closers)
+                      closers=closers, rpm_source=rig.rpm_source,
+                      pole_pairs=rig.pole_pairs)
     try:
         if perf_reader is not None:
             _ensure_app_alive(dbg, perf_reader, throttle)

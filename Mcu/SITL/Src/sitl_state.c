@@ -72,8 +72,8 @@
       u16 gov_stuck_ms, u16 gov_release_ceil, u16 gov_unlatch_count (v5 PR 65)
       u8 max_ramp_startup, u8 max_ramp_low, u8 max_ramp_high,
       u8 ramp_divider, u8 max_ramp_startup_vcomp, u8 acq_resist,
-      u8 desync_episode_bucket                    (v6 ramp settings +
-                                                   episode observability)
+      u8 bemf_timeout_happened                    (v6 ramp settings +
+                                                   stall observability)
       Fields are only ever APPENDED and the version is bumped; clients
       that unpack a shorter prefix keep working unchanged (they
       length-check with >=).
@@ -599,15 +599,19 @@ void sitl_state_poll(void)
 			uint16_t gov_stuck_ms_v;
 			uint16_t gov_release_ceil_v;
 			uint16_t gov_unlatch_count_v;
-			/* v6: live ramp settings (so a test can assert the episode
-			 * machinery never mutates them) + episode observability. */
+			/* v6: live ramp settings (so a test can assert no fault
+			 * path ever mutates them) + stall observability. The slot
+			 * that carried desync_episode_bucket now carries
+			 * bemf_timeout_happened: the escalator is gone and this is
+			 * the counter that actually escalates to the genuine stop
+			 * (faultHandleStuckRotorIfNeeded). Same wire size. */
 			uint8_t max_ramp_startup_v;
 			uint8_t max_ramp_low_v;
 			uint8_t max_ramp_high_v;
 			uint8_t ramp_divider_v;
 			uint8_t max_ramp_startup_vcomp_v;
 			uint8_t acq_resist_v;
-			uint8_t desync_episode_bucket_v;
+			uint8_t bemf_timeout_happened_v;
 		} reply = {
 			.magic = 0x5356,
 			.version = 6,
@@ -642,7 +646,7 @@ void sitl_state_poll(void)
 			.ramp_divider_v = ramp_divider,
 			.max_ramp_startup_vcomp_v = max_ramp_startup_vcomp,
 			.acq_resist_v = fault_acq_resist_events,
-			.desync_episode_bucket_v = desync_episode_bucket,
+			.bemf_timeout_happened_v = bemf_timeout_happened,
 		};
 		sendto(fd, &reply, sizeof(reply), 0, (struct sockaddr *)&src, sizeof(src));
 	} else if (cmd == 10 && ret >= 8) {

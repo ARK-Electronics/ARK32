@@ -9,6 +9,9 @@
  */
 #include "hwci_perf.h"
 
+#include "common.h"
+#include "motor_runtime.h"
+
 #ifdef HWCI_PERF
 
 /*
@@ -30,6 +33,14 @@ volatile hwci_perf_t hwci_perf = {
  * commit macro skips binning). The main-loop snapshot keeps it tracking
  * tim1_arr. */
 volatile uint32_t hwci_zc_phase_scale_q16 = 0;
+
+/*
+ * Per-commutation ZC trace (see the block comment in hwci_perf.h). Starts
+ * ARMED - .frozen = 0 - so the very first false lock after a power cycle is
+ * captured without the host having to arm anything first. Re-arm with
+ * HWCI_CMD_ARM_ZC_TRACE once the buffer has been read.
+ */
+volatile hwci_zc_trace_t hwci_zc_trace;
 
 /*
  * Clear the sticky min/max accumulators so worst-case timing can be measured
@@ -58,6 +69,18 @@ void hwci_perf_apply_cmd(void)
 	switch (hwci_perf.host_cmd) {
 		case HWCI_CMD_RESET_STATS:
 			hwci_perf_reset_stats();
+			break;
+		case HWCI_CMD_ARM_ZC_TRACE:
+			/* Re-arm the per-commutation trace: drop the frozen
+			 * capture and start filling again. write_idx is left
+			 * alone - the ring is circular and the host reads it
+			 * oldest-first from write_idx once wrapped. */
+			hwci_zc_trace.post = 0u;
+			hwci_zc_trace.total = 0u;
+			hwci_zc_trace.write_idx = 0u;
+			hwci_zc_trace.wrapped = 0u;
+			hwci_zc_trace.ci_at_arm = (uint16_t)(commutation_interval > 65535u ? 65535u : commutation_interval);
+			hwci_zc_trace.frozen = 0u;
 			break;
 		default:
 			break;

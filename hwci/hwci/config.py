@@ -207,6 +207,25 @@ class RigConfig:
     pole_pairs: int = 7                     # the motor under test (authoritative)
     prop: str = "sim-prop"
 
+    # Where mechanical RPM comes from.
+    #
+    # "stand" (default): the Flight Stand's optical sensor. Needs a reflective
+    # marker on the bell; it is also the only source INDEPENDENT of the ESC, so
+    # it is the only one that can catch eRPM-vs-truth divergence.
+    #
+    # "esc_perf": derive it from the firmware's own e_rpm in the hwci_perf
+    # struct, read over SWD (mech = e_rpm_field * 100 / pole_pairs). Use when
+    # the optical sensor cannot be made to read a given bell - a bare or
+    # sharpie-marked bell with no tape will not trigger it, and a dropped
+    # marker mid-run shows up as a fake RPM collapse that trips the desync
+    # watch. This keeps the max_rpm safety limit and the collapse detector
+    # working, but note what it costs: the speed signal is now the ESC's own
+    # estimate, so it cannot cross-check that estimate. Desync evidence has to
+    # come from the firmware-side witnesses instead (zero_crosses going
+    # backwards, bemf_timeout, blind-step bursts), which are independent of
+    # this setting.
+    rpm_source: str = "stand"
+
     def resolved_obj_dir(self) -> Path:
         return Path(self.obj_dir) if self.obj_dir else Path(self.repo_root) / "obj"
 
@@ -227,6 +246,14 @@ class RigConfig:
                     f"rig config: {key} = 'sim' is not allowed in a rig file; "
                     "use a real backend or 'none' (or run with --sim for a "
                     "fully simulated run)")
+        if self.rpm_source not in ("stand", "esc_perf"):
+            raise ValueError(
+                f"rig config: rpm_source = {self.rpm_source!r} is not one of "
+                "['esc_perf', 'stand']")
+        if self.rpm_source == "esc_perf" and self.debugger_backend != "openocd":
+            raise ValueError(
+                "rig config: rpm_source 'esc_perf' reads the firmware e_rpm "
+                "over SWD, so it needs debugger_backend 'openocd'")
         if self.throttle_backend == "flightstand" and self.stand_backend == "none":
             raise ValueError(
                 "rig config: throttle_backend 'flightstand' needs a stand "

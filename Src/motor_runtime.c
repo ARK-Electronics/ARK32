@@ -54,6 +54,7 @@ volatile uint32_t zc_blind_ticks = 0;
 volatile uint8_t zc_pre_seen = 0;
 volatile uint8_t zc_demag_run = 0;
 volatile uint32_t zc_demag_accepts = 0;
+volatile uint8_t zc_alt_run = 0;
 volatile uint8_t ramp_divider;
 volatile uint8_t max_ramp_startup = RAMP_SPEED_STARTUP;
 volatile uint8_t max_ramp_low_rpm = RAMP_SPEED_LOW_RPM;
@@ -124,8 +125,6 @@ uint32_t REV_Id = 0;
 uint16_t armed_timeout_count;
 uint16_t reverse_speed_threshold = 1500;
 uint32_t desync_happened = 0;
-volatile uint8_t desync_episode_bucket = 0;
-volatile uint16_t desync_restart_holdoff_ms = 0;
 char maximum_throttle_change_ramp = 1;
 
 char crawler_mode = 0; // no longer used //

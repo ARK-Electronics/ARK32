@@ -131,7 +131,17 @@ void runtimeProcessDesyncCheck(void)
 		slow_avg_revs = 0;
 	}
 	if (desync_check && zero_crosses > 10) {
-		uint8_t desynced = (getAbsDif(last_average_interval, average_interval) > average_interval >> 1) &&
+		// An extrapolated interval is a prediction this firmware made, not
+		// a measurement of the rotor, so it is not evidence of desync -
+		// see bemfZcAverageTainted(). Without this gate our own blind
+		// stepping trips upstream's jump check: a run of blind steps pushes
+		// ~1.5x intervals through commutation_intervals[] into
+		// average_interval, which reads as a >50% jump between electrical
+		// revolutions at fault onset and restarts the loop on self-inflicted
+		// evidence. The dead-reckoning budget in bemf_zc.c is the rail that
+		// owns lost position; this one owns measured interval jumps.
+		uint8_t desynced = !bemfZcAverageTainted() &&
+				   (getAbsDif(last_average_interval, average_interval) > average_interval >> 1) &&
 				   (average_interval < 2000); // throttle resitricted before zc 20.
 		// Interrupt-ZC trust rail: with no per-commutation fallback to poll
 		// mode, a closed loop tracking artifact edges below usable BEMF
@@ -184,25 +194,23 @@ void runtimeProcessDesyncCheck(void)
 			zero_crosses = 0;
 			bemfZcResetTrend();
 			desync_happened++;
-			// Same established-run gate as the stall rail (see
-			// faultHandleBemfIntervalStall): interval jumps while the
-			// loop is still acquiring (zc 11..100) are normal startup
-			// roughness on light motors - charging them stacks holdoff
-			// onto honest starts until the bucket
-			// latches a motor that never got going (SITL racer model
-			// reproduces this under plain dshot spool). Legacy desync
-			// handling below still restarts; only the episode
-			// accounting is established-runs-only.
-			if (zc_at_desync > 100) {
-				faultDesyncEpisodeCharge(DESYNC_EPISODE_JUMP);
-			} else {
-				// Acquisition-regime desyncs are not charged directly
-				// (that is what the gate above exists to prevent), but
-				// they must not be free either: without this the loop
-				// can desync forever below zc 100 with every rail and
-				// counter reading zero. See faultNoteEarlyDesync.
+			// Acquisition-regime desyncs (zc 11..100) are normal
+			// startup roughness on light motors, but a loop that can
+			// NEVER get past acquisition would otherwise leave every
+			// counter reading zero. Count the batch so telemetry can
+			// show a resisted start; it changes no control decision.
+			// See faultNoteEarlyDesync.
+			if (zc_at_desync <= 100) {
 				faultNoteEarlyDesync();
 			}
+			// Upstream AM32 main.c desync handling, verbatim in
+			// behaviour from here down: stop only if throttle is
+			// already off or the loop is running very slow, hand back
+			// to poll ZC, resume duty at the startup floor and let
+			// max_ramp carry it back up. No power cut and no coast -
+			// the rotor is still turning and the drive is what lets
+			// the loop re-find it. See the note at the top of faults.c
+			// for why the escalator that used to sit here is gone.
 			if ((!eepromBuffer.bi_direction && (input > 47)) || commutation_interval > 1000) {
 				running = 0;
 			}
@@ -212,11 +220,6 @@ void runtimeProcessDesyncCheck(void)
 				average_interval = 5000;
 			}
 			last_duty_cycle = min_startup_duty / 2;
-			if (faultDesyncRestartHoldoffActive() || escIsFault()) {
-				running = 0;
-				allOff();
-				maskPhaseInterrupts();
-			}
 		}
 		desync_check = 0;
 		//	}
@@ -475,7 +478,7 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 	// applied in 4 ms desyncs where 24 A reached gradually stays locked -
 	// the cliff is dV/dt, not level). Nothing in flight bounds dV/dt
 	// except the configured slew limit itself: the learned back-off that
-	// used to claim that job was removed (faultDesyncEpisodeCharge), and
+	// used to claim that job was removed (see faults.c), and
 	// reactive pacing cannot work at all (control_loop.c). dV/dt is set
 	// by the ramp regime schedule and has to be right by configuration.
 	uint16_t ceiling = 2000;
@@ -609,22 +612,25 @@ void runtimeMotorModeTick(void)
 	/* Sleep DRV ENABLE / nSLEEP when not driving, braking, or beeping. */
 	gateDriverPoll();
 	stuckcounter = 0;
-	/* Post-desync coast: do not re-enter six-step until holdoff expires.
-	 * (setInput's start branch is gated the same way - this alone cannot
-	 * hold the motor off, it only kills a run that was already going.) */
-	if (faultDesyncRestartHoldoffActive() || escIsFault()) {
+	/* Latched stuck rotor (faultHandleStuckRotorIfNeeded): the rotor is not
+	 * turning, so do not re-enter six-step. This is the ONLY state that holds
+	 * the motor off - a desync or a stall trip on a turning rotor keeps
+	 * driving and re-acquires through poll. (setInput's start branch is gated
+	 * the same way; this alone cannot hold the motor off, it only kills a run
+	 * that was already going.) */
+	if (escIsFault()) {
 		if (running) {
 			running = 0;
 			allOff();
 			maskPhaseInterrupts();
 		}
 		// The early return skips the e_rpm update below; zero it so
-		// telemetry (DroneCAN) reports the coast instead of the last
-		// running rpm for up to the whole holdoff.
+		// telemetry (DroneCAN) reports the fault instead of the last
+		// running rpm for as long as the latch holds.
 		e_rpm = 0;
 		k_erpm = 0;
-		dcm_hold_ms = 0;       // a coast must not carry a stale ceiling into the restart
-		adv_kerpm_hold_ms = 0; // a coast is a real slowdown, not a dead estimate
+		dcm_hold_ms = 0;       // do not carry a stale ceiling into the restart
+		adv_kerpm_hold_ms = 0; // a latched stop is a real slowdown, not a dead estimate
 		return;
 	}
 	if (!escInSineStart()) {
