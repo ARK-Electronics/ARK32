@@ -9,6 +9,7 @@
 
 #include "peripherals.h"
 
+#include "bemf_adc.h"
 #include "debug_uart.h"
 #include "gate_driver.h"
 #include "serial_telemetry.h"
@@ -691,6 +692,9 @@ void enableCorePeripherals()
 	ADC_Init();
 	enableADC_DMA();
 	activateADC();
+	/* After ADC_Init: the ADC12 common block it configures is shared, and
+	 * the BEMF path takes ADC2 on top of it. */
+	bemfAdcInit();
 #endif
 	LL_COMP_Enable(COMP2);
 	LL_COMP_Enable(COMP1);

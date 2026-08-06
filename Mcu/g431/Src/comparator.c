@@ -31,6 +31,7 @@
 
 #include "comparator.h"
 
+#include "bemf_adc.h"
 #include "common.h"
 #include "motor_runtime.h"
 #include "targets.h"
@@ -50,10 +51,20 @@ void maskPhaseInterrupts()
 	EXTI->IMR1 &= ~(1 << 22);
 	EXTI->PR1 = LL_EXTI_LINE_22;
 	EXTI->PR1 = LL_EXTI_LINE_21;
+	/* One place ends the zero-cross search for every caller - accepted
+	 * crossing, blind step, desync, stop - so the ADC detector needs no
+	 * plumbing of its own to stay in step with the comparator one. */
+	bemfAdcDisarm();
 }
 
 void enableCompInterrupts()
 {
+	/* Below the comparator's usable floor the ADC path detects the
+	 * crossing instead; it owns the whole step and the EXTI stays masked,
+	 * so the two detectors can never both commit one. See bemf_adc.c. */
+	if (bemfAdcArm()) {
+		return;
+	}
 	EXTI->IMR1 |= current_EXTI_LINE;
 }
 

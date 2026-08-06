@@ -121,6 +121,58 @@
  * actually in use.
  */
 #	define ZC_SEARCH_BLANK_64THS 32
+/*
+ * ADC zero-cross detection for the floating phase (Mcu/g431/Src/bemf_adc.c).
+ * EXPERIMENTAL, off by default, never bench-run. Enable by defining
+ * USE_ADC_BEMF; below ADC_BEMF_MIN_INTERVAL the ADC path then owns the
+ * crossing search and the comparator EXTI stays masked for that step.
+ *
+ * The point is the low-rpm floor: comparator offset plus the 10 mV minimum
+ * hysteresis step stops producing an edge somewhere around 350-450 rpm on
+ * this article, and no filtering downstream recovers it. The ADC resolves
+ * 0.806 mV/LSB and returns a magnitude, so it both sees further down and can
+ * interpolate the crossing instant between two samples instead of reporting
+ * the grid position.
+ *
+ * !! The four channel numbers below are the one thing in this block that
+ * !! could not be verified from the tree. PA0/PA1 are ADC1_IN1/ADC1_IN2 and
+ * !! ADC2_IN1/ADC2_IN2, but PA4 and PA5 reach ADC2 only, and the exact
+ * !! indices are asserted from the G431 pin table, not confirmed - network
+ * !! policy blocks st.com from this environment. Check them against DS12589
+ * !! Table 13 (or CubeMX) before the first bench run. A wrong index reads a
+ * !! different pin and the path silently never finds a crossing.
+ */
+// #define USE_ADC_BEMF
+#	define ADC_BEMF_PHASE_A_CHANNEL LL_ADC_CHANNEL_13 /* PA5 -> ADC2_IN13 */
+#	define ADC_BEMF_PHASE_B_CHANNEL LL_ADC_CHANNEL_17 /* PA4 -> ADC2_IN17 */
+#	define ADC_BEMF_PHASE_C_CHANNEL LL_ADC_CHANNEL_1  /* PA0 -> ADC2_IN1 */
+#	define ADC_BEMF_COMMON_CHANNEL LL_ADC_CHANNEL_2   /* PA1 -> ADC2_IN2, SENS_COMMON */
+/*
+ * Sample point, in TIM1 ticks after the PWM period starts. Shares
+ * COMP_BLANK_TICKS because it wants the same thing the blank window wants:
+ * to be clear of the dead time and the high-side turn-on transient that ends
+ * it. The pair of conversions then takes 950 ns (2 x 19 ADC cycles at
+ * 40 MHz) = 152 TIM1 ticks, so the on-window has to be at least
+ * 160 + 152 = 312 ticks for the second conversion to complete before
+ * turn-off. At the default 24 kHz (arr 6665) that is 4.7 % duty - just under
+ * the 6 % startup tier where the stuck faults live, with little to spare.
+ */
+#	define ADC_BEMF_TRIGGER_TICKS COMP_BLANK_TICKS
+#	define ADC_BEMF_MIN_DUTY_TICKS (ADC_BEMF_TRIGGER_TICKS + 152)
+/*
+ * Hand off to the comparator above this speed: INTERVAL_TIMER ticks at 2 MHz,
+ * so 700 is a 350 us commutation interval, ~2040 rpm on 14 pole pairs. Above
+ * that the BEMF is comfortably clear of the comparator's floor and the
+ * comparator's continuous-time edge beats a once-per-PWM-period sample.
+ */
+#	define ADC_BEMF_MIN_INTERVAL 700
+/*
+ * Dead band around the crossing, in LSB. 8 LSB is 6.4 mV at the ADC, which
+ * on the 21:1 divider and the 2/3 on-window ratio is ~200 mV of phase BEMF,
+ * about 72 rpm. Samples inside the band are neither a reference nor a
+ * crossing; the interpolation spans them.
+ */
+#	define ADC_BEMF_MIN_LSB 8
 /* USART2 TX on PB3 @ 115200 — matches bootloader USE_DEBUG_UART (AM32-bootloader#60). */
 #	define USE_DEBUG_UART
 #	define USE_SERIAL_TELEMETRY

@@ -8,6 +8,12 @@
 
 void PeriodElapsedCallback(void);
 void interruptRoutine(void);
+/* Commit an accepted zero crossing (mask the search, timestamp it, schedule
+ * the commutation). Split out of interruptRoutine so a detector other than the
+ * comparator EXTI edge can commit through the same path. zc_grid_comp
+ * back-dates the timestamp by that many INTERVAL_TIMER ticks when the detector
+ * knows the crossing happened before it was registered. */
+void bemfZcAcceptCrossing(uint16_t zc_grid_comp);
 void startMotor(void);
 /* Clear the acceleration trend used for the commutation point (bemf_zc.c).
  * Call next to every zero_crosses = 0 so a desync/coast cannot leave a

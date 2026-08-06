@@ -354,6 +354,29 @@ RAM_FUNC void interruptRoutine()
 		}
 	}
 #endif
+#if defined(MCU_F051) || defined(MCU_G431)
+	bemfZcAcceptCrossing(zc_grid_comp);
+#else
+	bemfZcAcceptCrossing(0);
+#endif
+}
+
+/*
+ * Commit an accepted zero crossing: stop the search, settle the miss/demag
+ * bookkeeping, timestamp the crossing and schedule the commutation.
+ *
+ * Split out of interruptRoutine() so a detector other than the comparator
+ * EXTI edge can commit a crossing through exactly the same path. zc_grid_comp
+ * back-dates thiszctime by that many INTERVAL_TIMER ticks, for a detector that
+ * knows the crossing physically happened before it was registered - the
+ * comparator's turn-on pile-up estimate, or the ADC path's interpolation
+ * between the samples that straddle the crossing.
+ */
+RAM_FUNC void bemfZcAcceptCrossing(uint16_t zc_grid_comp)
+{
+#if !defined(MCU_F051) && !defined(MCU_G431)
+	(void)zc_grid_comp;
+#endif
 	__disable_irq();
 	maskPhaseInterrupts();
 	zc_deadline_armed = 0; // COM_TIMER now times commutation, not the missed-ZC deadline

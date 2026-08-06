@@ -2,6 +2,7 @@
 #include "stm32g4xx_it.h"
 #include "ADC.h"
 #include "IO.h"
+#include "bemf_adc.h"
 #include "WS2812.h"
 #include "main.h"
 #include "targets.h"
@@ -109,6 +110,13 @@ void COMP1_2_3_IRQHandler(void)
 		LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_22);
 	}
 }
+
+#ifdef USE_ADC_BEMF
+void ADC1_2_IRQHandler(void)
+{
+	bemfAdcIrqHandler();
+}
+#endif
 
 void TIM6_DAC_IRQHandler(void)
 {
