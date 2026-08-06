@@ -65,21 +65,40 @@
 /*
  * Comparator output blanking window, in TIM1 ticks (6.25 ns @ 160 MHz).
  * The G4 COMP can gate its own output from TIM1 OC5 while OC5REF is high;
- * the F051's COMP cannot, so this has no 4IN1 equivalent. Blanks the
- * turn-on switching transient so it cannot be latched as a zero cross.
+ * the F051's COMP cannot, so this has no 4IN1 equivalent. Armed per
+ * commutation step in changeCompInput() — read the comment there before
+ * touching this, because blanking is only safe on half the steps.
  *
- * Sizing: the phase turns on at CNT==0 (edge-aligned PWM1 up-count), so
- * OC5 with CCR5=N blanks the first N ticks of every PWM period. 80 ticks
- * = 500 ns = exactly DEAD_TIME, covering the dead-time commutation edge.
- * It must stay BELOW the pile-up window, because crossings that occur in
- * the PWM off-window are legitimately registered just after turn-on (see
- * the turn-on-pileup compensation in bemf_zc.c): those land from
- * arr>>5 (~650 ns at 48 kHz) onward, with the bin-1 peak at ~1.3-2.6 us
- * of comparator+ISR latency. Blanking past that would suppress real
- * crossings rather than noise. Worst case the ARR halves under
- * variable_pwm, which still leaves the blank under 5% of the period.
+ * Sizing. OC5 with CCR5=N holds OC5REF high for CNT < N, so the window is
+ * the first N ticks of every PWM period, and the question is where the
+ * switching transient actually sits inside that period:
+ *
+ *   CNT == 0            OCxREF rises; the low side turns OFF immediately.
+ *   CNT == DEAD_TIME    the high side turns ON. This is the hard event —
+ *                       the phase node slews a 50 V bus in 55-81 ns
+ *                       (measured), ~500 ns to settle including the gate
+ *                       transition, into low-side body-diode recovery.
+ *
+ * So the transient is at 500 ns, not at 0. The original 80 ticks blanked
+ * [0, 500 ns) — the quiet dead-time interval — and un-gated the comparator
+ * at the exact instant of the edge it was meant to reject. 160 ticks =
+ * 1.0 us = DEAD_TIME plus the ~500 ns edge-and-settle, which is the
+ * smallest window that actually covers it.
+ *
+ * Upper bound. Crossings that physically occur in the PWM off-window are
+ * invisible to the comparator and are registered after turn-on (see the
+ * turn-on-pileup compensation in bemf_zc.c); bench puts that detection
+ * peak at 1.3-2.6 us, so 1.0 us clears it. On the steps that blank at all,
+ * a crossing inside the window is not suppressed anyway — it is delayed to
+ * the window close, at most 1.0 us late.
+ *
+ * Duty headroom. At the target's default 24 kHz (arr 6665) the 6% startup
+ * tier is 400 ticks of on-time, so the window is 40% of it and the
+ * comparator is live over [1.0, 2.5] us — which only just contains the
+ * pile-up peak. That tier is the first thing to check on the bench, and
+ * this is the single knob to sweep.
  */
-#	define COMP_BLANK_TICKS 80
+#	define COMP_BLANK_TICKS 160
 /* USART2 TX on PB3 @ 115200 — matches bootloader USE_DEBUG_UART (AM32-bootloader#60). */
 #	define USE_DEBUG_UART
 #	define USE_SERIAL_TELEMETRY
@@ -1317,6 +1336,10 @@
 #	define PHASE_B_COMP LL_COMP_INPUT_MINUS_IO1 // pa4
 #	define PHASE_A_COMP LL_COMP_INPUT_MINUS_IO1 // pa5
 
+/* Virtual neutral. B and C are on COMP1 and take it from PA1; A is on COMP2,
+ * whose IO1 is not PA1, so it takes it from PA3. PA1 and PA3 are the same
+ * SENS_COMMON net on the board, so all three phases share one reference -
+ * the differing IO index is a pin-mux artifact, not a second divider. */
 #	define PHASE_C_INPUT_PLUS LL_COMP_INPUT_PLUS_IO1 //pa1
 #	define PHASE_B_INPUT_PLUS LL_COMP_INPUT_PLUS_IO1 //pa1
 #	define PHASE_A_INPUT_PLUS LL_COMP_INPUT_PLUS_IO2 //pa3
