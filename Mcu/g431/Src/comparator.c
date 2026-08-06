@@ -89,6 +89,18 @@ void changeCompInput()
 	 * stuck-rotor at 5–6% (bench 2026-08). Only add hyst when the interval
 	 * is slow AND duty is already into a real drive (loaded start / prop),
 	 * where F051 is clean and BEMF is larger. Free-run crawl stays NONE.
+	 *
+	 * Turning hysteresis UP is a standing suggestion for the low-rpm noise
+	 * and it is the wrong direction on this part. DS13122 Rev 4 Table 73:
+	 * LL_COMP_HYSTERESIS_10MV is HYST = 1, which is 9 mV typical but up to
+	 * 16 mV, on top of an input offset of -9..+3 mV. The next step up
+	 * (HYST = 2) is 18 mV typical and up to 32 mV. Against a signal of
+	 * ~132 mV at 1000 rpm falling linearly with speed, code 1 already
+	 * consumes a worst-case 25 mV of the crawl budget - which is what the
+	 * 2026-08 bench saw as blocked edges and a latched stuck rotor. The
+	 * hysteresis knob is out of room here; noise has to be rejected in
+	 * time (ZC_SEARCH_BLANK_64THS, COMP_BLANK_TICKS) or the signal has to
+	 * be read with something that has a lower floor than the comparator.
 	 */
 	if (average_interval >= 400 && duty_cycle > 200) {
 		LL_COMP_SetInputHysteresis(COMP1, LL_COMP_HYSTERESIS_10MV);
