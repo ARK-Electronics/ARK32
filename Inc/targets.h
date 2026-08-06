@@ -99,6 +99,28 @@
  * this is the single knob to sweep.
  */
 #	define COMP_BLANK_TICKS 160
+/*
+ * Post-commutation search blank, in 64ths of the commutation interval. An
+ * edge before this is the freewheel demag clamp on the phase that was just
+ * released, not a crossing, so COMP1_2_3_IRQHandler discards it.
+ *
+ * 32 (= interval/2) is the historical value and the default; this exists to
+ * make it sweepable, because a longer software blank is the closest thing G4
+ * offers to the "run the comparator slow during startup" trick that other
+ * families get from a COMP power mode. G4 comparators are fixed ultra-fast
+ * and there is no speed/consumption field to trade away, so rejecting noise
+ * in TIME is the only remaining axis.
+ *
+ * There is a hard ceiling and it is worth knowing before turning this up.
+ * The schedule commutates waitTime = interval/2 - advance after a crossing,
+ * so the NEXT crossing is due at interval/2 + advance, i.e. (32 + advance)
+ * 64ths after commutation. auto_advance runs 13..23, putting the expected
+ * crossing at 45..55/64. A blank past ~40 starts eating the margin at the
+ * low-advance end, and past 45 it rejects the crossing it is waiting for.
+ * Raise this only with bench data, and only against the advance schedule
+ * actually in use.
+ */
+#	define ZC_SEARCH_BLANK_64THS 32
 /* USART2 TX on PB3 @ 115200 — matches bootloader USE_DEBUG_UART (AM32-bootloader#60). */
 #	define USE_DEBUG_UART
 #	define USE_SERIAL_TELEMETRY
@@ -2674,6 +2696,19 @@
 #ifndef NOMINAL_PWM
 // use a nominal PWM for commutation via TIM1 of 24kHz
 #	define NOMINAL_PWM 24000U
+#endif
+
+#ifndef ZC_SEARCH_BLANK_64THS
+// half the commutation interval - the long-standing post-commutation blank
+#	define ZC_SEARCH_BLANK_64THS 32
+#endif
+// 64ths of the interval. The default is spelled as the shift it replaces so
+// that leaving the knob alone is provably a no-op - and so the general form's
+// intermediate product cannot overflow on an interval it never sees anyway.
+#if ZC_SEARCH_BLANK_64THS == 32
+#	define ZC_SEARCH_BLANK(interval) ((interval) >> 1)
+#else
+#	define ZC_SEARCH_BLANK(interval) (((uint32_t)(interval) * ZC_SEARCH_BLANK_64THS) >> 6)
 #endif
 
 #ifndef TIM1_AUTORELOAD
