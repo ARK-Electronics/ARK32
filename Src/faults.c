@@ -42,6 +42,23 @@ static uint8_t acq_fail_desyncs;
 /* "Start resisted" counter (see the declaration in faults.h). */
 volatile uint8_t fault_acq_resist_events;
 
+#if defined(MCU_G431)
+/*
+ * ARK 12S CAN acquisition grace budget (see faultUpdateBemfTimeoutPolicy).
+ * Sized above one startup-matrix start segment (3.0 s of continuous
+ * throttle) so a tier that never acquires is still measured, while any
+ * genuinely locked rotor latches once the budget runs out. Throttle
+ * returns to zero between starts, which rearms the full budget.
+ * Clocked in faultDesyncEpisodeTick1kHz.
+ */
+#	define ACQ_GRACE_MS_MAX 4000u
+/* Above this, acquisition should be near instant; a jam here is the
+ * dangerous case, so it gets no grace at all. Well above the 447 seen at
+ * the matrix's top 20% tier. */
+#	define ACQ_GRACE_MAX_INPUT 1000
+static uint16_t acq_grace_ms;
+#endif
+
 #if defined(USE_DRV_NFAULT)
 /* Sticky until nFAULT releases; keeps FAULT_STUCK if bemf latch is cleared
  * by the zero-throttle path while the DRV is still asserting. */
@@ -254,14 +271,21 @@ void faultUpdateBemfTimeoutPolicy(void)
 	 * not show this with the same shared rails. Forgive acquisition-only
 	 * stalls; keep the counter once the loop is established (zc > 100).
 	 *
-	 * Throttle-gated on purpose: a truly locked rotor never reaches
-	 * zc >= 100, so an ungated clear would disable stuck_rotor entirely
-	 * during acquisition and let a jammed 12S prop re-kick forever. All
-	 * observed free-run thrash sits in the 5-20% tiers (input ~100-400),
-	 * so 400 covers the bench cases and matches the bemf_timeout budget
-	 * below. Above it, the stock latch still arms.
+	 * Time-bounded on purpose. A truly locked rotor never reaches
+	 * zc >= 100, so an unbounded clear disables stuck_rotor entirely
+	 * during acquisition -- and, because ESC_STUCK_LATCH is itself carried
+	 * in bemf_timeout_happened, silently wipes an already-latched stuck
+	 * fault too (bench 2026-08: 16 FAULT_STUCK entries that all recovered
+	 * within one tick). A jammed 12S prop would re-kick forever.
+	 *
+	 * A plain throttle gate does not work either: it has to sit above the
+	 * highest tier being characterized, and the startup matrix reaches
+	 * input 447 at its 20% tier, so any threshold low enough to be useful
+	 * lands mid-sweep. Bound the grace in time instead -- start attempts
+	 * are short and separated by zero throttle, a jam is continuous.
 	 */
-	if (zero_crosses < 100 && adjusted_input < 400) {
+	if (zero_crosses < 100 && acq_grace_ms < ACQ_GRACE_MS_MAX &&
+	    adjusted_input < ACQ_GRACE_MAX_INPUT) {
 		bemf_timeout_happened = 0;
 	}
 #	endif
@@ -468,6 +492,15 @@ void faultDesyncEpisodeTick1kHz(void)
 	if (zero_crosses > ACQ_FAIL_CLEAR_ZC) {
 		acq_fail_desyncs = 0;
 	}
+#	if defined(MCU_G431)
+	/* Acquisition grace clock. Runs only while throttle is commanded and
+	 * the loop has not established; pilot cut or a real acquire rearms it. */
+	if (zero_crosses >= 100 || adjusted_input == 0) {
+		acq_grace_ms = 0;
+	} else if (acq_grace_ms < ACQ_GRACE_MS_MAX) {
+		acq_grace_ms++;
+	}
+#	endif
 	if (desync_restart_holdoff_ms > 0) {
 		desync_restart_holdoff_ms--;
 	}
