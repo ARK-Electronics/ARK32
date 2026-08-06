@@ -491,14 +491,32 @@ void setInput()
 	if (!old_routine && running && zero_crosses > 150 && duty_cycle_setpoint > gov_duty_ceiling) {
 		duty_cycle_setpoint = gov_duty_ceiling;
 	}
+#	ifndef AB_NO_BLIND_DUTY_CUT
 	uint8_t zc_untrusted_steps = zc_blind_steps;
 	if (zc_demag_run > zc_untrusted_steps) {
 		zc_untrusted_steps = zc_demag_run;
 	}
+#	endif
 	// zc_grind_hold_ms keeps the cut engaged through a blind-grind (faults.c):
 	// without it a single accepted crossing resets zc_blind_steps, the cap
 	// releases, and duty re-slews into the next spike (bench: 102 A limit
 	// cycle at 19.5% miss rate, pr48-snap-rail-1).
+	/*
+	 * AB_NO_BLIND_DUTY_CUT: leave duty alone on untrusted steps.
+	 *
+	 * This is the switch that makes the other two legible. The cut fires at
+	 * two untrusted steps, which is far below where the miss rail trips, so
+	 * with it in place a build with AB_NO_MISS_RAIL still chops throttle to
+	 * 250/500 on every burst of misses - and "throttle keeps cutting but the
+	 * ESC no longer restarts" is hard to tell from "nothing changed" on a
+	 * bench. Removing all three is the closest this tree gets to upstream's
+	 * behaviour of riding out a bad patch at commanded throttle.
+	 *
+	 * It is also the switch with the most protection behind it: on boards
+	 * without a VDS trip this cap is what bounds energy into a possibly
+	 * wrong phase. Bench only.
+	 */
+#	ifndef AB_NO_BLIND_DUTY_CUT
 	if (!old_routine && running && (zc_untrusted_steps >= 2 || zc_grind_hold_ms)) {
 		/* Fixed protective cut — do NOT raise the floor with EEPROM
 		 * min_startup_duty / startup power. A misconfigured high
@@ -514,6 +532,7 @@ void setInput()
 			last_duty_cycle = blind_cap;
 		}
 	}
+#	endif /* !AB_NO_BLIND_DUTY_CUT */
 #endif
 }
 

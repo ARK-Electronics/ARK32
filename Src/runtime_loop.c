@@ -499,6 +499,19 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 			ceiling = gov_release_ceil;
 		}
 	}
+#	ifdef AB_NO_GOVERNOR
+	/*
+	 * Hold full authority. Everything above still runs - the slope
+	 * estimator, the confidence counter, the latch/un-latch bookkeeping
+	 * and gov_unlatch_count - so the governor's own view of the motor
+	 * stays observable; only its authority over duty is removed. Overriding
+	 * here rather than skipping the block also covers the soft-release
+	 * path, which would otherwise keep capping on the way back up. 2000 is
+	 * the setpoint's own maximum, so the comparison in control_loop.c can
+	 * never bind.
+	 */
+	ceiling = 2000;
+#	endif
 	gov_duty_ceiling = ceiling;
 }
 #endif /* !BRUSHED_MODE */

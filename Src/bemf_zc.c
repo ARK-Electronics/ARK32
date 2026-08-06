@@ -126,7 +126,29 @@ RAM_FUNC void PeriodElapsedCallback()
 		// Deadline firing, not a commutation scheduled by an accepted
 		// zero-cross (interruptRoutine cancels the deadline first).
 		zc_deadline_armed = 0;
+		/*
+		 * AB_NO_MISS_RAIL: drop the miss-RATE half of this test and keep
+		 * the consecutive half. The bucket keeps counting either way, so
+		 * anything watching it still sees the rate; only the restart is
+		 * removed.
+		 *
+		 * Worth knowing what the threshold actually is before deciding
+		 * whether removing it is reasonable. The bucket gains
+		 * ZC_MISS_BUCKET_INC (3) per blind step and drains 1 per accepted
+		 * crossing, so at miss fraction f it moves by 4f - 1 per
+		 * commutation: it drains to zero below a 25% miss rate and climbs
+		 * to the limit above it. That is a cliff with no hysteresis - one
+		 * side runs indefinitely, the other restarts indefinitely, and an
+		 * article whose demag rate sits near 25% oscillates across it.
+		 * Whether a sustained 25%+ miss rate is better served by blind
+		 * stepping (upstream keeps flying, degraded) or by a restart is
+		 * exactly what this switch exists to measure.
+		 */
+#ifdef AB_NO_MISS_RAIL
+		if (zc_blind_steps >= ZC_BLIND_STEP_LIMIT) {
+#else
 		if (zc_blind_steps >= ZC_BLIND_STEP_LIMIT || zc_miss_bucket >= ZC_MISS_BUCKET_LIMIT) {
+#endif
 			// Position unknown for too long (consecutively or as a
 			// sustained miss rate): stop stepping blind. Kick the
 			// INTERVAL_TIMER past the 45000 stall threshold so the
