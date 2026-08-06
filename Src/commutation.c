@@ -95,8 +95,7 @@ RAM_FUNC void commutate()
 #	if defined(MCU_G431)
 	/* Re-enter poll more readily during acquisition after stall/desync.
 	 * Mask COMP IRQs so interrupt-ZC and poll-ZC cannot fight. */
-	if (zero_crosses < 100 &&
-	    (average_interval > polling_mode_changeover + 500 || zero_crosses < 40)) {
+	if (zero_crosses < 100 && (average_interval > polling_mode_changeover + 500 || zero_crosses < 40)) {
 		if (!old_routine) {
 			maskPhaseInterrupts();
 		}
