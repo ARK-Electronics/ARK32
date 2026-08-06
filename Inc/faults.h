@@ -60,8 +60,9 @@ void faultHandleBemfIntervalStall(void);
  * stays off until the fault path clears.
  *
  * charge kinds: jump-check desync, stall-rail trip of an established run
- * (zero_crosses > 100; includes the blind/miss limit handoff, which always
- * follows an established closed loop), and future demag-late saturation.
+ * (zero_crosses > 100; includes the dead-reckoning budget handoff in
+ * bemf_zc.c, which always follows an established closed loop), and future
+ * demag-late saturation.
  */
 typedef enum {
 	DESYNC_EPISODE_JUMP = 0,
