@@ -284,8 +284,7 @@ void faultUpdateBemfTimeoutPolicy(void)
 	 * lands mid-sweep. Bound the grace in time instead -- start attempts
 	 * are short and separated by zero throttle, a jam is continuous.
 	 */
-	if (zero_crosses < 100 && acq_grace_ms < ACQ_GRACE_MS_MAX &&
-	    adjusted_input < ACQ_GRACE_MAX_INPUT) {
+	if (zero_crosses < 100 && acq_grace_ms < ACQ_GRACE_MS_MAX && adjusted_input < ACQ_GRACE_MAX_INPUT) {
 		bemf_timeout_happened = 0;
 	}
 #	endif
