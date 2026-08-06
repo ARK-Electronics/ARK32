@@ -91,7 +91,7 @@ void DMA1_Channel1_IRQHandler(void)
 
 void COMP1_2_3_IRQHandler(void)
 {
-	if (INTERVAL_TIMER->CNT > (commutation_interval >> 1)) {
+	if (INTERVAL_TIMER->CNT > ZC_SEARCH_BLANK(commutation_interval)) {
 		interrupt++;
 		if (LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_22)) {
 			LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_22);
