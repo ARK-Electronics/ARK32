@@ -195,7 +195,7 @@ void faultUpdateBemfTimeoutPolicy(void)
  * mechanically resisted (grass, debris) as mis-tuned, and duty is
  * near-always slewing during a start, so there is no signal here that
  * separates the two - see faultDesyncEpisodeCharge. Established-run rails
- * (blind/grind/stall) still need zero_crosses > 100 and only engage once
+ * (dead-reckoning budget / stall) still need zero_crosses > 100 and only engage once
  * the loop actually gets past that gate.
  *
  * This constant is a starting point from SITL and wants bench calibration

@@ -52,8 +52,8 @@ void faultHandleBemfIntervalStall(void);
 /*
  * Episode-level desync rail (leaky bucket across restart cycles).
  *
- * Single desync episodes are already bounded (blind-step cap, miss bucket,
- * demag-late power cut). A bad EEPROM tune can still loop forever:
+ * Single desync episodes are already bounded (the dead-reckoning budget in
+ * bemf_zc.c and the demag-late authority fade). A bad EEPROM tune can still loop forever:
  * restart → spool → desync spike → restart. Each episode charges this
  * bucket; healthy closed-loop time drains it; zero throttle (pilot
  * intervention) clears it. At the limit, latch ESC_FAULT_STUCK so drive
@@ -76,8 +76,8 @@ void faultDesyncEpisodeCharge(desync_episode_kind_t kind);
  *
  * Every other rail in the ZC path is gated on an ESTABLISHED loop: the
  * blind-step deadline needs zero_crosses >= 100 (bemf_zc.c), the BEMF
- * headroom governor needs > 150 (runtime_loop.c), the grind detector and
- * miss bucket both need blind steps to exist at all, and the episode charge
+ * headroom governor needs > 150 (runtime_loop.c), the dead-reckoning budget
+ * needs blind steps to exist at all, and the episode charge
  * itself needs zc_at_desync > 100 (runtimeProcessDesyncCheck). A loop that
  * desyncs BEFORE acquisition completes therefore accumulates no state
  * anywhere - it restarts, reaches zc 20..50, desyncs, and repeats
@@ -110,8 +110,8 @@ uint8_t faultDesyncRestartHoldoffActive(void);
  * Cleared with desync_happened on the armed 0->1 edge (see
  * faultErrorCountReset()).
  *
- * volatile: read from the main loop (telemetry) while the grind rail that
- * forces this trip runs in tenKhzRoutine (ISR context).
+ * volatile: read from the main loop (telemetry) while the ZC path that
+ * forces this trip runs in ISR context.
  */
 extern volatile uint32_t fault_stall_trips;
 
@@ -151,9 +151,8 @@ extern volatile uint8_t fault_acq_resist_events;
  *
  * Deliberately NOT additional addends, because each already funnels into the
  * stall rail and would double-count one physical failure:
- *   - blind-grind rail (faultDesyncEpisodeTick1kHz) kicks INTERVAL_TIMER to
- *     46000 so the stall rail is guaranteed to trip on the next main pass
- *   - blind-step / miss-bucket limit (bemf_zc.c) hands off the same way
+ *   - the dead-reckoning budget (bemf_zc.c) kicks INTERVAL_TIMER past
+ *     BEMF_STALL_TICKS so the stall rail trips on the next main pass
  *   - the episode-rail latch is a CONSEQUENCE of accumulating the above, and
  *     is a state (ESC_FAULT_STUCK), not an independent event
  * Attribution between those sub-causes belongs in the AM32-reserved FlexDebug

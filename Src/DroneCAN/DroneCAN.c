@@ -1031,8 +1031,8 @@ static void send_ESCStatus(void)
 	/* Hard-error events this arm cycle (DSDL: resets when the motor
 	 * restarts; both addends zeroed on armed 0->1). Was desync_happened
 	 * alone, which missed every run killed by the stall rail (and so also
-	 * the blind-grind and blind/miss-limit paths that funnel into it) - a
-	 * grinding motor reported error_count 0. See faultErrorCount(). */
+	 * the dead-reckoning budget handoff that funnels into it) - a grinding
+	 * motor reported error_count 0. See faultErrorCount(). */
 	pkt.error_count = faultErrorCount();
 	pkt.voltage = battery_voltage * 0.01;
 

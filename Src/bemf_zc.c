@@ -143,6 +143,16 @@ RAM_FUNC void PeriodElapsedCallback()
 		if (elapsed > 65535u) {
 			elapsed = 65535u;
 		}
+		/*
+		 * Not atomic on Cortex-M0, and does not need to be: the only other
+		 * writer is the clear in interruptRoutine, and maskPhaseInterrupts()
+		 * three lines up has already shut the comparator EXTI off - so no
+		 * accepted crossing can land between this load and its store. The
+		 * remaining concurrent access is the read in setInput (DShot ISR on
+		 * F051), which can see the pre-increment value for one frame; that
+		 * is a monotone counter read one update late, and it costs at most
+		 * one frame of slightly-too-generous duty authority.
+		 */
 		zc_blind_ticks += elapsed; // extrapolated time, cleared by a real crossing
 		lastzctime = thiszctime;
 		thiszctime = (uint16_t)elapsed;
@@ -347,16 +357,15 @@ RAM_FUNC void interruptRoutine()
 	// mistimed lock (bench 2026-07-22: ~30% slow at 8-10x current on ~1/3
 	// of warm snap starts, 100% of hot ones; never self-heals; invisible
 	// to the desync jump check and the trust rail because the interval is
-	// steady and fast-looking). Charge the miss bucket and let the
-	// consecutive counter drive the same power cut as blind steps
-	// (control_loop): less current shortens demag, the pre-level dwell
-	// reappears and the loop re-times itself - the firmware equivalent of
-	// the throttle-blip escape verified on the bench. Sustained demag-late
-	// accepts escalate to the stall rail exactly like a sustained miss
-	// rate. Gated to CI > 500 (250 us+), where the healthy pre-level dwell
-	// spans many main-loop passes so the sampler cannot miss it.
+	// steady and fast-looking). Count the consecutive run and let it fade
+	// duty authority (control_loop): less current shortens demag, the
+	// pre-level dwell reappears and the loop re-times itself - the firmware
+	// equivalent of the throttle-blip escape verified on the bench. Gated to
+	// CI > 500 (250 us+), where the healthy pre-level dwell spans many
+	// main-loop passes so the sampler cannot miss it.
 	//
-	// The response is the power cut ONLY - no miss-bucket charge, no stall
+	// The response is the authority fade ONLY - a demag-late crossing still
+	// clears the dead-reckoning budget, so it can never reach the stall
 	// rail. Normal spool-up under load is genuinely demag-late for long
 	// stretches (high slip current), so any restart escalation turns every
 	// hard start into a kick loop (bench: 2-3 restarts and ~10 desyncs per

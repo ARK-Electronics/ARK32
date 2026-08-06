@@ -328,7 +328,7 @@ void runtimeSendTelemetryIfNeeded(void)
  * is observable every loop and load bias errs conservative (lower gain ->
  * lower ceiling). A misconfigured KV byte is exactly the failure class
  * this protects against, so it must not be an input. The estimator only
- * samples in trusted steady state (slew settled, no blind/demag/grind,
+ * samples in trusted steady state (slew settled, no blind/demag time,
  * NOT riding the ceiling - riding it would drag the estimate down and
  * under-spool), and the ceiling only arms after GOV_CONF_ARM eligible
  * samples (~0.3 s cumulative steady running per power-up).
