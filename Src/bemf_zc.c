@@ -359,6 +359,20 @@ RAM_FUNC void interruptRoutine()
 #else
 	bemfZcAcceptCrossing(0);
 #endif
+	/*
+	 * Stays here rather than inside bemfZcAcceptCrossing:
+	 * HWCI_PERF_ZC_PHASE_CAPTURE() declares a local at the top of this
+	 * function that COMMIT consumes, so the pair cannot straddle a
+	 * function boundary. Position is unchanged either way - the accept
+	 * path's last act is __enable_irq(), and this still follows it.
+	 *
+	 * It also belongs to the comparator specifically. The histogram bins
+	 * the PWM phase at which an edge arrived, which is a property of an
+	 * asynchronous comparator edge. An ADC-detected crossing is always
+	 * registered at the same point in the period by construction, so it
+	 * has no phase to bin and deliberately does not record one.
+	 */
+	HWCI_PERF_ZC_PHASE_COMMIT(); // accepted edge: bin its PWM phase
 }
 
 /*
@@ -438,7 +452,6 @@ RAM_FUNC void bemfZcAcceptCrossing(uint16_t zc_grid_comp)
 	SET_INTERVAL_TIMER_COUNT(0);
 	SET_AND_ENABLE_COM_INT(waitTime + 1); // enable COM_TIMER interrupt
 	__enable_irq();
-	HWCI_PERF_ZC_PHASE_COMMIT(); // accepted edge: bin its PWM phase
 }
 
 void bemfZcResetTrend(void)
