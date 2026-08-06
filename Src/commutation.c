@@ -218,8 +218,5 @@ void zcfoundroutine()
 		// history yet and must not read as demag-late.
 		zc_pre_seen = 1;
 		zc_demag_run = 0;
-		// lastzctime/thiszctime carry no measurement of this run, so the
-		// first two intervals of it must not be compared against them.
-		zc_alt_run = 0;
 	}
 }

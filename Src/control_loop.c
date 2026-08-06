@@ -505,7 +505,7 @@ void setInput()
 	 * at low rpm (each blind step is a longer slice of the budget) than at
 	 * high rpm, which is the right way round.
 	 */
-	if (!old_routine && running && (zc_blind_ticks || zc_demag_run || zc_alt_run >= ZC_ALT_RUN_MIN)) {
+	if (!old_routine && running && (zc_blind_ticks || zc_demag_run)) {
 		/* Scale the commanded duty by remaining confidence rather than
 		 * clamping to a fixed ceiling: no full-scale constant, and the
 		 * reduction is proportional to what was actually asked for.
@@ -530,36 +530,30 @@ void setInput()
 		}
 		stale += demag;
 		/*
-		 * Wrong-phase lock (bemf_zc.c). Crossings are arriving in
-		 * abundance, so zc_blind_ticks and zc_demag_run are both ZERO
-		 * here and the fade above reads full confidence while the loop
-		 * commutates at twice the true rate - that is exactly how the
-		 * grind kept full duty authority on the bench.
+		 * NO WRONG-PHASE LOCK TERM HERE, and the reason is worth keeping.
 		 *
-		 * Charged as a flat slice of the budget per alternation rather
-		 * than scaled by commutation_interval like demag: the interval
-		 * estimate is precisely the quantity this failure corrupts (it
-		 * collapsed to 32-145 in every captured episode), so scaling by
-		 * it would make the response weakest where the lock is deepest.
-		 * A sixteenth of the budget each reaches the floor eight
-		 * alternations past the threshold, ~1-2 ms at the accepted-edge
-		 * rates measured during a grind (5-15k/s).
+		 * A detector for the self-excited lock was built on the interval
+		 * ALTERNATION it shows (a hard 2:1 in every grind capture) and was
+		 * wired into this fade. Bench baselining refuted it outright: the
+		 * same alternation is normal low-duty behaviour on this hardware,
+		 * and it is stronger when healthy than when broken - 84-100% of
+		 * consecutive pairs at duty 112-176 while running perfectly well,
+		 * against 54-70% during an actual grind. It is anti-correlated with
+		 * the fault. Wired to a fade it killed healthy low-throttle runs,
+		 * which is what startup is.
 		 *
-		 * Floored at half the budget for the same reason as demag: the
-		 * one benign way to sustain an alternation is missing every
-		 * other crossing, which warrants a current reduction but not a
-		 * stop. Reduced current is itself the recovery here - it starves
-		 * the wrong-phase lock and shortens demag - so the fade only has
-		 * to break the lock, not halt the motor. If crossings do stop
-		 * arriving, the dead-reckoning budget takes over as before.
+		 * That failure is now handled where it can be seen for what it is:
+		 * the impossible-eRPM rail in runtime_loop.c compares reported eRPM
+		 * against what the applied duty can physically produce, using the
+		 * governor's own learned duty-per-eRPM slope. Healthy 0.73-1.11,
+		 * grind 7.42-9.25 - a real separation instead of an overlap.
+		 *
+		 * The lesson for anything added here later: a candidate must be
+		 * checked against HEALTHY captures before it is believed, not only
+		 * against captures of the fault. Both detectors that failed on this
+		 * problem fired on the fault correctly and were never asked whether
+		 * they stayed quiet otherwise.
 		 */
-		if (zc_alt_run >= ZC_ALT_RUN_MIN) {
-			uint32_t alt = (uint32_t)(zc_alt_run - ZC_ALT_RUN_MIN + 1u) * (BEMF_STALL_TICKS / 16u);
-			if (alt > BEMF_STALL_TICKS / 2u) {
-				alt = BEMF_STALL_TICKS / 2u;
-			}
-			stale += alt;
-		}
 		const uint32_t confidence = (stale < BEMF_STALL_TICKS) ? (BEMF_STALL_TICKS - stale) : 0u;
 		const uint32_t allowed = ((uint32_t)duty_cycle_setpoint * confidence) / BEMF_STALL_TICKS;
 		if (duty_cycle_setpoint > allowed) {

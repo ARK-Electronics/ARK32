@@ -355,10 +355,83 @@ void runtimeSendTelemetryIfNeeded(void)
  * 8 ≈ 0.4 %/ms → full authority in ≤250 ms instead of a single-tick step. */
 #	define GOV_RELEASE_SLEW 8
 
+/*
+ * IMPOSSIBLE-eRPM RAIL - the wrong-phase / self-excited lock detector.
+ *
+ * A rotor cannot turn faster than the applied volts allow. gov_slope_q10 is
+ * already the measured duty-per-eRPM of THIS article at equilibrium, so
+ * (erpm * gov_slope_q10) >> 10 is "the duty this eRPM implies" - the same
+ * expression the ceiling below uses, read the other way round. If the loop
+ * reports an eRPM that would need several times the duty actually applied,
+ * the loop is not measuring the rotor.
+ *
+ * WHY THIS REFERENCE AND NOT THE OTHERS. Three previous attempts at this
+ * failure keyed their threshold on the interval estimate - the jump check on
+ * average_interval, a minimum-interval gate on commutation_interval, and an
+ * interval-alternation detector. All three derive from the quantity the
+ * failure corrupts, so they disarm themselves exactly as the lock deepens
+ * (measured: ci 719 -> 52 with the gate tracking it down 179 -> 13). Duty is
+ * commanded, not measured, and the slope is learned only while running
+ * clean, so neither moves when the timing collapses.
+ *
+ * Bench separation, three sessions on an ARK 4IN1 / AOS 2207 1980KV / 6S,
+ * 27 healthy windows spanning duty 80-1072 against 3 captured grinds:
+ *
+ *     healthy   ratio 0.73 - 1.11
+ *     grind     ratio 7.42 - 9.25
+ *
+ * The ratio is scale-invariant: e_rpm's units cancel between the estimator
+ * and this check, so it does not matter that e_rpm is scaled differently in
+ * open loop. Separation holds at 6.7x for every slope the estimator could
+ * plausibly settle on (4-9), which is why the margin can be set well clear
+ * of both edges instead of tuned.
+ *
+ * NOT keyed on eeprom motor_kv, deliberately. A safety rail that silently
+ * disarms when a user misconfigures KV is worse than no rail, and BLHeli_32
+ * needs no KV setting at all - the relationship is measurable, so measure it.
+ *
+ * The response is upstream's, not a new policy: mask the comparator and kick
+ * INTERVAL_TIMER past the stall threshold, which is exactly what the
+ * dead-reckoning budget does when position is genuinely unknown (bemf_zc.c).
+ * faultHandleBemfIntervalStall then runs on the next main-loop pass.
+ *
+ * MARGIN. Measured per accepted crossing across 15 healthy windows spanning
+ * duty 96-1072, against captured grinds:
+ *
+ *     healthy   window median 0.80 - 1.12   (per-event p99 1.50, max 1.60)
+ *     grind     window median 2.48 at duty 464; 7.42 - 9.25 at duty ~144
+ *
+ * A grind is a far smaller MULTIPLE at high duty than at low duty, because
+ * the ceiling it is compared against is higher. The first cut of this rail
+ * used 3, calibrated on low-duty grinds only, and sailed straight past a
+ * duty-464 grind sitting at 2.08. e_rpm derives from e_com_time, a sum of six
+ * commutations, so the 1 kHz tick sees the window MEDIAN rather than the
+ * per-event spread; 2 clears healthy by 78% and still catches 2.48.
+ *
+ * WHY THE REFERENCE IS A DECAYING PEAK AND NOT duty. On a hard throttle chop
+ * duty falls in one tick while the prop coasts, so a still-high eRPM is
+ * compared against a collapsed duty and the ratio spikes for as long as the
+ * rotor takes to slow - hundreds of ms. That would trip a 4 ms hysteresis on
+ * every chop. It is invisible in 3-second capture windows, which is how the
+ * first cut shipped without it being noticed. gov_duty_ref rises instantly
+ * with duty and decays ~1.5%/ms, so a chop leaves the reference high and the
+ * ratio near 1, while a steady-duty grind is unaffected - the whole spike is
+ * duty falling, not eRPM rising.
+ */
+#	define GOV_IMPLAUSIBLE_MARGIN 2u /* implied duty vs reference; 1.12 .. 2.48 */
+#	define GOV_IMPLAUSIBLE_MS 4u	  /* consecutive 1 kHz ticks before tripping  */
+#	define GOV_DUTY_REF_DECAY 6u	  /* >>6 per 1 kHz tick: ~1.5%/ms, ~64 ms tau */
+
 static uint16_t gov_prev_erpm;
 /* Test inject: while >0, freeze estimator and treat as ceiling-limited so the
  * un-latch window can complete without a desync/re-seed race (SITL/HWCI). */
 static uint16_t gov_force_hold_ms;
+/* Consecutive 1 kHz ticks the reported eRPM has been physically impossible
+ * for the applied duty. See GOV_IMPLAUSIBLE_MARGIN. */
+static uint8_t gov_implausible_ms;
+/* Slow-decaying peak of applied duty - the reference the rail compares
+ * against, so a throttle chop cannot masquerade as an impossible eRPM. */
+static uint16_t gov_duty_ref;
 
 static void runtimeGovClearState(void)
 {
@@ -369,6 +442,8 @@ static void runtimeGovClearState(void)
 	gov_release_ceil = 0;
 	gov_force_hold_ms = 0;
 	gov_duty_ceiling = 2000;
+	gov_duty_ref = 0;
+	gov_implausible_ms = 0;
 }
 
 __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
@@ -516,6 +591,32 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 	ceiling = 2000;
 #	endif
 	gov_duty_ceiling = ceiling;
+
+	/* Impossible-eRPM rail (see GOV_IMPLAUSIBLE_MARGIN above). Runs only
+	 * once the slope estimator is confident, which is the same gate the
+	 * ceiling uses - an unlearned slope would compare against nothing. */
+	if (duty > gov_duty_ref) {
+		gov_duty_ref = (uint16_t)duty;
+	} else {
+		gov_duty_ref -= gov_duty_ref >> GOV_DUTY_REF_DECAY;
+	}
+	if (closed && gov_conf >= GOV_CONF_ARM && gov_duty_ref > 0 &&
+	    ((erpm * gov_slope_q10) >> 10) > (uint32_t)gov_duty_ref * GOV_IMPLAUSIBLE_MARGIN) {
+		if (gov_implausible_ms < GOV_IMPLAUSIBLE_MS) {
+			gov_implausible_ms++;
+		}
+	} else {
+		gov_implausible_ms = 0;
+	}
+	if (gov_implausible_ms >= GOV_IMPLAUSIBLE_MS) {
+		gov_implausible_ms = 0;
+		/* Position is not being measured. Hand off exactly as the
+		 * dead-reckoning budget does: with the comparator masked
+		 * nothing can reset INTERVAL_TIMER before the main loop's
+		 * stall rail sees it. */
+		maskPhaseInterrupts();
+		SET_INTERVAL_TIMER_COUNT(BEMF_STALL_TICKS + 1000u);
+	}
 }
 #endif /* !BRUSHED_MODE */
 

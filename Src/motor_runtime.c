@@ -54,7 +54,6 @@ volatile uint32_t zc_blind_ticks = 0;
 volatile uint8_t zc_pre_seen = 0;
 volatile uint8_t zc_demag_run = 0;
 volatile uint32_t zc_demag_accepts = 0;
-volatile uint8_t zc_alt_run = 0;
 volatile uint8_t ramp_divider;
 volatile uint8_t max_ramp_startup = RAMP_SPEED_STARTUP;
 volatile uint8_t max_ramp_low_rpm = RAMP_SPEED_LOW_RPM;

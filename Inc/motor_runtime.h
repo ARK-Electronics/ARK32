@@ -57,12 +57,6 @@ extern volatile uint8_t zc_pre_seen;
 extern volatile uint8_t zc_demag_run;
 extern volatile uint32_t zc_demag_accepts;
 /*
- * Consecutive alternations of the measured commutation interval - the
- * signature of a wrong-phase lock. See the block comment above the detector
- * in bemf_zc.c for why this is the only test that can see that state.
- */
-extern volatile uint8_t zc_alt_run;
-/*
  * INTERVAL_TIMER ticks of dead reckoning since the rotor last reported its
  * position. Blind steps add their extrapolated interval, an accepted crossing
  * clears it (a demag-late one charges an interval instead - see bemf_zc.c).
@@ -76,14 +70,6 @@ extern volatile uint32_t zc_blind_ticks;
  * restart threshold in the ZC path; faults.c owns the rail itself.
  */
 #define BEMF_STALL_TICKS 45000u
-/*
- * Consecutive interval alternations before the wrong-phase lock detector
- * charges the position-confidence fade. One alternation is what a single
- * missed crossing produces (T, 2T, 0.5T) and is legitimate; the bench
- * captures of an actual grind ran to sixteen and beyond, so four is well
- * clear of the benign case without waiting on the pathological one.
- */
-#define ZC_ALT_RUN_MIN 4u
 extern uint8_t filter_level;
 extern uint8_t bad_count;
 extern uint8_t bad_count_threshold;

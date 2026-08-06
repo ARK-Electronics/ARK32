@@ -127,6 +127,12 @@ def main() -> int:
                     help="poll until frozen, print, re-arm, repeat")
     ap.add_argument("--arm", action="store_true",
                     help="just re-arm the trace and exit")
+    ap.add_argument("--live", type=float, metavar="SECONDS", default=None,
+                    help="stay attached and dump the ring every SECONDS "
+                         "whether or not it froze. This is the mode for "
+                         "characterising HEALTHY running: --watch only ever "
+                         "prints on a trigger, and the arm/drive/read flow "
+                         "needs the session dropped while you drive.")
     ap.add_argument("--out", default="zc_trace.log",
                     help="append every capture here as well as printing it; "
                          "--watch re-arms after each freeze, so without this "
@@ -199,6 +205,26 @@ def main() -> int:
         if args.arm:
             rearm()
             print("re-armed")
+            return 0
+
+        if args.live is not None:
+            print(f"PASSIVE - drive by hand. Dumping every {args.live}s. "
+                  "Ctrl-C to stop.")
+            rearm(verify=False)
+            n = 0
+            try:
+                while True:
+                    time.sleep(args.live)
+                    tr = read_trace(dbg, sym.address, sym.size)
+                    n += 1
+                    print(f"\n=== dump {n} "
+                          f"({'FROZEN - detector armed' if tr['frozen'] else 'live'}) ===")
+                    show(tr, args.out)
+                    # Always re-arm: frozen or not, the next dump should be a
+                    # fresh window rather than the same wrapped ring.
+                    rearm(verify=False)
+            except KeyboardInterrupt:
+                print(f"\nstopped after {n} dumps")
             return 0
 
         if not args.watch:
