@@ -79,7 +79,7 @@ void SystemClock_Config(void)
 		;
 
 #ifdef USE_HSE
-	// setup to use HSE
+		// setup to use HSE
 #	if defined(USE_HSE_BYPASS) && (USE_HSE_BYPASS == 0)
 	LL_RCC_HSE_DisableBypass(); // Use crystal mode
 #	else
@@ -160,8 +160,9 @@ void MX_COMP1_Init(void)
 	/* Default none; changeCompInput() enables 10 mV when slow+loaded. */
 	COMP_InitStruct.InputHysteresis = LL_COMP_HYSTERESIS_NONE;
 	COMP_InitStruct.OutputPolarity = LL_COMP_OUTPUTPOL_NONINVERTED;
-	/* Gate the turn-on switching transient (see COMP_BLANK_TICKS). */
-	COMP_InitStruct.OutputBlankingSource = LL_COMP_BLANKINGSRC_TIM1_OC5_COMP1;
+	/* Default none; changeCompInput() arms TIM1 OC5 blanking on the steps
+	 * where it is safe (falling BEMF only — see the comment there). */
+	COMP_InitStruct.OutputBlankingSource = LL_COMP_BLANKINGSRC_NONE;
 	LL_COMP_Init(COMP1, &COMP_InitStruct);
 	__IO uint32_t wait_loop_index = 0;
 	wait_loop_index = (LL_COMP_DELAY_VOLTAGE_SCALER_STAB_US * (SystemCoreClock / (1000000 * 2)));
@@ -193,8 +194,9 @@ void MX_COMP2_Init(void)
 	/* Default none; changeCompInput() enables 10 mV when slow+loaded. */
 	COMP_InitStruct.InputHysteresis = LL_COMP_HYSTERESIS_NONE;
 	COMP_InitStruct.OutputPolarity = LL_COMP_OUTPUTPOL_NONINVERTED;
-	/* Gate the turn-on switching transient (see COMP_BLANK_TICKS). */
-	COMP_InitStruct.OutputBlankingSource = LL_COMP_BLANKINGSRC_TIM1_OC5_COMP2;
+	/* Default none; changeCompInput() arms TIM1 OC5 blanking on the steps
+	 * where it is safe (falling BEMF only — see the comment there). */
+	COMP_InitStruct.OutputBlankingSource = LL_COMP_BLANKINGSRC_NONE;
 	LL_COMP_Init(COMP2, &COMP_InitStruct);
 	__IO uint32_t wait_loop_index = 0;
 	wait_loop_index = (LL_COMP_DELAY_VOLTAGE_SCALER_STAB_US * (SystemCoreClock / (1000000 * 2)));
@@ -262,17 +264,20 @@ void MX_TIM1_Init(void)
 	LL_TIM_OC_EnablePreload(TIM1, LL_TIM_CHANNEL_CH3);
 	LL_TIM_OC_Init(TIM1, LL_TIM_CHANNEL_CH3, &TIM_OC_InitStruct);
 	LL_TIM_OC_DisableFast(TIM1, LL_TIM_CHANNEL_CH3);
+#ifdef COMP_BLANK_TICKS
 	/*
 	 * CH5 has no pin - it exists here only to generate OC5REF as the
 	 * comparator blanking source (see COMP_BLANK_TICKS in targets.h).
 	 * PWM1 with CCR5=N holds OC5REF high for CNT < N, i.e. the first N
-	 * ticks after each turn-on, which is the switching transient.
+	 * ticks of every PWM period, spanning the dead time and the high-side
+	 * turn-on transient that ends it.
 	 * No preload: the window is constant and must be live from the first
 	 * period, and it is never rewritten at runtime.
 	 */
 	LL_TIM_OC_Init(TIM1, LL_TIM_CHANNEL_CH5, &TIM_OC_InitStruct);
 	LL_TIM_OC_DisableFast(TIM1, LL_TIM_CHANNEL_CH5);
 	LL_TIM_OC_SetCompareCH5(TIM1, COMP_BLANK_TICKS);
+#endif
 	LL_TIM_SetTriggerOutput(TIM1, LL_TIM_TRGO_RESET);
 	LL_TIM_SetTriggerOutput2(TIM1, LL_TIM_TRGO2_RESET);
 	LL_TIM_DisableMasterSlaveMode(TIM1);
@@ -630,8 +635,10 @@ void enableCorePeripherals()
 	LL_TIM_CC_EnableChannel(TIM1, LL_TIM_CHANNEL_CH1N);
 	LL_TIM_CC_EnableChannel(TIM1, LL_TIM_CHANNEL_CH2N);
 	LL_TIM_CC_EnableChannel(TIM1, LL_TIM_CHANNEL_CH3N);
+#ifdef COMP_BLANK_TICKS
 	/* Pinless: drives OC5REF for comparator blanking only. */
 	LL_TIM_CC_EnableChannel(TIM1, LL_TIM_CHANNEL_CH5);
+#endif
 
 	/* Enable counter */
 	LL_TIM_EnableCounter(TIM1);
