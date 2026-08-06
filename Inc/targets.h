@@ -127,20 +127,20 @@
  * USE_ADC_BEMF; below ADC_BEMF_MIN_INTERVAL the ADC path then owns the
  * crossing search and the comparator EXTI stays masked for that step.
  *
- * The point is the low-rpm floor: comparator offset plus the 10 mV minimum
- * hysteresis step stops producing an edge somewhere around 350-450 rpm on
- * this article, and no filtering downstream recovers it. The ADC resolves
- * 0.806 mV/LSB and returns a magnitude, so it both sees further down and can
- * interpolate the crossing instant between two samples instead of reporting
- * the grid position.
+ * The point is the low-rpm floor, and DS13122 Rev 4 Table 73 puts numbers on
+ * it: comparator input offset is -9..+3 mV over temperature and VDDA, and the
+ * smallest hysteresis step - HYST = 1, the one ST's headers call "10MV" - is
+ * 9 mV typical but up to 16 mV. Worst case that is a 25 mV dead zone against
+ * a signal running ~132 mV at 1000 rpm and falling linearly with speed, which
+ * is where the 350-450 rpm floor comes from. No filtering downstream recovers
+ * an edge that was never produced. The ADC resolves 0.806 mV/LSB and returns
+ * a magnitude, so it both sees further down and can interpolate the crossing
+ * instant between two samples instead of reporting the grid position.
  *
- * !! The four channel numbers below are the one thing in this block that
- * !! could not be verified from the tree. PA0/PA1 are ADC1_IN1/ADC1_IN2 and
- * !! ADC2_IN1/ADC2_IN2, but PA4 and PA5 reach ADC2 only, and the exact
- * !! indices are asserted from the G431 pin table, not confirmed - network
- * !! policy blocks st.com from this environment. Check them against DS12589
- * !! Table 13 (or CubeMX) before the first bench run. A wrong index reads a
- * !! different pin and the path silently never finds a crossing.
+ * Channel map confirmed against DS13122 Rev 4 (STM32G491) Table 12: PA0 and
+ * PA1 are IN1/IN2 on both ADCs, PA4 and PA5 reach ADC2 only, as IN17 and
+ * IN13. Note PA4/PA5 also carry DAC1_OUT1/OUT2 - neither DAC output is
+ * enabled on this target, and enabling one would drive the sense node.
  */
 // #define USE_ADC_BEMF
 #	define ADC_BEMF_PHASE_A_CHANNEL LL_ADC_CHANNEL_13 /* PA5 -> ADC2_IN13 */

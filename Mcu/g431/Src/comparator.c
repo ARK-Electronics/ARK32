@@ -59,12 +59,24 @@ void maskPhaseInterrupts()
 
 void enableCompInterrupts()
 {
-	/* Below the comparator's usable floor the ADC path detects the
-	 * crossing instead; it owns the whole step and the EXTI stays masked,
-	 * so the two detectors can never both commit one. See bemf_adc.c. */
+#ifdef USE_ADC_BEMF
+	/*
+	 * Below the comparator's usable floor the ADC path detects the
+	 * crossing instead (see bemf_adc.c). Mask the EXTI explicitly on
+	 * takeover rather than assume the caller left it masked: every current
+	 * path does, but two live detectors could both commit the same
+	 * crossing, and that is not a bug worth leaving to an invariant held
+	 * somewhere else. Open-coded rather than calling maskPhaseInterrupts(),
+	 * which would disarm the search that was just armed.
+	 */
 	if (bemfAdcArm()) {
+		EXTI->IMR1 &= ~(1 << 21);
+		EXTI->IMR1 &= ~(1 << 22);
+		EXTI->PR1 = LL_EXTI_LINE_22;
+		EXTI->PR1 = LL_EXTI_LINE_21;
 		return;
 	}
+#endif
 	EXTI->IMR1 |= current_EXTI_LINE;
 }
 

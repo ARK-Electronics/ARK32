@@ -93,11 +93,26 @@
  */
 #	define ADC_BEMF_MAX_SPAN 32u
 
+/*
+ * Consecutive owned steps that ended without committing a crossing before the
+ * path stands down for the rest of the run. This is the guard against silent
+ * failure - most concretely a wrong ADC channel index, which reads some other
+ * pin and simply never crosses. Without it the loop would blind-step forever
+ * on a path that is never going to work; with it, the damage is bounded to
+ * this many commutations and the comparator takes over exactly as if the
+ * feature were off.
+ */
+#	define ADC_BEMF_MAX_MISSES 8
+
 static uint16_t adc_ref_mag;  /* |differential| at the last pre-crossing sample */
 static uint16_t adc_span;     /* PWM periods since that sample */
 static uint32_t adc_searches; /* steps this path owned */
 static uint32_t adc_accepts;  /* crossings it committed */
 static uint8_t adc_armed;
+static uint8_t adc_pending; /* armed a search that has not committed yet */
+static uint8_t adc_misses;
+static uint8_t adc_stood_down;
+static uint8_t adc_discard; /* results to throw away after a restart (ES0523 2.6.7/2.6.8) */
 
 static uint32_t bemfAdcPhaseChannel(void)
 {
@@ -201,8 +216,38 @@ uint8_t bemfAdcArm(void)
 	 *    below that the second conversion straddles turn-off and returns
 	 *    freewheel garbage
 	 */
+	/* A fresh run - startup, or a restart through the stall rail - clears
+	 * the stand-down, so a transient bad patch does not disable the path
+	 * for the life of the boot. */
+	if (zero_crosses < 2) {
+		adc_stood_down = 0;
+		adc_misses = 0;
+		adc_pending = 0;
+	}
+	if (adc_stood_down) {
+		return 0;
+	}
+
 	if (average_interval < ADC_BEMF_MIN_INTERVAL || adjusted_duty_cycle < ADC_BEMF_MIN_DUTY_TICKS) {
 		return 0;
+	}
+
+	/*
+	 * The previous owned step is only known to have failed once the next
+	 * one comes round: adc_pending still set means that search ended in a
+	 * blind step rather than a commit.
+	 */
+	if (adc_pending) {
+		if (adc_misses < ADC_BEMF_MAX_MISSES) {
+			adc_misses++;
+		}
+		if (adc_misses >= ADC_BEMF_MAX_MISSES) {
+			adc_stood_down = 1;
+			adc_pending = 0;
+			return 0;
+		}
+	} else {
+		adc_misses = 0;
 	}
 
 	LL_ADC_INJ_StopConversion(ADC2);
@@ -213,6 +258,8 @@ uint8_t bemfAdcArm(void)
 	adc_ref_mag = 0;
 	adc_span = 0;
 	adc_armed = 1;
+	adc_pending = 1;
+	adc_discard = 1;
 	adc_searches++;
 
 	LL_ADC_ClearFlag_JEOS(ADC2);
@@ -228,6 +275,15 @@ void bemfAdcDisarm(void)
 	}
 	adc_armed = 0;
 	LL_ADC_DisableIT_JEOS(ADC2);
+	/*
+	 * ES0523 2.6.5 puts injected results in the wrong JDRx when JADSTP is
+	 * asserted at end of conversion AND the AHB-to-ADC clock ratio is
+	 * above 10. It does not apply here: AHB is 160 MHz and the ADC runs
+	 * from CKMODE = PCLK/4 = 40 MHz, a ratio of 4. Worth stating, because
+	 * the common disarm path does stop the group from inside the JEOS
+	 * interrupt - precisely the timing the erratum describes - so anyone
+	 * changing the ADC prescaler needs to come back to this.
+	 */
 	LL_ADC_INJ_StopConversion(ADC2);
 }
 
@@ -243,13 +299,32 @@ RAM_FUNC void bemfAdcIrqHandler(void)
 	}
 
 	/*
+	 * ES0523 2.6.7 / 2.6.8: the first conversion after a long idle gap or
+	 * after a stop/resume can be wrong - stale (>1 ms since the previous
+	 * conversion) or, worse, a read of internal channel 0 returning zero.
+	 * Both apply here by construction: the injected group is stopped
+	 * between searches, and at the intervals this path owns the gap is
+	 * routinely over 1 ms (a 350 rpm commutation is ~2 ms on 14 pole
+	 * pairs). A zero would read as a large differential of arbitrary sign,
+	 * which is exactly the kind of thing that becomes a false crossing.
+	 * Throw the first result of every search away. It costs one PWM period
+	 * out of a search window of at least ADC_BEMF_MIN_INTERVAL/2, and the
+	 * post-commutation blank below would usually have discarded it anyway
+	 * - "usually" not being a good enough reason to leave it to chance.
+	 */
+	if (adc_discard != 0) {
+		adc_discard--;
+		return;
+	}
+
+	/*
 	 * Same post-commutation blanking COMP1_2_3_IRQHandler applies to the
 	 * comparator edge: nothing before half the expected interval is a
 	 * crossing, it is the freewheel demag clamp on the phase that was just
 	 * released. Returning before the reference is taken also keeps demag
 	 * readings out of the interpolation.
 	 */
-	if (INTERVAL_TIMER->CNT <= (commutation_interval >> 1)) {
+	if (INTERVAL_TIMER->CNT <= ZC_SEARCH_BLANK(commutation_interval)) {
 		return;
 	}
 
@@ -322,7 +397,14 @@ RAM_FUNC void bemfAdcIrqHandler(void)
 		back = cap;
 	}
 
-	adc_armed = 0;
+	/*
+	 * Do NOT clear adc_armed here. bemfZcAcceptCrossing() masks the search
+	 * through maskPhaseInterrupts(), which is what disarms this path - and
+	 * bemfAdcDisarm() early-returns when adc_armed is already clear, so
+	 * clearing it first would leave the JEOS interrupt enabled and the
+	 * injected group converting for the rest of the step.
+	 */
+	adc_pending = 0;
 	adc_accepts++;
 	bemfZcAcceptCrossing((uint16_t)back);
 }
