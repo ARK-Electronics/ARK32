@@ -62,6 +62,24 @@
 
 #	define HARDWARE_GROUP_G4_E
 #	define TARGET_STALL_PROTECTION_INTERVAL 20000
+/*
+ * Comparator output blanking window, in TIM1 ticks (6.25 ns @ 160 MHz).
+ * The G4 COMP can gate its own output from TIM1 OC5 while OC5REF is high;
+ * the F051's COMP cannot, so this has no 4IN1 equivalent. Blanks the
+ * turn-on switching transient so it cannot be latched as a zero cross.
+ *
+ * Sizing: the phase turns on at CNT==0 (edge-aligned PWM1 up-count), so
+ * OC5 with CCR5=N blanks the first N ticks of every PWM period. 80 ticks
+ * = 500 ns = exactly DEAD_TIME, covering the dead-time commutation edge.
+ * It must stay BELOW the pile-up window, because crossings that occur in
+ * the PWM off-window are legitimately registered just after turn-on (see
+ * the turn-on-pileup compensation in bemf_zc.c): those land from
+ * arr>>5 (~650 ns at 48 kHz) onward, with the bin-1 peak at ~1.3-2.6 us
+ * of comparator+ISR latency. Blanking past that would suppress real
+ * crossings rather than noise. Worst case the ARR halves under
+ * variable_pwm, which still leaves the blank under 5% of the period.
+ */
+#	define COMP_BLANK_TICKS 80
 /* USART2 TX on PB3 @ 115200 — matches bootloader USE_DEBUG_UART (AM32-bootloader#60). */
 #	define USE_DEBUG_UART
 #	define USE_SERIAL_TELEMETRY
