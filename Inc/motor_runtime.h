@@ -70,6 +70,18 @@ extern volatile uint32_t zc_blind_ticks;
  * restart threshold in the ZC path; faults.c owns the rail itself.
  */
 #define BEMF_STALL_TICKS 45000u
+/*
+ * Commutation intervals of dead reckoning over which duty authority fades to
+ * its floor (control_loop.c). Deliberately NOT BEMF_STALL_TICKS: that answers
+ * "how long may the loop guess before it is torn down" in wall clock, this
+ * answers "how much energy may go into a guessed position" in commutations.
+ * A blind step charges ~1.5x the interval, so K = 4 costs ~37% of authority at
+ * one blind step and ~75% at two - the depth of the fixed cap this replaced,
+ * without its discrete trip, and rpm-adaptive because the span tracks the
+ * interval. Raise toward 6 if brief single misses feel harsh on the bench
+ * before adding any further machinery.
+ */
+#define ZC_AUTHORITY_SPAN_STEPS 4u
 extern uint8_t filter_level;
 extern uint8_t bad_count;
 extern uint8_t bad_count_threshold;

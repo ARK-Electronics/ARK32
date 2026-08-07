@@ -612,9 +612,14 @@ void sitl_state_poll(void)
 			uint8_t max_ramp_startup_vcomp_v;
 			uint8_t acq_resist_v;
 			uint8_t bemf_timeout_happened_v;
+			/* v7: applied duty, so a test can assert that the
+			 * untrusted-commutation authority fade in control_loop.c
+			 * actually reduces energy - nothing observed that before. */
+			uint8_t pad4;
+			uint16_t duty_cycle_v;
 		} reply = {
 			.magic = 0x5356,
-			.version = 6,
+			.version = 7,
 			.zero_crosses = zero_crosses,
 			.commutation_interval = commutation_interval,
 			.dropped_edges = motor_zc_dropped(),
@@ -647,7 +652,15 @@ void sitl_state_poll(void)
 			.max_ramp_startup_vcomp_v = max_ramp_startup_vcomp,
 			.acq_resist_v = fault_acq_resist_events,
 			.bemf_timeout_happened_v = bemf_timeout_happened,
+			.duty_cycle_v = duty_cycle,
 		};
+		/*
+		 * The pytest decoders unpack this reply positionally, so a field
+		 * added or resized here silently misreads every field after it -
+		 * a failure that shows up as a nonsense assertion in an unrelated
+		 * test. Pin the wire size; bump both sides deliberately.
+		 */
+		_Static_assert(sizeof(reply) == 68, "ZC_STATS wire size changed - update Mcu/SITL/tests STATS_FMT");
 		sendto(fd, &reply, sizeof(reply), 0, (struct sockaddr *)&src, sizeof(src));
 	} else if (cmd == 10 && ret >= 8) {
 		// GOV_FORCE: u16 slope_q10, u16 conf

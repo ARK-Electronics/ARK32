@@ -34,8 +34,16 @@ ZC_STATS_MAGIC = 0x5356
 
 STATS_FIELDS = ('zero_crosses', 'commutation_interval', 'dropped_edges',
                 'desync_happened', 'old_routine', 'running', 'armed',
-                'zc_blind_steps', 'zc_stale_q8', 'zc_deadline_armed')
-STATS_FMT = '<HBBIIIIBBBBBB'
+                'zc_blind_steps', 'zc_stale_q8', 'zc_deadline_armed',
+                'dcm_hold_ms', '_pad2', 'dcm_hold_value',
+                'adv_kerpm_hold_ms', '_pad3', 'adv_kerpm_hold',
+                'zc_trend', 'zc_predicted', 'wait_time', 'advance',
+                'gov_conf', 'gov_slope_q10', 'gov_duty_ceiling',
+                'gov_stuck_ms', 'gov_release_ceil', 'gov_unlatch_count',
+                'max_ramp_startup', 'max_ramp_low', 'max_ramp_high',
+                'ramp_divider', 'max_ramp_startup_vcomp', 'acq_resist',
+                'bemf_timeout', '_pad4', 'duty_cycle')
+STATS_FMT = '<HBBIIIIBBBBBBBBHBBHiIHHHHHHHHBBBBBBBBH'
 
 
 def _open_ctl(sitl):
@@ -243,6 +251,53 @@ def test_alternating_misses_engage_blind_and_recover(sitl_factory, state_stream)
                 % max(s['zc_stale_q8'] for s in samples))
             rpm = rpm_from_state(sim, 0.3)
             assert rpm > 300, 'rpm collapsed after clean bridge: %.0f' % rpm
+        _assert_recovered(ctl, sim, rpm0, sitl, tx)
+    finally:
+        tx.stop()
+
+
+def test_blind_step_cuts_duty_while_untrusted(sitl_factory, state_stream):
+    '''Untrusted commutation must cost energy, not just time.
+
+    This is the invariant BLHeli_32 and Bluejay enforce with their demag
+    power cut, and the half of blind stepping ARK was missing: a blind step
+    commutates on a GUESS, and driving a guessed rotor position at commanded
+    duty is the damage vector on a board where three of four channels have no
+    current limit.
+
+    Nothing asserted this before. The fade that replaced the old fixed
+    250/500 caps was normalised against the 22.5 ms stall budget rather than
+    against a few commutation intervals, so at two blind steps it reduced duty
+    by about 1% where the cap it replaced cut 75% - it only bit once the loop
+    was already about to be torn down. That regression was invisible to every
+    existing test because none of them looked at duty.
+
+    Blackout is well inside the dead-reckoning budget, so this exercises the
+    fade and not the restart.
+    '''
+    sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
+    sim, tx, rpm0 = _spin_up(sitl, state_stream)
+    try:
+        ctl = _open_ctl(sitl)
+        pre = _zc_stats(ctl)
+        assert pre['old_routine'] == 0 and pre['zero_crosses'] > 100, pre
+        duty_before = pre['duty_cycle']
+        assert duty_before > 200, (
+            'need real drive before the fault to see a cut: duty=%d' % duty_before)
+
+        # ~10 ms: many commutation intervals of blind stepping, but under the
+        # 22.5 ms budget so the stall rail cannot be what moves duty.
+        _zc_fault(ctl, mode=1, duration_us=10_000)
+        samples = _poll_stats(ctl, seconds=0.05)
+
+        assert any(s['zc_blind_steps'] > 0 for s in samples), (
+            'blackout produced no blind step, so this proved nothing\n'
+            + sitl.log_tail())
+
+        low = min(s['duty_cycle'] for s in samples)
+        assert low < duty_before // 2, (
+            'duty was not cut while commutating blind: %d -> %d (need < %d)\n'
+            % (duty_before, low, duty_before // 2) + sitl.log_tail())
         _assert_recovered(ctl, sim, rpm0, sitl, tx)
     finally:
         tx.stop()

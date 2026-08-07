@@ -528,30 +528,61 @@ void setInput()
 	 * at low rpm (each blind step is a longer slice of the budget) than at
 	 * high rpm, which is the right way round.
 	 */
-	if (!old_routine && running && (zc_blind_ticks || zc_demag_run)) {
-		/* Scale the commanded duty by remaining confidence rather than
-		 * clamping to a fixed ceiling: no full-scale constant, and the
-		 * reduction is proportional to what was actually asked for.
-		 * setInput recomputes the setpoint from the input every call, so
-		 * this does not compound. */
-		uint32_t stale = zc_blind_ticks;
+	if (!old_routine && running && (zc_blind_ticks || zc_demag_run) && commutation_interval) {
 		/*
-		 * Demag-late crossings are arriving, just late, so the loop is
-		 * mistimed rather than lost. Same fade, charged per consecutive
-		 * late step, but floored at half the budget: unlike dead
-		 * reckoning this condition has no restart behind it (bemf_zc.c
-		 * deliberately does not escalate it, because a loaded spool-up is
-		 * legitimately demag-late for long stretches), so authority has
-		 * to bottom out somewhere the motor still turns. The current
-		 * reduction is itself the recovery - less current shortens demag
-		 * and the pre-crossing dwell reappears - so the fade only has to
-		 * be deep enough to break the spiral, not to stop the motor.
+		 * Untrusted commutation => less energy. This is the invariant
+		 * BLHeli_32 and Bluejay enforce with their demag power cut, and
+		 * the half of blind stepping ARK was missing: a blind step
+		 * commutates on a GUESS, and driving a guessed rotor position at
+		 * commanded duty is the damage vector on a board where three of
+		 * four channels have no current limit.
+		 *
+		 * TWO SPANS, because two different decisions were previously
+		 * normalised against one. How long the loop may keep dead
+		 * reckoning before it is torn down is a WALL-CLOCK question, and
+		 * BEMF_STALL_TICKS (22.5 ms, upstream's own stall criterion)
+		 * answers it - bemf_zc.c owns that and is unchanged. How much
+		 * energy it may put into a guessed position is a question about
+		 * how many commutations have been guessed, which is a handful of
+		 * commutation intervals, not 22 milliseconds.
+		 *
+		 * Sharing the stall budget for both made the fade reach useful
+		 * depth only just before the restart fired - about 1% at two
+		 * blind steps, where the cliff it replaced cut 75% and BLHeli
+		 * cuts before the very next commutation. That is backwards: by
+		 * the time the old fade bit, the loop was already being torn
+		 * down, so the reduction bought nothing.
+		 *
+		 * Scaling the span by commutation_interval also makes it
+		 * rpm-adaptive for free: the same K commutations is a long window
+		 * at crawl and a short one at speed, which is the correct shape
+		 * for "how stale is my position estimate".
 		 */
-		uint32_t demag = (uint32_t)zc_demag_run * commutation_interval;
-		if (demag > BEMF_STALL_TICKS / 2u) {
-			demag = BEMF_STALL_TICKS / 2u;
+		const uint32_t span = ZC_AUTHORITY_SPAN_STEPS * (uint32_t)commutation_interval;
+
+		/*
+		 * Blind: no position information at all. A blind step charges its
+		 * extrapolated interval (~1.5x CI, the deadline's grace), so with
+		 * K = 4 one blind step costs ~37% of authority and two cost ~75% -
+		 * matching the old cap's depth without its discrete trip. The
+		 * terminal action still belongs to the restart in bemf_zc.c.
+		 */
+		uint32_t spent = zc_blind_ticks;
+
+		/*
+		 * Demag-late: crossings are arriving, just late, so the loop is
+		 * mistimed rather than lost. Same span, but this path's own
+		 * contribution is capped at half of it, because reducing current
+		 * IS the recovery here (less current shortens demag and the
+		 * pre-crossing dwell reappears) and because a loaded spool-up is
+		 * legitimately demag-late for long stretches. Fading a hard start
+		 * to nothing on that evidence alone turns every one into a stop.
+		 */
+		uint32_t demag = (uint32_t)zc_demag_run * (uint32_t)commutation_interval;
+		if (demag > span / 2u) {
+			demag = span / 2u;
 		}
-		stale += demag;
+
 		/*
 		 * NO WRONG-PHASE LOCK TERM HERE, and the reason is worth keeping.
 		 *
@@ -577,8 +608,26 @@ void setInput()
 		 * problem fired on the fault correctly and were never asked whether
 		 * they stayed quiet otherwise.
 		 */
-		const uint32_t confidence = (stale < BEMF_STALL_TICKS) ? (BEMF_STALL_TICKS - stale) : 0u;
-		const uint32_t allowed = ((uint32_t)duty_cycle_setpoint * confidence) / BEMF_STALL_TICKS;
+		uint32_t stale = spent + demag;
+		if (stale > span) {
+			stale = span;
+		}
+		uint32_t allowed = ((uint32_t)duty_cycle_setpoint * (span - stale)) / span;
+
+		/*
+		 * Floor, proportional to what was actually commanded rather than a
+		 * fixed duty value. Authority must not reach zero on its own: an
+		 * undriven rotor decelerates and its BEMF collapses, which is
+		 * exactly what re-acquisition needs and would make the fade
+		 * self-defeating well before the restart is due. One eighth is the
+		 * authority the old 250-of-2000 cap left at full stick - but scaled
+		 * to the request, so half stick floors at 6% rather than 12.5%.
+		 */
+		const uint32_t floor_duty = (uint32_t)duty_cycle_setpoint >> 3;
+		if (allowed < floor_duty) {
+			allowed = floor_duty;
+		}
+
 		if (duty_cycle_setpoint > allowed) {
 			duty_cycle_setpoint = (uint16_t)allowed;
 		}
