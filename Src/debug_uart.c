@@ -158,6 +158,12 @@ static const char *evt_name(uint8_t e)
 			return "boot";
 		case DBG_EVT_NFAULT:
 			return "nFAULT";
+		case DBG_EVT_NFAULT_UVLO:
+			return "nFAULT UVLO";
+		case DBG_EVT_NFAULT_OCP:
+			return "nFAULT OCP";
+		case DBG_EVT_NFAULT_OTW:
+			return "nFAULT OTW";
 		case DBG_EVT_STUCK:
 			return "stuck";
 		case DBG_EVT_LVC:

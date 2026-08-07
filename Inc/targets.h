@@ -171,6 +171,8 @@
 	 *             awake for beeps, drive, and brake (tWAKE ≈ 1 ms).
 	 *   nFAULT  = PA12 (FAULT_N) — open-drain, external 20k to 3.3V;
 	 *             asserts on VDS OCP (resistor-set on VDS pin), UVLO, OTW, GDF
+	 *             (single wire OR — no SPI status). Firmware guesses cause
+	 *             from bus V / current / temp ADC at latch (faults.c).
 	 * Mode / IDRIVE / VDS thresholds are hardwired on the board; firmware
 	 * only enables the driver and reacts to FAULT_N.
 	 */

@@ -400,8 +400,8 @@ static void can_printf(const char *fmt, ...)
 
 /*
  * One-shot fault LogMessages: rising edge of nFAULT latch or stuck-rotor
- * latch. nFAULT also forces ESC_FAULT_STUCK — prefer "nFAULT" when both
- * rise together so the FC sees the gate-driver cause.
+ * latch. nFAULT also forces ESC_FAULT_STUCK — prefer the classified
+ * gate-driver cause ("UVLO"/"OCP"/"OTW"/"nFAULT") when both rise together.
  */
 static void DroneCAN_pollFaultLogMessages(void)
 {
@@ -412,7 +412,22 @@ static void DroneCAN_pollFaultLogMessages(void)
 	const uint8_t stuck = (uint8_t)(escGetState() == ESC_FAULT_STUCK);
 
 	if (nfault && !prev_nfault) {
-		can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT");
+		/* ADC-guessed class (DRV pin is OR-only on hardware-interface parts). */
+		const fault_id_t cause = faultGateDriverCause();
+		switch (cause) {
+			case FAULT_GD_UVLO:
+				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT UVLO");
+				break;
+			case FAULT_GD_OCP:
+				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT OCP");
+				break;
+			case FAULT_GD_OTW:
+				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT OTW");
+				break;
+			default:
+				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT");
+				break;
+		}
 	} else if (stuck && !prev_stuck) {
 		can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "stuck");
 	}
