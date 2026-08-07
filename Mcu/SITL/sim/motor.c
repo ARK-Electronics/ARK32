@@ -74,18 +74,26 @@ static void dump_ring(void);
   deterministically. The comparator OUTPUT keeps tracking the physics
   (poll mode and the confirm loop read the level directly) - only the
   edge -> EXTI pend -> NVIC delivery is dropped.
-  mode 0: off, 1: drop every delivery, 2: drop during every other
-  commutation window (demag-style alternating real/missed).
+  mode 0: off, 1: drop every delivery, 2: drop every other EXTI-eligible
+  plant edge (true 50% miss rate: demag-style real/missed alternation).
+
+  Mode 2 used to key off commutation_count. That desynced as soon as the
+  firmware blind-stepped: blinds advance the count without a delivered edge,
+  so the gate stuck on "drop" for long stretches and looked like a full
+  blackout. Count candidate edges instead so every other real crossing is
+  delivered regardless of how the firmware commutates.
  */
 static uint8_t zc_fault_mode;
 static uint64_t zc_fault_end_ns;
 static uint32_t zc_dropped_edges;
+static uint32_t zc_edge_gate;	   // EXTI-eligible edges seen while mode-2 is live
 static uint32_t commutation_count; // total comStep calls, real + blind
 
 void motor_zc_fault(uint8_t mode, uint32_t duration_us)
 {
 	zc_fault_mode = mode;
 	zc_fault_end_ns = sitl_time_ns() + (uint64_t)duration_us * 1000ULL;
+	zc_edge_gate = 0;
 	fprintf(stderr, "SITL: zc fault mode %u for %u us\n", mode, duration_us);
 }
 
@@ -890,7 +898,16 @@ void motor_step(uint64_t now_ns, uint32_t dt_ns)
 		const uint32_t line = current_EXTI_LINE;
 		const bool rising_edge = out != 0;
 		if ((rising_edge && (sitl_exti.RTSR & line)) || (!rising_edge && (sitl_exti.FTSR & line))) {
-			if (zc_fault_mode && now_ns < zc_fault_end_ns && (zc_fault_mode == 1 || (commutation_count & 1u) == 0u)) {
+			uint8_t drop = 0;
+			if (zc_fault_mode && now_ns < zc_fault_end_ns) {
+				if (zc_fault_mode == 1) {
+					drop = 1;
+				} else if (zc_fault_mode == 2) {
+					/* every other candidate edge */
+					drop = ((zc_edge_gate++ & 1u) == 0u) ? 1 : 0;
+				}
+			}
+			if (drop) {
 				// injected missed crossing: edge never reaches EXTI
 				zc_dropped_edges++;
 				motor_log_event(MEV_EDGE, out, 0, 1);
