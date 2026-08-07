@@ -172,11 +172,11 @@ def test_slew_desync_leaves_ramp_fixed(sitl_factory, state_stream):
             ci_us = max(s0['commutation_interval'] // 2, 100)
             bt0 = int(s0['bemf_timeout'])
             d0 = int(s0['desync_happened'])
-            # The stall rail is time-based (BEMF_STALL_TICKS = 22.5 ms of dead
-            # reckoning), not step-based as when this multiplier was chosen:
-            # 60 * ci_us floors at 6 ms and rides out entirely on blind steps,
-            # producing neither a desync nor a stall trip. Floor at 3x the
-            # budget, as test_blind_budget_hands_off_to_stall_rail does.
+            # The rail is time-based (BEMF_STALL_TICKS = 22.5 ms of dead
+            # reckoning), not the step count this multiplier was sized
+            # against: 60 * ci_us floors at 6 ms, rides out entirely on
+            # blind steps and produces neither a desync nor a stall trip.
+            # Floor at 3x the budget, as the blind-budget test does.
             _zc_fault(ctl, mode=1, duration_us=max(60 * ci_us, 68_000))
             # Toggle every 50 ms so the limiter is binding on a RISING
             # setpoint across the whole window the charge can land in.
@@ -267,12 +267,9 @@ def test_steady_duty_desync_leaves_ramp_fixed(sitl_factory, state_stream):
         base = _ramp(steady)
 
         ci_us = max(steady['commutation_interval'] // 2, 100)
-        # The stall rail is time-based (BEMF_STALL_TICKS = 22.5 ms of dead
-            # reckoning), not step-based as when this multiplier was chosen:
-            # 60 * ci_us floors at 6 ms and rides out entirely on blind steps,
-            # producing neither a desync nor a stall trip. Floor at 3x the
-            # budget, as test_blind_budget_hands_off_to_stall_rail does.
-            _zc_fault(ctl, mode=1, duration_us=max(60 * ci_us, 68_000))
+        # Same time-budget correction as above: below BEMF_STALL_TICKS the
+        # blackout rides out on blind steps and exercises nothing.
+        _zc_fault(ctl, mode=1, duration_us=max(60 * ci_us, 68_000))
         first = None
         stopped = None
         rode_out = False
