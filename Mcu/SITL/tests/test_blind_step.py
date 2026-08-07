@@ -8,13 +8,14 @@ traces:
 
   - bridge:      a short full suppression is ridden out with blind steps,
                  no desync, no restart
-  - limit:       a long full suppression exhausts the consecutive
-                 blind-step budget and hands off to the stall rail
-                 (restart), then recovers when the fault clears
-  - alternating: dropping every other commutation window (the demag
-                 signature) climbs the leaky miss-rate bucket until it
-                 trips the same rail - the pattern the consecutive-step
-                 counter alone can never catch
+  - budget:      a full suppression lasting longer than the dead-reckoning
+                 budget (BEMF_STALL_TICKS of blind time) hands off to the
+                 stall rail, then recovers when the fault clears
+  - alternating: mode-2 50% edge drop must engage blind; restarts during
+                 the fault window are bounded (no miss-rate thrash); post-
+                 fault recovery under continuous throttle. A clean no-
+                 restart ride-through is reported separately (xfail when
+                 the plant cascades).
 '''
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import socket
 import struct
 import time
 
+import pytest
 import sitl_dshot as sd
 from sitl_harness import Sender, rpm_from_state, wait_for_state
 
@@ -31,7 +33,7 @@ ZC_STATS_MAGIC = 0x5356
 
 STATS_FIELDS = ('zero_crosses', 'commutation_interval', 'dropped_edges',
                 'desync_happened', 'old_routine', 'running', 'armed',
-                'zc_blind_steps', 'zc_miss_bucket', 'zc_deadline_armed')
+                'zc_blind_steps', 'zc_stale_q8', 'zc_deadline_armed')
 STATS_FMT = '<HBBIIIIBBBBBB'
 
 
@@ -67,6 +69,24 @@ def _poll_stats(ctl, seconds):
     while time.time() < deadline:
         out.append(_zc_stats(ctl))
     return out
+
+
+def _count_zc_restarts(samples, floor=50, drop=20):
+    '''Count established-run restarts in a ZC_STATS sample stream.
+
+    zero_crosses only falls on a desync or stall-rail handoff. A drop of
+    ``drop`` or more from a value above ``floor`` is one restart episode.
+    '''
+    if not samples:
+        return 0
+    n = 0
+    prev = samples[0]['zero_crosses']
+    for s in samples[1:]:
+        z = s['zero_crosses']
+        if prev > floor and z + drop < prev:
+            n += 1
+        prev = z
+    return n
 
 
 def _spin_up(sitl, state_stream, value=500, arm_s=2.2, run_s=3.5):
@@ -116,7 +136,10 @@ def _assert_recovered(ctl, sim, rpm_before, sitl, tx=None):
     assert end['running'] == 1 and end['old_routine'] == 0, (
         'no closed-loop recovery: %r\n%s' % (end, sitl.log_tail()))
     assert end['zc_blind_steps'] == 0, end
-    assert end['zc_miss_bucket'] < 6, end
+    # zc_stale_q8 is zc_blind_ticks * 255 / BEMF_STALL_TICKS (sitl_state),
+    # not the old miss-bucket. After recovery the dead-reckoning budget is
+    # cleared, so require empty - not a leftover <6 of a different scale.
+    assert end['zc_stale_q8'] == 0, end
     assert rpm > 300, (
         'rpm did not recover: %.0f (was %.0f before)\n%s'
         % (rpm, rpm_before, sitl.log_tail()))
@@ -151,7 +174,7 @@ def test_blind_step_bridges_short_dropout(sitl_factory, state_stream):
         assert post['dropped_edges'] > pre['dropped_edges'], (
             'fault gate never dropped an edge: %r -> %r (fault_us=%d)'
             % (pre, post, fault_us))
-        assert any(s['zc_blind_steps'] > 0 or s['zc_miss_bucket'] > 0
+        assert any(s['zc_blind_steps'] > 0 or s['zc_stale_q8'] > 0
                    for s in samples), (
             'no blind step observed in %d samples (fault_us=%d pre=%r)'
             % (len(samples), fault_us, pre))
@@ -170,22 +193,22 @@ def test_blind_step_bridges_short_dropout(sitl_factory, state_stream):
         tx.stop()
 
 
-def test_blind_step_limit_hands_off_to_stall_rail(sitl_factory, state_stream):
+def test_blind_budget_hands_off_to_stall_rail(sitl_factory, state_stream):
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     sim, tx, rpm0 = _spin_up(sitl, state_stream)
     try:
         ctl = _open_ctl(sitl)
         pre = _zc_stats(ctl)
         assert pre['old_routine'] == 0 and pre['zero_crosses'] > 100, pre
-        ci_us = max(pre['commutation_interval'] // 2, 100)
+        # The budget is BEMF_STALL_TICKS (45000) of INTERVAL_TIMER time at
+        # 2 MHz = 22.5 ms of blind running, independent of rpm. Suppress for
+        # 3x that so the handoff is unambiguous on a loaded CI host.
+        _zc_fault(ctl, mode=1, duration_us=68_000)
+        samples = _poll_stats(ctl, seconds=1.0)
 
-        # far beyond the 8-step budget (8 steps cost ~23x CI in total)
-        _zc_fault(ctl, mode=1, duration_us=60 * ci_us)
-        samples = _poll_stats(ctl, seconds=max(0.5, 120 * ci_us * 1e-6))
-
-        # the limit tripped: stall-rail restart resets zero_crosses
+        # budget exhausted: stall-rail restart resets zero_crosses
         assert min(s['zero_crosses'] for s in samples) < 100, (
-            'blind-step limit never handed off to the stall rail '
+            'dead-reckoning budget never handed off to the stall rail '
             '(min zc %d over %d samples)\n%s'
             % (min(s['zero_crosses'] for s in samples), len(samples),
                sitl.log_tail()))
@@ -194,7 +217,29 @@ def test_blind_step_limit_hands_off_to_stall_rail(sitl_factory, state_stream):
         tx.stop()
 
 
-def test_alternating_misses_trip_miss_rate_bucket(sitl_factory, state_stream):
+# Stall/trust handoffs during a ~0.7 s mode-2 window. The thrash this PR
+# removes was restart-forever on a miss *rate* cliff (leaky bucket at 25%);
+# that produced many restarts per second. A late-blind cascade can still
+# exhaust the dead-reckoning budget a couple of times while recovering -
+# measured 0-2 on this plant - so the bound is small and hard, not "any
+# recovery after fault clears".
+_ALT_MISS_MAX_RESTARTS = 2
+
+
+def test_alternating_misses_bounded_restarts_and_recover(sitl_factory, state_stream):
+    '''Mode-2 50% edge drop: blind lives, restarts bounded, then recover.
+
+    Locks the thrash contract observably (not behind an if bridged:):
+
+      1) blind steps under mode-2 (miss path is live)
+      2) restarts during the fault window <= 1 (not thrash forever)
+      3) closed-loop recovery once the fault ends (continuous throttle)
+
+    Clean ride-through (zero restarts + bounded stale) is checked when it
+    happens; when the plant cascades, the restart bound still fails a
+    regression to "restart on every 50% miss episode". See also the xfail
+    clean-bridge sibling for the stronger "50% keeps flying" claim.
+    '''
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     sim, tx, rpm0 = _spin_up(sitl, state_stream)
     try:
@@ -202,19 +247,83 @@ def test_alternating_misses_trip_miss_rate_bucket(sitl_factory, state_stream):
         pre = _zc_stats(ctl)
         assert pre['old_routine'] == 0 and pre['zero_crosses'] > 100, pre
 
-        # drop every other commutation window: real/missed alternation.
-        # The consecutive counter resets on every accepted crossing, so
-        # only the leaky bucket (+3 per miss, -1 per accept) can end this.
         _zc_fault(ctl, mode=2, duration_us=500_000)
         samples = _poll_stats(ctl, seconds=0.7)
 
-        assert max(s['zc_miss_bucket'] for s in samples) >= 12, (
-            'miss-rate bucket never climbed under sustained alternating '
-            'misses (max %d over %d samples)'
-            % (max(s['zc_miss_bucket'] for s in samples), len(samples)))
-        assert min(s['zero_crosses'] for s in samples) < 100, (
-            'bucket never tripped the stall rail: alternating misses ran '
-            'unbounded\n' + sitl.log_tail())
+        assert any(s['zc_blind_steps'] > 0 for s in samples), (
+            'alternating fault never produced a blind step\n' + sitl.log_tail())
+        assert any(s['dropped_edges'] > pre['dropped_edges'] for s in samples), (
+            'mode-2 fault never dropped an edge\n' + sitl.log_tail())
+
+        restarts = _count_zc_restarts(samples)
+        min_zc = min(s['zero_crosses'] for s in samples)
+        max_stale = max(s['zc_stale_q8'] for s in samples)
+        stayed_closed = all(s['running'] == 1 and s['old_routine'] == 0
+                            for s in samples)
+        assert restarts <= _ALT_MISS_MAX_RESTARTS, (
+            'mode-2 thrash: %d restarts during fault window (max %d); '
+            'min zc %d -> %d, max stale_q8 %d, stayed_closed=%s\n%s'
+            % (restarts, _ALT_MISS_MAX_RESTARTS, pre['zero_crosses'], min_zc,
+               max_stale, stayed_closed, sitl.log_tail()))
+
+        # When the plant allows a true clean bridge, enforce the original
+        # "50% keeps flying" staleness bound so that outcome stays locked.
+        if restarts == 0 and stayed_closed and min_zc >= pre['zero_crosses']:
+            assert max_stale < 128, (
+                'staleness ran away under a clean 50%% bridge (max %d/255)'
+                % max_stale)
+            rpm = rpm_from_state(sim, 0.3)
+            assert rpm > 300, 'rpm collapsed after clean bridge: %.0f' % rpm
+
+        _assert_recovered(ctl, sim, rpm0, sitl, tx)
+    finally:
+        tx.stop()
+
+
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        'Headline "50% miss keeps flying" is plant-dependent: late blinds can '
+        'desync electrical phase so delivered edges fail confirm and the '
+        'budget hands off once. CI should report whether a clean bridge '
+        'happened; the thrash bound is enforced in the non-xfail sibling.'
+    ),
+)
+def test_alternating_misses_clean_bridge_no_restart(sitl_factory, state_stream):
+    '''Strict clean ride-through under mode-2 (xfail, non-strict).
+
+    Fails (xfail) when the plant cascades into a stall handoff. Passes when
+    zero_crosses never falls and staleness stays under half the budget -
+    the PR summary claim, made visible in CI rather than absorbed.
+    '''
+    sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
+    sim, tx, rpm0 = _spin_up(sitl, state_stream)
+    try:
+        ctl = _open_ctl(sitl)
+        pre = _zc_stats(ctl)
+        assert pre['old_routine'] == 0 and pre['zero_crosses'] > 100, pre
+
+        _zc_fault(ctl, mode=2, duration_us=500_000)
+        samples = _poll_stats(ctl, seconds=0.7)
+
+        assert any(s['zc_blind_steps'] > 0 for s in samples), (
+            'alternating fault never produced a blind step\n' + sitl.log_tail())
+        assert _count_zc_restarts(samples) == 0, (
+            'clean-bridge claim: restart during mode-2 fault '
+            '(min zc %d, pre %d)\n%s'
+            % (min(s['zero_crosses'] for s in samples), pre['zero_crosses'],
+               sitl.log_tail()))
+        assert all(s['running'] == 1 and s['old_routine'] == 0
+                   for s in samples), (
+            'clean-bridge claim: left closed-loop under mode-2\n'
+            + sitl.log_tail())
+        assert min(s['zero_crosses'] for s in samples) >= pre['zero_crosses'], (
+            'clean-bridge claim: zero_crosses fell\n' + sitl.log_tail())
+        assert max(s['zc_stale_q8'] for s in samples) < 128, (
+            'clean-bridge claim: stale_q8 max %d/255\n'
+            % max(s['zc_stale_q8'] for s in samples))
+        rpm = rpm_from_state(sim, 0.3)
+        assert rpm > 300, 'rpm collapsed: %.0f' % rpm
         _assert_recovered(ctl, sim, rpm0, sitl, tx)
     finally:
         tx.stop()

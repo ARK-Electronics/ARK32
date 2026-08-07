@@ -491,27 +491,58 @@ void setInput()
 	if (!old_routine && running && zero_crosses > 150 && duty_cycle_setpoint > gov_duty_ceiling) {
 		duty_cycle_setpoint = gov_duty_ceiling;
 	}
-	uint8_t zc_untrusted_steps = zc_blind_steps;
-	if (zc_demag_run > zc_untrusted_steps) {
-		zc_untrusted_steps = zc_demag_run;
-	}
-	// zc_grind_hold_ms keeps the cut engaged through a blind-grind (faults.c):
-	// without it a single accepted crossing resets zc_blind_steps, the cap
-	// releases, and duty re-slews into the next spike (bench: 102 A limit
-	// cycle at 19.5% miss rate, pr48-snap-rail-1).
-	if (!old_routine && running && (zc_untrusted_steps >= 2 || zc_grind_hold_ms)) {
-		/* Fixed protective cut — do NOT raise the floor with EEPROM
-		 * min_startup_duty / startup power. A misconfigured high
-		 * startup duty is exactly what this cut must bound; scaling
-		 * it away left wrong-phase drive near full heat. Worst case
-		 * the motor coasts and the stall rail restarts (or the
-		 * episode bucket latches). */
-		uint16_t blind_cap = (zc_untrusted_steps >= 4 || zc_grind_hold_ms) ? 250 : 500;
-		if (duty_cycle_setpoint > blind_cap) {
-			duty_cycle_setpoint = blind_cap;
+	/*
+	 * Position-confidence duty authority.
+	 *
+	 * Replaces a two-step cliff (cap 500 at two untrusted steps, 250 at four
+	 * or during a grind hold) with a continuous fade over the same
+	 * dead-reckoning budget the restart uses. Authority is full while the
+	 * rotor is reporting its position and falls linearly to zero as the
+	 * budget is spent, reaching zero exactly where bemf_zc.c hands off to the
+	 * stall rail - so there is no step to fall off and no separate threshold
+	 * to tune. A handful of blind steps now costs a few percent of throttle
+	 * instead of three quarters of it, which is the difference between an
+	 * article that flies through a rough patch and one that cannot take off.
+	 *
+	 * The protective intent is unchanged where it matters: sustained dead
+	 * reckoning still walks authority down to nothing, and it does so faster
+	 * at low rpm (each blind step is a longer slice of the budget) than at
+	 * high rpm, which is the right way round.
+	 */
+	if (!old_routine && running && (zc_blind_ticks || zc_demag_run)) {
+		/* Scale the commanded duty by remaining confidence rather than
+		 * clamping to a fixed ceiling: no full-scale constant, and the
+		 * reduction is proportional to what was actually asked for.
+		 * setInput recomputes the setpoint from the input every call, so
+		 * this does not compound. */
+		uint32_t stale = zc_blind_ticks;
+		/*
+		 * Demag-late crossings are arriving, just late, so the loop is
+		 * mistimed rather than lost. Same fade, charged per consecutive
+		 * late step, but floored at half the budget: unlike dead
+		 * reckoning this condition has no restart behind it (bemf_zc.c
+		 * deliberately does not escalate it, because a loaded spool-up is
+		 * legitimately demag-late for long stretches), so authority has
+		 * to bottom out somewhere the motor still turns. The current
+		 * reduction is itself the recovery - less current shortens demag
+		 * and the pre-crossing dwell reappears - so the fade only has to
+		 * be deep enough to break the spiral, not to stop the motor.
+		 */
+		uint32_t demag = (uint32_t)zc_demag_run * commutation_interval;
+		if (demag > BEMF_STALL_TICKS / 2u) {
+			demag = BEMF_STALL_TICKS / 2u;
 		}
-		if (last_duty_cycle > blind_cap) {
-			last_duty_cycle = blind_cap;
+		stale += demag;
+		const uint32_t confidence = (stale < BEMF_STALL_TICKS) ? (BEMF_STALL_TICKS - stale) : 0u;
+		const uint32_t allowed = ((uint32_t)duty_cycle_setpoint * confidence) / BEMF_STALL_TICKS;
+		if (duty_cycle_setpoint > allowed) {
+			duty_cycle_setpoint = (uint16_t)allowed;
+		}
+		/* Pull last_duty_cycle down too: the 20 kHz slew limiter ramps
+		 * from it, so capping only the setpoint would leave ramp-down
+		 * time standing between the loss of confidence and the cap. */
+		if (last_duty_cycle > allowed) {
+			last_duty_cycle = (uint16_t)allowed;
 		}
 	}
 #endif
