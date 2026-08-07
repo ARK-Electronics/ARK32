@@ -215,9 +215,12 @@ void loadEEpromSettings(void)
 		 *
 		 * Out-of-range pole counts (an erased eeprom reads 0 or 0xff)
 		 * leave the envelope at zero, which map() treats as "always at
-		 * the high-rpm limit" - i.e. unrestricted, as before. 2..64 is
-		 * the range the DroneCAN MOTOR_POLES parameter accepts. */
-		if (eepromBuffer.motor_poles >= 2 && eepromBuffer.motor_poles <= 64) {
+		 * the high-rpm limit" - i.e. unrestricted, as before.
+		 * MOTOR_POLES_MIN..MOTOR_POLES_MAX is the range the DroneCAN
+		 * MOTOR_POLES parameter accepts (see eeprom.h). Worst case
+		 * 10220 kv * 128 poles / 544 = 2405 kerpm, well inside the
+		 * uint16 the levels are stored in. */
+		if (eepromBuffer.motor_poles >= MOTOR_POLES_MIN && eepromBuffer.motor_poles <= MOTOR_POLES_MAX) {
 			low_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (100U * 32U);
 			high_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (17U * 32U);
 		} else {
@@ -231,6 +234,7 @@ void loadEEpromSettings(void)
 	 * folding the centivolt scale and the Q12 fraction in gives
 	 *
 	 *   kerpm per centivolt, Q12 = kv * poles * 4096 / 200000
+	 *                            = kv * poles * 256 / 12500
 	 *
 	 * so the hot path is a multiply and a shift with no division. Real free-run
 	 * tops out a few percent below that ideal (IR drop, iron loss), which would
@@ -241,13 +245,21 @@ void loadEEpromSettings(void)
 	 * Computed after motor_kv has taken its final value (the cell-count
 	 * reductions above). Left at 0 - meaning "use the duty proxy" - for a kV
 	 * below the range the throttle limiter already treats as unusable, or a
-	 * pole count outside the 2..64 the DroneCAN MOTOR_POLES parameter accepts
-	 * (an erased eeprom reads 0 or 0xff). Worst case 10220 * 64 * 4096 fits
-	 * uint32 with ~1.6e9 spare before the 15/16 scale-down.
+	 * pole count outside the MOTOR_POLES_MIN..MOTOR_POLES_MAX the DroneCAN
+	 * MOTOR_POLES parameter accepts (an erased eeprom reads 0 or 0xff).
+	 *
+	 * The reduced 256/12500 form above is the one evaluated below rather than
+	 * the equivalent 4096/200000: both are the same rational number (divided
+	 * by 16) so they truncate to the same integer, but the 4096 numerator
+	 * overflows uint32 above ~102 poles, while 256 keeps the intermediate
+	 * inside uint32 for the whole byte range (10220 * 255 * 256 = 6.7e8,
+	 * against 4.29e9). Worst case scale is then 53372, so the 15/16
+	 * scale-down and the uint16 it lands in are both safe, as is the hot
+	 * path's (scale * centivolts) >> 12 on a 12S pack.
 	 */
 	advance_erpm_scale_q12 = 0;
-	if (motor_kv >= 300 && eepromBuffer.motor_poles >= 2 && eepromBuffer.motor_poles <= 64) {
-		uint16_t scale = (uint16_t)(((uint32_t)motor_kv * eepromBuffer.motor_poles * 4096u) / 200000u);
+	if (motor_kv >= 300 && eepromBuffer.motor_poles >= MOTOR_POLES_MIN && eepromBuffer.motor_poles <= MOTOR_POLES_MAX) {
+		uint16_t scale = (uint16_t)(((uint32_t)motor_kv * eepromBuffer.motor_poles * 256u) / 12500u);
 		advance_erpm_scale_q12 = (uint16_t)(scale - (scale >> 4)); /* * 15/16 */
 	}
 
