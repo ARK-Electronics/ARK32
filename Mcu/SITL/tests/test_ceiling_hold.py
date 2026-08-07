@@ -58,7 +58,7 @@ def _zc_stats(ctl, retries=5):
     for _ in range(retries):
         ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
         try:
-            pkt = ctl.recv(64)
+            pkt = ctl.recv(512)
         except socket.timeout:
             continue
         if len(pkt) >= struct.calcsize(STATS_FMT):

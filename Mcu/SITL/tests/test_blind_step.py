@@ -58,16 +58,31 @@ def _zc_fault(ctl, mode, duration_us):
 
 
 def _zc_stats(ctl, retries=5):
+    # Buffer must exceed the whole ZC_STATS datagram: a UDP recv() smaller
+    # than the packet TRUNCATES it and silently drops the tail, so a reply
+    # that arrived perfectly well then fails the length check below and is
+    # indistinguishable from no reply at all. The wire grows every time a
+    # field is appended (v7 is 68 bytes, pinned by a _Static_assert in
+    # sitl_state.c), so size this generously rather than to the current
+    # packet.
+    short = 0
     for _ in range(retries):
         ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
         try:
-            pkt = ctl.recv(64)
+            pkt = ctl.recv(512)
         except socket.timeout:
             continue
         if len(pkt) >= struct.calcsize(STATS_FMT):
             vals = struct.unpack_from(STATS_FMT, pkt)
             if vals[0] == ZC_STATS_MAGIC:
                 return dict(zip(STATS_FIELDS, vals[3:]))
+        else:
+            short = len(pkt)
+    if short:
+        raise AssertionError(
+            'ZC_STATS reply was %d bytes, decoder wants %d - the firmware '
+            'packet and STATS_FMT have diverged'
+            % (short, struct.calcsize(STATS_FMT)))
     raise AssertionError('no ZC_STATS reply from SITL state port')
 
 

@@ -93,7 +93,7 @@ def _zc_stats(ctl, retries=8):
         # SITL claimed 3/4 for tone/audio subscribe — see #77).
         ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
         try:
-            pkt = ctl.recv(96)
+            pkt = ctl.recv(512)
         except socket.timeout:
             continue
         if len(pkt) >= need:
