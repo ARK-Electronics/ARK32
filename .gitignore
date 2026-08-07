@@ -19,6 +19,7 @@ tools/
 windows-tools.zip
 .settings/
 Mcu/SITL/venv/
+sitl-venv/
 .pytest_cache/
 **/__pycache__/
 **/sitl_ci.log
