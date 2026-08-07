@@ -51,7 +51,7 @@ EV = "<HBB"               # interval, kind, duty8
 EV_SIZE = struct.calcsize(EV)
 
 KINDS = {0: "-", 1: "ACCEPT", 2: "REJ_MININT", 3: "REJ_CONFIRM",
-         4: "BLIND", 5: "BUDGET"}
+         4: "BLIND", 5: "BUDGET", 6: "REJ_TRUST"}
 # Mirrors HWCI_CMD_ARM_ZC_TRACE / hwci_perf.host_cmd.
 ARM_CMD = 0x5A
 # Mirrors HWCI_PERF_MAGIC in Inc/hwci_perf.h. Lives in .data, so it is only

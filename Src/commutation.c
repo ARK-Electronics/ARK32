@@ -80,19 +80,34 @@ RAM_FUNC void commutate()
 	__enable_irq();
 	changeCompInput();
 #ifndef NO_POLLING_START
-	// Poll re-entry, startup window only. On real hardware, PWM /
-	// comparator noise during the first start kicks can shrink
-	// commutation_interval below the changeover and hand off to interrupt
-	// mode with no usable BEMF; once old_routine is 0 the 20 kHz poll
-	// drive stops sampling entirely and the motor never starts (bench:
-	// FAULT_STUCK with zero crossings, CI pinned ~19.6k from the stall
-	// rail's restart cycle). Legacy healed that by re-asserting poll mode
-	// on every slow-average commutation; keep the self-heal while
-	// starting (zero_crosses resets on desync/stop, so recovery paths get
-	// it too). Established closed loop never exits here - a missed
-	// crossing is one blind step (PeriodElapsedCallback) and false locks
-	// are the trust rail's job (runtimeProcessDesyncCheck).
-	if (zero_crosses < 100 && average_interval > polling_mode_changeover + 500) {
+	/*
+	 * Poll-mode re-entry (upstream AM32, restored for established run too).
+	 *
+	 * Layered recovery with blind stepping:
+	 *
+	 *   1) Missed ZC in closed loop → blind-step at the current estimate
+	 *      (bemf_zc.c). Transient dropouts ride through without a mode
+	 *      change and without a desync restart - that is the ARK improvement.
+	 *
+	 *   2) When the measured average interval has gone slow past the poll
+	 *      changeover (same test as upstream), fall back to open-loop poll
+	 *      ZC at the commanded duty. That is stock recovery: leave interrupt
+	 *      closed-loop, hunt BEMF in the 20 kHz poll path, re-enter CL when
+	 *      the interval is short enough again (zcfoundroutine / startMotor
+	 *      handoff thresholds below).
+	 *
+	 * Blind does not feed the interval average, so a short run of blinds
+	 * does not itself push average_interval into this band. Sustained lost
+	 * lock that lengthens the measured average - or a coast through the
+	 * changeover - takes the poll exit like upstream. Jump desync and the
+	 * stall rail remain separate exits (runtime_loop / faults).
+	 *
+	 * The zero_crosses < 100 gate that used to wrap this test made poll
+	 * re-entry startup-only and left established CL with no upstream-style
+	 * soft exit; that is removed. Startup self-heal is unchanged: the same
+	 * condition still fires early when noise collapses CI into a fake CL.
+	 */
+	if (average_interval > polling_mode_changeover + 500) {
 		old_routine = 1;
 	}
 #endif
@@ -181,10 +196,9 @@ void zcfoundroutine()
 	bad_count = 0;
 
 	zero_crosses++;
-	// Poll mode is startup-only: these enter thresholds are unchanged, but
-	// once in interrupt mode there is no re-entry (see commutate) - the
-	// blind-step deadline in PeriodElapsedCallback rides through missed
-	// crossings and a genuinely lost rotor restarts through this ramp.
+	// Poll → interrupt handoff thresholds (upstream). Closed loop may later
+	// fall back to poll via the average_interval test in commutate(); these
+	// conditions re-enter interrupt ZC when the ramp is fast enough again.
 #ifdef NO_POLLING_START // changes to interrupt mode after 2 zero crosses, does not re-enter
 	if (zero_crosses > 2) {
 		old_routine = 0;
@@ -204,9 +218,10 @@ void zcfoundroutine()
 	}
 #endif
 	if (!old_routine) {
-		// Fresh closed-loop run: a blind-step budget left over from a
-		// previous run must not shorten this one, and a stale deadline
-		// flag must not misread the first scheduled commutation.
+		// Fresh closed-loop run (first handoff from poll, or re-entry after
+		// poll recovery): a blind-step budget left over from a previous run
+		// must not shorten this one, and a stale deadline flag must not
+		// misread the first scheduled commutation.
 		zc_deadline_armed = 0;
 		zc_blind_steps = 0;
 		zc_blind_ticks = 0;

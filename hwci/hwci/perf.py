@@ -70,6 +70,19 @@ FIELDS_V3: list[tuple[str, str]] = FIELDS_V2 + [
     ("zc_confirm_reject", "I"),
 ]
 
+# main_instrumented (upstream baseline) reused version number 3 for a different
+# append: BDShot RX/TX health (96 bytes). Current ARK v3 is confirm_reject only
+# (84 bytes). Decode by header size so A/B flashes of main_instrumented still
+# read correctly (see branch main_instrumented Inc/hwci_perf.h).
+FIELDS_V3_MAIN_INSTRUMENTED: list[tuple[str, str]] = FIELDS_V2 + [
+    ("dshot_rx_good", "I"),
+    ("dshot_rx_bad", "I"),
+    ("dshot_tx_frames", "I"),
+    ("dshot_last_com_us", "H"),
+    ("dshot_telem_mode", "B"),
+    ("dshot_edt_mode", "B"),
+]
+
 # v4 appends the 32-bin PWM-phase histogram of accepted zero-crossings
 # (HWCI_PERF_ZC_PHASE_*). A repeat-count code ("32H") decodes to a tuple.
 ZC_PHASE_BINS = 32
@@ -117,6 +130,11 @@ def _format(fields: list[tuple[str, str]]) -> str:
 
 _FORMAT_BY_VERSION = {v: _format(f) for v, f in FIELDS_BY_VERSION.items()}
 SIZE_BY_VERSION = {v: struct.calcsize(fmt) for v, fmt in _FORMAT_BY_VERSION.items()}
+_FORMAT_V3_MAIN_INSTRUMENTED = _format(FIELDS_V3_MAIN_INSTRUMENTED)
+_SIZE_V3_MAIN_INSTRUMENTED = struct.calcsize(_FORMAT_V3_MAIN_INSTRUMENTED)
+assert _SIZE_V3_MAIN_INSTRUMENTED == 96
+# PerfReader accepts any size we can decode (ARK versions + main_instrumented).
+KNOWN_SIZES = set(SIZE_BY_VERSION.values()) | {_SIZE_V3_MAIN_INSTRUMENTED}
 
 _FORMAT = _FORMAT_BY_VERSION[VERSION]
 SIZE = SIZE_BY_VERSION[VERSION]  # 172 bytes (v6: 168, v5: 152, v4: 148, v3: 84, v2: 80, v1: 64)
@@ -216,13 +234,23 @@ def decode(data: bytes, *, host_monotonic: float | None = None,
             raise PerfDecodeError(
                 f"bad magic 0x{magic:08x} (expected 0x{MAGIC:08x}); "
                 "is the firmware built with HWCI_PERF=1?")
-        if version not in FIELDS_BY_VERSION:
-            raise PerfDecodeError(
-                f"struct version {version} unknown to host "
-                f"(knows {sorted(FIELDS_BY_VERSION)}); update hwci/hwci/perf.py")
-    fields = FIELDS_BY_VERSION.get(version) or FIELDS
-    ver = version if version in FIELDS_BY_VERSION else VERSION
-    fmt, expected = _FORMAT_BY_VERSION[ver], SIZE_BY_VERSION[ver]
+    # main_instrumented: version 3 + size 96 is BDShot append, not ARK confirm_reject.
+    if version == 3 and size == _SIZE_V3_MAIN_INSTRUMENTED:
+        fields = FIELDS_V3_MAIN_INSTRUMENTED
+        fmt, expected = _FORMAT_V3_MAIN_INSTRUMENTED, _SIZE_V3_MAIN_INSTRUMENTED
+        ver = 3
+    elif version in FIELDS_BY_VERSION:
+        fields = FIELDS_BY_VERSION[version]
+        ver = version
+        fmt, expected = _FORMAT_BY_VERSION[ver], SIZE_BY_VERSION[ver]
+    elif validate:
+        raise PerfDecodeError(
+            f"struct version {version} unknown to host "
+            f"(knows {sorted(FIELDS_BY_VERSION)}); update hwci/hwci/perf.py")
+    else:
+        fields = FIELDS
+        ver = VERSION
+        fmt, expected = _FORMAT_BY_VERSION[ver], SIZE_BY_VERSION[ver]
     if len(data) < expected:
         raise PerfDecodeError(
             f"v{ver} struct needs {expected} bytes, got {len(data)}")

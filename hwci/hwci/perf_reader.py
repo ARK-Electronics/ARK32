@@ -28,7 +28,7 @@ class PerfReader:
         # The ELF's struct size identifies the firmware's layout version: an
         # A/B session flashes old firmware whose struct predates newer fields,
         # and the harness must keep reading it (perf.decode is version-aware).
-        known = set(perf.SIZE_BY_VERSION.values())
+        known = getattr(perf, "KNOWN_SIZES", None) or set(perf.SIZE_BY_VERSION.values())
         if sym.size and sym.size not in known:
             raise perf.PerfDecodeError(
                 f"hwci_perf ELF size {sym.size} matches no known version "
@@ -52,9 +52,10 @@ class PerfReader:
             return
         # Pick the canonical layout matching the firmware's vintage by probing
         # for version-marker members, then verify every field of THAT layout.
+        # main_instrumented: 96-byte v3 is BDShot-only (no esc_state/confirm_reject).
         if "zc_blind_steps" in members:
             fields = perf.FIELDS_V7
-        elif "dshot_rx_good" in members:
+        elif "esc_state" in members and "dshot_rx_good" in members:
             fields = perf.FIELDS_V6
         elif "esc_state" in members:
             fields = perf.FIELDS_V5
@@ -62,6 +63,8 @@ class PerfReader:
             fields = perf.FIELDS_V4
         elif "zc_confirm_reject" in members:
             fields = perf.FIELDS_V3
+        elif "dshot_rx_good" in members:
+            fields = perf.FIELDS_V3_MAIN_INSTRUMENTED
         elif "zc_count" in members:
             fields = perf.FIELDS_V2
         else:

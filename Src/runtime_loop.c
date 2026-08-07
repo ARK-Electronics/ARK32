@@ -143,18 +143,17 @@ void runtimeProcessDesyncCheck(void)
 		uint8_t desynced = !bemfZcAverageTainted() &&
 				   (getAbsDif(last_average_interval, average_interval) > average_interval >> 1) &&
 				   (average_interval < 2000); // throttle resitricted before zc 20.
-		// Interrupt-ZC trust rail: with no per-commutation fallback to poll
-		// mode, a closed loop tracking artifact edges below usable BEMF
-		// (stable false lock: crossings keep arriving, so neither the
-		// blind-step deadline nor the jump check above can see it) needs a
-		// way out. Sustained slow averages hand back to the poll path
-		// legacy-style - soft, no desync accounting - so a throttle chop
-		// decelerating through the band behaves exactly as before. A
-		// genuine false lock has a stationary rotor: poll then finds no
-		// real crossings and the INTERVAL_TIMER stall rail escalates to a
-		// full restart on its own. The 4-rev gate keeps the lagging
-		// average during spool-up from tripping this, and transient
-		// dropouts are ridden out by blind steps.
+		// Slow-average → poll is primarily per-commutation in commutate()
+		// (upstream AM32, restored for established closed loop). Blind steps
+		// cover transient misses without a mode change; poll re-entry is the
+		// soft recovery when the measured average has truly gone long.
+		//
+		// This rev-gated path remains as a belt: desync_check only runs once
+		// per electrical revolution, so it can catch a lagging e_com_time
+		// window that has not yet been sampled on a commutate() after the
+		// average crossed the threshold. Same changeover test, same soft
+		// exit (no desync accounting). Transient dropouts still ride out on
+		// blind steps because those do not lengthen the measured average.
 		if (!old_routine && running) {
 			if (average_interval > polling_mode_changeover + 500) {
 				slow_avg_revs++;

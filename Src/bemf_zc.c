@@ -22,8 +22,14 @@
  * expected arrival plus 50% grace. An accepted crossing re-arms COM_TIMER
  * for the commutation schedule (cancelling the deadline); if the deadline
  * fires instead, commutate blind at extrapolated timing and keep watching.
- * A missed crossing costs one extrapolated step, not a mode change - there
- * is no fallback to poll mode at runtime.
+ * A missed crossing costs one extrapolated step, not an immediate mode
+ * change - that is the ARK improvement over upstream.
+ *
+ * Poll-mode open-loop ZC remains the soft recovery when the measured average
+ * interval goes long (commutate() / runtimeProcessDesyncCheck, upstream
+ * behaviour restored). Blind owns transient misses; poll owns sustained
+ * "too slow / lost usable closed-loop" recovery. Jump desync and the stall
+ * rail are separate exits.
  */
 /*
  * Dead-reckoning budget. A blind step commutates on extrapolated timing, so
@@ -310,66 +316,9 @@ RAM_FUNC void interruptRoutine()
 	// finally accepted.
 	uint16_t zc_pwm_cnt = (uint16_t)TIM1->CNT;
 #endif
-	/*
-	 * NO MINIMUM-INTERVAL GATE HERE.
-	 *
-	 * A gate rejecting any edge arriving sooner than a quarter of the tracked
-	 * interval used to sit at this point. It was built on the hypothesis that
-	 * the wrong-phase lock this branch chases is a false lock onto switching-
-	 * transient noise, and the F051 has no hardware defence against that -
-	 * comparator output blanking is a G0/G4 peripheral feature (see the
-	 * MCU_G071 guard in Mcu/f051/Src/peripherals.c enableCorePeripherals);
-	 * the STM32F0 COMP has no blanking source at all, so the software confirm
-	 * loop below is the only filter and it deliberately tolerates
-	 * filter_level/4 bad samples. Upstream AM32 carries the same guard,
-	 * commented out, immediately below ("should be impossible, desync?").
-	 *
-	 * The hypothesis was wrong, and the measurement that killed it is worth
-	 * recording so it is not rebuilt. A PWM-phase histogram of ACCEPTED
-	 * crossings (hwci_perf zc_phase_hist, binned on TIM1->CNT at ISR entry;
-	 * TIM1 is edge-aligned UP so CNT maps monotonically onto the PWM period)
-	 * was taken across healthy running and two hand-provoked grinds on an AOS
-	 * Supernova 2207 1980KV, 6S, 5" tri-blade, ARK 4IN1:
-	 *
-	 *     class   frac@turn-on  frac@turn-off  peak enrich  bins holding 80%
-	 *     healthy         0.5%          22.2%          9.8               6.7
-	 *     grind           0.6%           5.8%          5.7              11.0
-	 *     uniform         3.1%           9.4%          1.0              26
-	 *
-	 * Healthy running is sharply locked to the turn-off edge, which is what a
-	 * genuine crossing looks like when the floating phase is only clean during
-	 * PWM-off. The grind is BROADER than healthy and DEPLETED at both
-	 * switching edges - the opposite of a switching artefact. Nor is it
-	 * broadband noise: the intervals repeat far too tightly (see the detector
-	 * below). The edges the loop accepts during a grind are real BEMF
-	 * crossings at a phase relationship the commutation table does not match.
-	 *
-	 * That is fatal to any per-edge filter. A real crossing cannot be
-	 * rejected on its own merits without also rejecting correct ones, and the
-	 * early edge of the pair is as likely to be the genuine one as the late
-	 * edge. The gate also disarmed itself in practice: rejected edges leave
-	 * commutation_interval alone, but ACCEPTED-but-wrong ones update it, so
-	 * the threshold ratcheted down with the estimate it was derived from -
-	 * measured ci 719 -> 570 -> 527 -> 217 -> 86 -> 52 with the gate
-	 * following 179 -> 142 -> 131 -> 54 -> 21 -> 13. A detector whose
-	 * threshold derives from the quantity the failure corrupts cannot work.
-	 *
-	 * The replacement is a sequence test, not an edge test: see the
-	 * wrong-phase lock detector further down this function.
-	 */
-#ifdef HWCI_PERF
-	/* Interval at ISR entry, for the per-commutation trace only - with the
-	 * gate gone nothing in the control path reads it. */
+	/* Elapsed since last accepted crossing / blind step. Used by the
+	 * half-interval early-edge rule after confirm, and by the ZC trace. */
 	const uint32_t zc_elapsed = INTERVAL_TIMER_COUNT;
-#endif
-	//        stuckcounter++; // stuck at 100 interrupts before the main loop happens
-	//                        // again.
-	//        if (stuckcounter > 100) {
-	//            maskPhaseInterrupts();
-	//            zero_crosses = 0;
-	//            return;
-	//        }
-	//    }
 	// Zero-cross confirm: reject unless the window's reads hold the
 	// post-crossing level. Loop speed sets the sampling window: inlining
 	// getCompOutputLevel removes the per-sample call overhead, and with the
@@ -445,6 +394,28 @@ RAM_FUNC void interruptRoutine()
 		}
 	}
 #endif
+	/*
+	 * Half-interval early-edge rule.
+	 *
+	 * A confirmed edge earlier than CI/2 cannot be the next real crossing
+	 * (rotor cannot double speed in one step). Reject it; leave the deadline
+	 * armed so blind uses the existing estimate.
+	 *
+	 * 3/4 + IIR decrease-clamp was tried and FAILED on the bench (2026-08-06):
+	 * under a real throttle ramp the estimate lags, true ZCs arrive "early",
+	 * the tight gate rejects them, blind accumulates, duty fades - smooth
+	 * ramp stalls. Half-interval is the highest threshold that still lets
+	 * legitimate accel through. It does NOT fully stop wrong-phase ratchet
+	 * on hard steps (IIR can still walk CI down with a stream of barely-
+	 * legal accepts); that needs a different approach than "earlier vs CI".
+	 *
+	 * Gated to zero_crosses >= 100 (same arming as the blind deadline).
+	 */
+	if (zero_crosses >= ZC_DEADLINE_MIN_ZC && zc_elapsed < (commutation_interval >> 1)) {
+		HWCI_PERF_CONFIRM_REJECT();
+		HWCI_ZC_TRACE_EV(HWCI_ZC_EV_REJ_MININT, zc_elapsed);
+		return;
+	}
 #ifdef MCU_F051
 	// Turn-on-pileup timestamp compensation. A zero-cross that physically
 	// occurs during the PWM off-window (freewheel) is invisible to the
@@ -549,12 +520,7 @@ RAM_FUNC void interruptRoutine()
 	 * escalation. Demag authority is handled separately in control_loop.c.
 	 */
 	zc_blind_ticks = 0;
-	/* Per-commutation trace: this edge passed the minimum-interval gate AND
-	 * the confirm loop, so it is what the loop actually acted on. The
-	 * trigger arms on the entry signature of the false lock - an accepted
-	 * interval less than half the tracked estimate - so the ring freezes
-	 * holding the commutations either side of entry. Instrumentation only:
-	 * it changes no control decision. */
+	/* Per-commutation trace: confirm + half-interval rule both passed. */
 	HWCI_ZC_TRACE_EV(HWCI_ZC_EV_ACCEPT, zc_elapsed);
 #ifdef MCU_F051
 	const uint16_t newzctime = (uint16_t)(INTERVAL_TIMER_COUNT - zc_grid_comp);

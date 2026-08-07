@@ -213,6 +213,7 @@ extern volatile hwci_perf_t hwci_perf;
 #	define HWCI_ZC_EV_REJ_CONFIRM 3u /* rejected: glitch-tolerant confirm    */
 #	define HWCI_ZC_EV_BLIND 4u	  /* blind (deadline-extrapolated) step   */
 #	define HWCI_ZC_EV_BUDGET 5u	  /* dead-reckoning budget handed off     */
+#	define HWCI_ZC_EV_REJ_TRUST 6u	  /* rejected: untrusted-ZC (slew/demag)  */
 
 /*
  * FOUR BYTES PER EVENT, and the omission is deliberate. The obvious extra

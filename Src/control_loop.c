@@ -439,12 +439,35 @@ void setInput()
 			}
 		}
 		if (!prop_brake_active) {
-			if (input >= 47 && (zero_crosses < (uint32_t)(30 >> eepromBuffer.stall_protection))) {
+			/*
+			 * Acquisition / re-acquire duty authority (one policy).
+			 *
+			 * Until zero_crosses reaches the same horizon that arms the
+			 * missed-ZC blind deadline (100), hold the commanded duty in
+			 * the startup band. That is the existing startup floor/ceiling
+			 * - previously only applied for the first ~30 crosses
+			 * (30 >> stall_protection) - extended so a post-desync restart
+			 * (zero_crosses cleared on the stall/desync path) cannot
+			 * re-apply full stick duty while phase is still soft.
+			 *
+			 * Bench wrong-phase entry was exactly that: hard step →
+			 * brief desync → duty back at 450-500 within tens of ms with
+			 * zc still low, then ci collapse and a sustained grind with
+			 * bemfTO still 0. This is not a grind detector; it is the
+			 * same acquisition authority applied for the full window.
+			 *
+			 * last_duty_cycle is pulled down too so the 20 kHz ramp does
+			 * not spend milliseconds walking off the pre-desync duty.
+			 */
+			if (input >= 47 && zero_crosses < 100u) {
 				if (duty_cycle_setpoint < min_startup_duty) {
 					duty_cycle_setpoint = min_startup_duty;
 				}
 				if (duty_cycle_setpoint > startup_max_duty_cycle) {
 					duty_cycle_setpoint = startup_max_duty_cycle;
+				}
+				if (last_duty_cycle > startup_max_duty_cycle) {
+					last_duty_cycle = startup_max_duty_cycle;
 				}
 			}
 
