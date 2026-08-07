@@ -8,13 +8,16 @@ traces:
 
   - bridge:      a short full suppression is ridden out with blind steps,
                  no desync, no restart
-  - limit:       a long full suppression exhausts the consecutive
-                 blind-step budget and hands off to the stall rail
-                 (restart), then recovers when the fault clears
+  - budget:      a full suppression lasting longer than the dead-reckoning
+                 budget (BEMF_STALL_TICKS of blind time) hands off to the
+                 stall rail, then recovers when the fault clears
   - alternating: dropping every other commutation window (the demag
-                 signature) climbs the leaky miss-rate bucket until it
-                 trips the same rail - the pattern the consecutive-step
-                 counter alone can never catch
+                 signature) must NOT restart. Every accepted crossing
+                 clears the budget, so a 50% miss rate keeps flying on
+                 degraded timing the way upstream does. This inverts the
+                 old contract, where a leaky bucket tripped the stall rail
+                 above a 25% miss rate and the restart could not improve
+                 the miss rate that caused it.
 '''
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ ZC_STATS_MAGIC = 0x5356
 
 STATS_FIELDS = ('zero_crosses', 'commutation_interval', 'dropped_edges',
                 'desync_happened', 'old_routine', 'running', 'armed',
-                'zc_blind_steps', 'zc_miss_bucket', 'zc_deadline_armed')
+                'zc_blind_steps', 'zc_stale_q8', 'zc_deadline_armed')
 STATS_FMT = '<HBBIIIIBBBBBB'
 
 
@@ -116,7 +119,7 @@ def _assert_recovered(ctl, sim, rpm_before, sitl, tx=None):
     assert end['running'] == 1 and end['old_routine'] == 0, (
         'no closed-loop recovery: %r\n%s' % (end, sitl.log_tail()))
     assert end['zc_blind_steps'] == 0, end
-    assert end['zc_miss_bucket'] < 6, end
+    assert end['zc_stale_q8'] < 6, end
     assert rpm > 300, (
         'rpm did not recover: %.0f (was %.0f before)\n%s'
         % (rpm, rpm_before, sitl.log_tail()))
@@ -151,7 +154,7 @@ def test_blind_step_bridges_short_dropout(sitl_factory, state_stream):
         assert post['dropped_edges'] > pre['dropped_edges'], (
             'fault gate never dropped an edge: %r -> %r (fault_us=%d)'
             % (pre, post, fault_us))
-        assert any(s['zc_blind_steps'] > 0 or s['zc_miss_bucket'] > 0
+        assert any(s['zc_blind_steps'] > 0 or s['zc_stale_q8'] > 0
                    for s in samples), (
             'no blind step observed in %d samples (fault_us=%d pre=%r)'
             % (len(samples), fault_us, pre))
@@ -170,22 +173,22 @@ def test_blind_step_bridges_short_dropout(sitl_factory, state_stream):
         tx.stop()
 
 
-def test_blind_step_limit_hands_off_to_stall_rail(sitl_factory, state_stream):
+def test_blind_budget_hands_off_to_stall_rail(sitl_factory, state_stream):
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     sim, tx, rpm0 = _spin_up(sitl, state_stream)
     try:
         ctl = _open_ctl(sitl)
         pre = _zc_stats(ctl)
         assert pre['old_routine'] == 0 and pre['zero_crosses'] > 100, pre
-        ci_us = max(pre['commutation_interval'] // 2, 100)
+        # The budget is BEMF_STALL_TICKS (45000) of INTERVAL_TIMER time at
+        # 2 MHz = 22.5 ms of blind running, independent of rpm. Suppress for
+        # 3x that so the handoff is unambiguous on a loaded CI host.
+        _zc_fault(ctl, mode=1, duration_us=68_000)
+        samples = _poll_stats(ctl, seconds=1.0)
 
-        # far beyond the 8-step budget (8 steps cost ~23x CI in total)
-        _zc_fault(ctl, mode=1, duration_us=60 * ci_us)
-        samples = _poll_stats(ctl, seconds=max(0.5, 120 * ci_us * 1e-6))
-
-        # the limit tripped: stall-rail restart resets zero_crosses
+        # budget exhausted: stall-rail restart resets zero_crosses
         assert min(s['zero_crosses'] for s in samples) < 100, (
-            'blind-step limit never handed off to the stall rail '
+            'dead-reckoning budget never handed off to the stall rail '
             '(min zc %d over %d samples)\n%s'
             % (min(s['zero_crosses'] for s in samples), len(samples),
                sitl.log_tail()))
@@ -194,7 +197,18 @@ def test_blind_step_limit_hands_off_to_stall_rail(sitl_factory, state_stream):
         tx.stop()
 
 
-def test_alternating_misses_trip_miss_rate_bucket(sitl_factory, state_stream):
+def test_alternating_misses_degrade_without_restart(sitl_factory, state_stream):
+    '''A sustained 50% miss rate must fly, not restart.
+
+    This is the upstream contract. Previously a leaky bucket (+3 per miss,
+    -1 per accept) tripped the stall rail above a 25% miss rate, so an
+    article whose demag rate sat near that line stopped and restarted in a
+    loop - and the restart could not change the miss rate that caused it.
+    Every accepted crossing now clears the dead-reckoning budget, so only a
+    genuine absence of crossings can exhaust it; a 50% alternation keeps
+    commutating on degraded timing with duty authority scaled by how stale
+    the position estimate actually is.
+    '''
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     sim, tx, rpm0 = _spin_up(sitl, state_stream)
     try:
@@ -203,18 +217,28 @@ def test_alternating_misses_trip_miss_rate_bucket(sitl_factory, state_stream):
         assert pre['old_routine'] == 0 and pre['zero_crosses'] > 100, pre
 
         # drop every other commutation window: real/missed alternation.
-        # The consecutive counter resets on every accepted crossing, so
-        # only the leaky bucket (+3 per miss, -1 per accept) can end this.
         _zc_fault(ctl, mode=2, duration_us=500_000)
         samples = _poll_stats(ctl, seconds=0.7)
 
-        assert max(s['zc_miss_bucket'] for s in samples) >= 12, (
-            'miss-rate bucket never climbed under sustained alternating '
-            'misses (max %d over %d samples)'
-            % (max(s['zc_miss_bucket'] for s in samples), len(samples)))
-        assert min(s['zero_crosses'] for s in samples) < 100, (
-            'bucket never tripped the stall rail: alternating misses ran '
-            'unbounded\n' + sitl.log_tail())
+        # the blind path must actually be exercised, or this proves nothing
+        assert any(s['zc_blind_steps'] > 0 for s in samples), (
+            'alternating fault never produced a blind step\n' + sitl.log_tail())
+
+        # ...and it must not restart. zero_crosses only resets on a desync
+        # or stall-rail restart, so it must never go backwards here.
+        assert min(s['zero_crosses'] for s in samples) >= pre['zero_crosses'], (
+            'alternating misses still restarted the loop: zero_crosses fell '
+            '%d -> %d over %d samples\n'
+            % (pre['zero_crosses'], min(s['zero_crosses'] for s in samples),
+               len(samples)) + sitl.log_tail())
+        assert all(s['running'] == 1 and s['old_routine'] == 0 for s in samples), (
+            'loop left closed-loop under alternating misses\n' + sitl.log_tail())
+
+        # degradation is proportionate: an accepted crossing every other
+        # window keeps staleness near the floor rather than walking it up.
+        assert max(s['zc_stale_q8'] for s in samples) < 128, (
+            'staleness ran away under a 50%% miss rate (max %d/255)'
+            % max(s['zc_stale_q8'] for s in samples))
         _assert_recovered(ctl, sim, rpm0, sitl, tx)
     finally:
         tx.stop()

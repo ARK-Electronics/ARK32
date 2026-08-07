@@ -36,7 +36,7 @@ MODELS = os.path.join(SITL_DIR, 'models')
 # unpacking the shorter prefix is unaffected.
 STATS_FIELDS = ('zero_crosses', 'commutation_interval', 'dropped_edges',
                 'desync_happened', 'old_routine', 'running', 'armed',
-                'zc_blind_steps', 'zc_miss_bucket', 'zc_deadline_armed',
+                'zc_blind_steps', 'zc_stale_q8', 'zc_deadline_armed',
                 'dcm_hold_ms', '_pad2', 'dcm_hold_value')
 STATS_FMT = '<HBBIIIIBBBBBBBBH'
 

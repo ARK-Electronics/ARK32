@@ -413,7 +413,7 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 
 	// (b) slope estimator — frozen during test inject.
 	if (!gov_force_hold_ms && duty > 250 && last_duty_cycle == duty_cycle_setpoint && duty_cycle_setpoint < gov_duty_ceiling &&
-	    zc_blind_steps == 0 && zc_demag_run == 0 && zc_grind_hold_ms == 0 && erpm > 32) {
+	    zc_blind_steps == 0 && zc_demag_run == 0 && zc_blind_ticks == 0 && erpm > 32) {
 		uint32_t obs = (duty << 10) / erpm; // erpm > 32 keeps this in uint16
 		if (gov_conf == 0) {
 			gov_slope_q10 = (uint16_t)obs;
@@ -434,7 +434,7 @@ __attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
 	 * completes deterministically without depending on plant spin.
 	 */
 	const uint8_t gov_limited = gov_force_hold_ms || (closed && gov_conf >= GOV_CONF_ARM && duty_cycle_setpoint >= gov_duty_ceiling &&
-							  zc_blind_steps == 0 && zc_demag_run == 0 && zc_grind_hold_ms == 0);
+							  zc_blind_steps == 0 && zc_demag_run == 0 && zc_blind_ticks == 0);
 	if (gov_force_hold_ms) {
 		gov_force_hold_ms--;
 		if (gov_stuck_ms < GOV_STUCK_MS) {

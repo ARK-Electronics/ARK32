@@ -209,40 +209,17 @@ void faultUpdateBemfTimeoutPolicy(void)
 #define ACQ_FAIL_CLEAR_ZC 500
 
 /*
- * Blind-GRIND rail. The episode rail above only sees DISCRETE failures
- * (jump desync, stall trip). Bench 2026-07-23 (pr48-snap-rail-1, 900KV +
- * 10x5x3 6S, snap 0.20->0.55): a spinning snap can drop the loop into a
- * CONTINUOUS partial desync that sits below every threshold - 423 blind
- * steps/s at a 19.5% miss rate (miss bucket needs >25% and net-drains;
- * consecutive counter resets on every accepted crossing; CI step +45% is
- * under the jump check's 50%; the stall rail never fires because blind
- * steps keep resetting INTERVAL_TIMER) - while the power cut engages and
- * releases in a limit cycle (one accepted crossing resets zc_blind_steps,
- * duty re-slews at max_ramp, spike to 102 A, desync, repeat).
- *
- * The unambiguous signal is the blind-step RATE: healthy runs total 9-27
- * blind steps per RUN; the grind produces 40+ per 100 ms. Sample
- * zc_blind_window_count each 100 ms; ONE hot window holds the power cut
- * AND forces the stall rail (mask + kick INTERVAL_TIMER, same primitives
- * as the blind-limit handoff), which restarts the loop and charges the
- * episode bucket (zero_crosses is far above 100 in a grind), so
- * repetition escalates through backoff to the latch like any other
- * episode source.
- *
- * Restart on the FIRST hot window, not after N consecutive: requiring
- * consecutive hot windows is self-defeating (bench pr48-snap-rail-2) -
- * the held cut drops the blind rate below threshold, the streak resets,
- * no restart ever fires, and each hold expiry re-slews duty into a fresh
- * spike (33-88 A at ~600 ms period). The detection margin carries a
- * single-window trigger, and a false trip costs one restart plus one
- * episode charge that drains in ~1.2 s of healthy running.
+ * The blind-grind rail that used to live here (sample the blind-step count
+ * every 100 ms, force a restart on one hot window, hold a power cut for
+ * 250 ms) is gone. It existed because blind steps reset INTERVAL_TIMER and so
+ * hid a grind from the stall rail below; bemf_zc.c now measures dead-reckoning
+ * time directly in zc_blind_ticks, which makes a grind visible to that one
+ * rail without a second rate detector, three more tuned constants, and a
+ * restart on a single sampling window. Duty during a grind is handled by the
+ * continuous authority fade in control_loop.c rather than a held cut.
  */
-#define GRIND_WINDOW_MS 100
-#define GRIND_WINDOW_BLIND_LIMIT 15 /* >=150 blind/s = grind; healthy bursts stay single-digit */
-#define GRIND_HOLD_MS 250
 
 static uint8_t desync_episode_drain_ms;
-static uint8_t grind_window_ms;
 
 static void desync_episode_apply_backoff(void)
 {
@@ -351,30 +328,6 @@ void faultDesyncEpisodeTick1kHz(void)
 	if (desync_restart_holdoff_ms > 0) {
 		desync_restart_holdoff_ms--;
 	}
-	if (zc_grind_hold_ms > 0) {
-		zc_grind_hold_ms--;
-	}
-
-	/* Blind-grind window (see block comment above the constants). */
-	if (++grind_window_ms >= GRIND_WINDOW_MS) {
-		grind_window_ms = 0;
-		uint8_t blind_in_window = zc_blind_window_count;
-		zc_blind_window_count = 0; // a step between read and clear is one lost count - fine
-		if (blind_in_window >= GRIND_WINDOW_BLIND_LIMIT && running && !old_routine) {
-			// Hot window: hold the power cut (bridges the gap until the
-			// restart takes and covers any deferred path) and force the
-			// stall rail, same primitives as the blind-limit handoff in
-			// PeriodElapsedCallback: with phase interrupts masked and
-			// the deadline disarmed, nothing can reset INTERVAL_TIMER
-			// before the main loop runs faultHandleBemfIntervalStall,
-			// which restarts and charges the episode bucket.
-			zc_grind_hold_ms = GRIND_HOLD_MS;
-			maskPhaseInterrupts();
-			DISABLE_COM_TIMER_INT();
-			zc_deadline_armed = 0;
-			SET_INTERVAL_TIMER_COUNT(46000);
-		}
-	}
 
 	/* Drain only in established, trusted closed loop. bemf_timeout_happened
 	 * is deliberately NOT in the gate: it stays nonzero until
@@ -402,7 +355,7 @@ uint8_t faultDesyncRestartHoldoffActive(void)
 void faultHandleBemfIntervalStall(void)
 {
 	/* Six-step only (not sine soft-start). */
-	if (INTERVAL_TIMER_COUNT > 45000 && (escInOpenLoop() || escInClosedLoop())) {
+	if (INTERVAL_TIMER_COUNT > BEMF_STALL_TICKS && (escInOpenLoop() || escInClosedLoop())) {
 		bemf_timeout_happened++;
 
 		maskPhaseInterrupts();
@@ -414,13 +367,13 @@ void faultHandleBemfIntervalStall(void)
 		// heavy props legitimately kick many times at low throttle, and
 		// charging those latched the ESC on the 4th kick. This gate also
 		// covers the blind/miss-limit handoff (bemf_zc kicks
-		// INTERVAL_TIMER to 46000 with comparator interrupts masked, so
+		// INTERVAL_TIMER past BEMF_STALL_TICKS with comparator interrupts masked, so
 		// this rail is guaranteed to run next pass): blind stepping only
 		// arms at zero_crosses >= 100, so those episodes always charge.
 		if (zero_crosses > 100) {
 			/* Established run died here. This is the ONLY place the
 			 * stall rail is counted, and it is the aggregation point
-			 * for the grind rail and the blind/miss-limit handoff,
+			 * for the dead-reckoning budget handoff in bemf_zc.c,
 			 * both of which reach the loop through this trip - see
 			 * faultErrorCount(). */
 			fault_stall_trips++;

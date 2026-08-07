@@ -25,41 +25,34 @@
  * A missed crossing costs one extrapolated step, not a mode change - there
  * is no fallback to poll mode at runtime.
  */
-#define ZC_BLIND_STEP_LIMIT 8 /* consecutive extrapolated steps before the stall rail takes over */
 /*
- * Miss-RATE rail. zc_blind_steps only counts CONSECUTIVE misses - an
- * alternating real/missed pattern (the demag signature) resets it on every
- * accepted crossing and would blind-step indefinitely at ~12.5% interval
- * inflation per miss, never reaching the step limit, the trust rail (real
- * crossings keep the average under the changeover band) or the stall rail
- * (both paths reset INTERVAL_TIMER). Leaky bucket: each blind step adds
- * ZC_MISS_BUCKET_INC, each accepted crossing drains 1, at
- * ZC_MISS_BUCKET_LIMIT the handler stops stepping blind and hands the loop
- * to the stall rail exactly like the consecutive-step limit. Sustained miss
- * rates above 1-in-4 climb; 8 consecutive misses reach the limit on the
- * same deadline event as ZC_BLIND_STEP_LIMIT, so the consecutive case is
- * unchanged. Alternating 50% trips after ~12 misses (~4 electrical revs).
+ * Dead-reckoning budget. A blind step commutates on extrapolated timing, so
+ * between the last accepted crossing and the next one the rotor position is
+ * an estimate. zc_blind_ticks accumulates that estimated time (INTERVAL_TIMER
+ * ticks) and an accepted crossing clears it: it is "how long since the rotor
+ * last told us where it was".
+ *
+ * That single quantity replaces the consecutive-blind-step limit, the leaky
+ * miss-rate bucket and the blind-grind window that used to sit here and in
+ * faults.c. All three were answering the same question - how much blind is
+ * too much - in different units, each with its own tuned threshold, and each
+ * answering it by RESTARTING. The miss-rate bucket in particular gained 3 per
+ * blind step and drained 1 per accepted crossing, so it tripped above a 25%
+ * miss rate exactly: a cliff with no hysteresis, where one side runs forever
+ * and the other restarts forever, and a restart cannot improve the miss rate
+ * that caused it.
+ *
+ * There is no threshold to pick here. Upstream restarts when INTERVAL_TIMER
+ * shows no commutation evidence for BEMF_STALL_TICKS, and the only reason
+ * that rail could not see a blind grind is that blind steps reset
+ * INTERVAL_TIMER. Measuring the blind time separately restores upstream's own
+ * criterion - and with it upstream's behaviour, which is to keep flying on
+ * degraded timing rather than stop. A 50% miss rate now flies: every accepted
+ * crossing clears the budget, so only a genuine absence of crossings can
+ * exhaust it.
  */
-#define ZC_MISS_BUCKET_INC 3
-#define ZC_MISS_BUCKET_LIMIT 24
-/*
- * Blind stepping requires an ESTABLISHED closed loop. At the poll->interrupt
- * handoff commutation_interval is whatever the startup noise made of it -
- * bench: noise-shrunk to ~1300 ticks while the true interval of the barely
- * moving rotor is 5-10x longer - so a deadline at 1.5x the believed interval
- * fires BEFORE the first real crossing can arrive, commutates blind, and
- * drags the stator field away from the rotor. The result is a stable false
- * lock: noise bursts get accepted as crossings, blind steps bridge the gaps
- * between bursts (bench: ~40% of commutations blind, phantom ~15k eRPM,
- * rotor stalled at 3 A), and the stall rail almost never fires because every
- * blind step resets INTERVAL_TIMER. Below this zero-cross count the handler
- * keeps legacy semantics (commutate once per accepted crossing, no re-arm):
- * a noise chain then dies at the 45000-tick stall rail and the poll path
- * kick-steps the rotor exactly as ark-release does. 100 matches the startup
- * self-heal window in commutate() and the "stable running" gates elsewhere;
- * zero_crosses resets on desync/stop, so every re-acquisition passes through
- * the legacy path again before blind stepping re-arms.
- */
+#define ZC_DEAD_RECKONING_BUDGET BEMF_STALL_TICKS
+
 #define ZC_DEADLINE_MIN_ZC 100
 
 /*
@@ -126,27 +119,20 @@ RAM_FUNC void PeriodElapsedCallback()
 		// Deadline firing, not a commutation scheduled by an accepted
 		// zero-cross (interruptRoutine cancels the deadline first).
 		zc_deadline_armed = 0;
-		if (zc_blind_steps >= ZC_BLIND_STEP_LIMIT || zc_miss_bucket >= ZC_MISS_BUCKET_LIMIT) {
-			// Position unknown for too long (consecutively or as a
-			// sustained miss rate): stop stepping blind. Kick the
-			// INTERVAL_TIMER past the 45000 stall threshold so the
-			// main-loop rail (faultHandleBemfIntervalStall) restarts
-			// through the startup path on its next pass instead of
-			// 22 ms from now. That rail also charges the cross-episode
-			// desync bucket - do NOT charge here as well (it double-
-			// counted the episode), and the stall rail is guaranteed to
-			// see it: comparator interrupts are masked, so no accepted
-			// crossing can reset INTERVAL_TIMER before the main loop.
+		if (zc_blind_ticks >= ZC_DEAD_RECKONING_BUDGET) {
+			// No accepted crossing for a whole dead-reckoning budget:
+			// position is genuinely unknown, not merely uncertain. Hand
+			// off exactly as before - kick INTERVAL_TIMER past the stall
+			// threshold so faultHandleBemfIntervalStall restarts through
+			// the startup path on its next main-loop pass, and charges the
+			// episode bucket once. With phase interrupts masked nothing can
+			// reset INTERVAL_TIMER before it runs.
 			maskPhaseInterrupts();
-			SET_INTERVAL_TIMER_COUNT(46000);
+			SET_INTERVAL_TIMER_COUNT(BEMF_STALL_TICKS + 1000u);
 			return;
 		}
 		blind = 1;
 		zc_blind_steps++;
-		zc_miss_bucket += ZC_MISS_BUCKET_INC;
-		if (zc_blind_window_count < 255) {
-			zc_blind_window_count++; // grind-rate window (faults.c, 1 kHz)
-		}
 		HWCI_PERF_BLIND_STEP();
 		// Take the full elapsed time as the (late) crossing measurement
 		// and commutate now. The inflated interval feeds the average so
@@ -157,6 +143,7 @@ RAM_FUNC void PeriodElapsedCallback()
 		if (elapsed > 65535u) {
 			elapsed = 65535u;
 		}
+		zc_blind_ticks += elapsed; // extrapolated time, cleared by a real crossing
 		lastzctime = thiszctime;
 		thiszctime = (uint16_t)elapsed;
 		SET_INTERVAL_TIMER_COUNT(0);
@@ -388,9 +375,17 @@ RAM_FUNC void interruptRoutine()
 		zc_demag_run = 0;
 	}
 	zc_pre_seen = 0;
-	if (zc_miss_bucket) {
-		zc_miss_bucket--; // accepted crossing drains the miss-rate bucket
-	}
+	/*
+	 * The rotor has just reported its position, so the dead-reckoning budget
+	 * is spent and starts again. This clears unconditionally, INCLUDING on a
+	 * demag-late crossing: a late report is still a report, and normal
+	 * spool-up under load is genuinely demag-late for long stretches (high
+	 * slip current). Charging those to the budget walks a hard start into a
+	 * restart, which is the kick loop the demag-late block above is explicit
+	 * about avoiding - its response is a current reduction only, never an
+	 * escalation. Demag authority is handled separately in control_loop.c.
+	 */
+	zc_blind_ticks = 0;
 	lastzctime = thiszctime;
 #ifdef MCU_F051
 	thiszctime = (uint16_t)(INTERVAL_TIMER_COUNT - zc_grid_comp);
@@ -415,8 +410,7 @@ void startMotor()
 		DISABLE_COM_TIMER_INT(); // a stale blind-step deadline must not commutate the restart
 		zc_deadline_armed = 0;
 		zc_blind_steps = 0;
-		zc_miss_bucket = 0;
-		zc_blind_window_count = 0;
+		zc_blind_ticks = 0;
 		bemfZcResetTrend(); // no interval history across a stop
 		zc_pre_seen = 1;
 		zc_demag_run = 0;

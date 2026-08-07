@@ -64,7 +64,7 @@
     u16 magic 0x5356, u8 version=6, u8 pad, u32 zero_crosses,
       u32 commutation_interval, u32 dropped_edges, u32 desync_happened,
       u8 old_routine, u8 running, u8 armed, u8 zc_blind_steps,
-      u8 zc_miss_bucket, u8 zc_deadline_armed,
+      u8 zc_stale_q8, u8 zc_deadline_armed,
       u8 dcm_hold_ms, u8 pad2, u16 dcm_hold_value,       (v2 PR 62)
       u8 adv_kerpm_hold_ms, u8 pad3, u16 adv_kerpm_hold, (v3 PR 63)
       i32 zc_trend, u32 zc_predicted, u16 waitTime, u16 advance, (v4 PR 64)
@@ -581,7 +581,7 @@ void sitl_state_poll(void)
 			uint8_t running;
 			uint8_t armed;
 			uint8_t zc_blind_steps;
-			uint8_t zc_miss_bucket;
+			uint8_t zc_stale_q8;
 			uint8_t zc_deadline_armed;
 			uint8_t dcm_hold_ms;
 			uint8_t pad2;
@@ -619,7 +619,8 @@ void sitl_state_poll(void)
 			.running = running,
 			.armed = (uint8_t)armed,
 			.zc_blind_steps = zc_blind_steps,
-			.zc_miss_bucket = zc_miss_bucket,
+			/* dead-reckoning budget consumed, 0..255 (see zc_blind_ticks) */
+			.zc_stale_q8 = (uint8_t)((zc_blind_ticks >= BEMF_STALL_TICKS) ? 255u : (zc_blind_ticks * 255u) / BEMF_STALL_TICKS),
 			.zc_deadline_armed = zc_deadline_armed,
 			.dcm_hold_ms = dcm_hold_ms,
 			.dcm_hold_value = dcm_hold_value,

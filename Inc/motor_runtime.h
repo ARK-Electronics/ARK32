@@ -53,13 +53,23 @@ extern volatile uint32_t polling_mode_changeover;
 /* Missed-ZC blind-step fallback (bemf_zc.c) */
 extern volatile uint8_t zc_deadline_armed;
 extern volatile uint8_t zc_blind_steps;
-extern volatile uint8_t zc_miss_bucket;
 extern volatile uint8_t zc_pre_seen;
 extern volatile uint8_t zc_demag_run;
 extern volatile uint32_t zc_demag_accepts;
-/* Blind-grind rail (faults.c): blind steps this 100 ms window / cut hold */
-extern volatile uint8_t zc_blind_window_count;
-extern volatile uint16_t zc_grind_hold_ms;
+/*
+ * INTERVAL_TIMER ticks of dead reckoning since the rotor last reported its
+ * position. Blind steps add their extrapolated interval, an accepted crossing
+ * clears it (a demag-late one charges an interval instead - see bemf_zc.c).
+ * Drives both the restart decision and how much duty authority the loop is
+ * allowed, so degradation is continuous instead of a set of trip points.
+ */
+extern volatile uint32_t zc_blind_ticks;
+/*
+ * Time without rotor position evidence before the loop is restarted through
+ * the startup path. This is upstream AM32's stall criterion and the only
+ * restart threshold in the ZC path; faults.c owns the rail itself.
+ */
+#define BEMF_STALL_TICKS 45000u
 extern uint8_t filter_level;
 extern uint8_t bad_count;
 extern uint8_t bad_count_threshold;
