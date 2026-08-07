@@ -56,6 +56,10 @@ Source: [`Src/runtime_loop.c`](Src/runtime_loop.c) (governor), [`Src/faults.c`](
 
 On the ARK 4IN1 the DRV8328 is put to sleep (`nSLEEP`) when the ESC is not driving, braking, or beeping. See [`Src/gate_driver.c`](Src/gate_driver.c).
 
+### G431 COMP blanking (turn-on noise)
+
+On **ARK 12S CAN** (STM32G4), TIM1 OC5 can blank the comparator output over the PWM turn-on transient. ST’s blanking **forces the output low** (it does not hold the last level), so it is only safe on **falling-BEMF** steps; rising-BEMF steps run ungated. Design note, Alka/ST semantics, knobs, and bench checks: [doc/g431-comp-blanking.md](doc/g431-comp-blanking.md).
+
 ### Global refactor
 Large control-path split out of a monolithic `main.c` into focused modules (runtime, settings, motor control helpers, and related MCU/F051 work). The goal is safer changes, clearer ownership of hot paths, and room for instrumentation without growing one file forever.
 
