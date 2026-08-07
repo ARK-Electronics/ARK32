@@ -46,19 +46,64 @@
  * Turn-on grid hump band is G431-specific in bemf_zc.c (mult 24).
  */
 #if defined(MCU_G431)
-/* Best free-run pack (2026-08 A/B): MAX slightly above F051 for acq; RUN/FAST
- * a step above F051 for 160 MHz wall-clock + mid-eRPM hump (w/ mult 24). */
-#	define ZC_FILTER_MAX 48
-#	define ZC_FILTER_RUN_MIN 12
-#	define ZC_FILTER_FAST 9
+/*
+ * Confirm-window lengths (samples). Free-run pack 48/12/9 (2026-08, then
+ * post-blanking re-check 2026-08-07 on AOS 2207 1980 KV no-prop, optical RPM):
+ *   - MAX 48: dual-COMP acquisition is noisier than F051's single muxed COMP
+ *   - RUN/FAST 12/9: one step above F051 for 160 MHz wall-clock + mid-eRPM
+ *     hump (w/ zc_hump_mult 24 in bemf_zc.c)
+ *
+ * Post-blanking noprop_zc_map A/B (single-run each, blanking on):
+ *   pack      mid(t30-70)  t50 hump  blind_zc  notes
+ *   48/12/9     4.61%       6.28%      334     incumbent
+ *   42/10/7     5.00%       6.39%      302     worse mid (F051-scale)
+ *   48/13/9     4.64%       6.08%      333     noise / reshuffle
+ *   48/14/10    4.63%       6.08%      327     reshuffles band, no net win
+ *   48/16/12    4.55%       6.05%      347     tiny mid win, more blind
+ *   56/12/9     4.58%       6.18%      275     jitter flat; fewer blind on
+ *                                              staircase (MAX helps ramps)
+ * Startup matrix (noprop_startup_matrix_hiI, same article, complete 21 starts):
+ *   48/12/9  0 fail, mean ttr 21 ms, max 90 ms, open% ~1.1–1.5 at 6–12%
+ *   56/12/9  0 fail, mean ttr 37 ms, max 213 ms, open% ~1.7–2.1 at 6–12%
+ * So the map's blind-step win for MAX=56 does not become better acquisition
+ * residency or time-to-run — if anything 56 is slightly worse at low tiers.
+ * No pack beats 48/12/9. Raising RUN_MIN reshapes the hump; MAX only moves
+ * the acq/ramp tier. Leave 48/12/9 and spend the next knobs on time-domain
+ * reject (ZC_SEARCH_BLANK_64THS) / hump compensator, not more confirm counts.
+ *
+ * At the free-run jitter hump (t40–t60, CI ~100–150) the live level sits
+ * near RUN_MIN; FAST only arms when CI < 50 (above this article's free-run
+ * ceiling at 48 kHz PWM). Override via -DZC_FILTER_MAX=N etc. for A/B.
+ */
+#	ifndef ZC_FILTER_MAX
+#		define ZC_FILTER_MAX 48
+#	endif
+#	ifndef ZC_FILTER_RUN_MIN
+#		define ZC_FILTER_RUN_MIN 12
+#	endif
+#	ifndef ZC_FILTER_FAST
+#		define ZC_FILTER_FAST 9
+#	endif
 #elif defined(MCU_F051)
-#	define ZC_FILTER_MAX 42
-#	define ZC_FILTER_RUN_MIN 10
-#	define ZC_FILTER_FAST 7
+#	ifndef ZC_FILTER_MAX
+#		define ZC_FILTER_MAX 42
+#	endif
+#	ifndef ZC_FILTER_RUN_MIN
+#		define ZC_FILTER_RUN_MIN 10
+#	endif
+#	ifndef ZC_FILTER_FAST
+#		define ZC_FILTER_FAST 7
+#	endif
 #else
-#	define ZC_FILTER_MAX 12
-#	define ZC_FILTER_RUN_MIN 3
-#	define ZC_FILTER_FAST 2
+#	ifndef ZC_FILTER_MAX
+#		define ZC_FILTER_MAX 12
+#	endif
+#	ifndef ZC_FILTER_RUN_MIN
+#		define ZC_FILTER_RUN_MIN 3
+#	endif
+#	ifndef ZC_FILTER_FAST
+#		define ZC_FILTER_FAST 2
+#	endif
 #endif
 
 /*
