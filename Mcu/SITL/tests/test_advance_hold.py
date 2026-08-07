@@ -14,10 +14,15 @@ read, so no unused-variable diagnostic), cppcheck, the size gate, the full
 SITL suite AND a complete HWCI hardware suite, because a no-op cannot
 regress anything.
 
-So this asserts ENGAGEMENT, not absence of regression: after an injected
-desync, adv_kerpm_hold_ms must be observed nonzero. Remove the two
-assignments in runtimeProcessDesyncCheck and this test must fail - that
-mutation check is the whole point.
+So this asserts ENGAGEMENT, not absence of regression: when desync_happened
+increments (real jump desync), adv_kerpm_hold_ms must be observed nonzero.
+Remove the assignments in runtimeProcessDesyncCheck and this test must fail.
+
+NOTE (layered recovery / blind): mode-1 EXTI blackout is NOT a jump-desync
+path. Blind rides short dropouts; longer blackouts hand to the stall rail
+without incrementing desync_happened or arming these holds. Engagement is
+observed on real jump desyncs during spool-up (common on this plant), not
+via mode-1 fault injection.
 '''
 
 from __future__ import annotations
@@ -67,10 +72,6 @@ def _zc_stats(ctl, retries=5):
     raise AssertionError('no v3 ZC_STATS reply from SITL state port')
 
 
-def _zc_fault(ctl, mode, duration_us):
-    ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, 8, mode, duration_us))
-
-
 def test_advance_hold_engages_on_desync(sitl_factory, state_stream):
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     sim = state_stream(sitl)
@@ -86,72 +87,52 @@ def test_advance_hold_engages_on_desync(sitl_factory, state_stream):
         time.sleep(2.2)
         tx.value = 900
 
-        # The hold only arms with a real rpm behind it (k_erpm > 0), so wait
-        # for established closed loop before injecting anything.
-        deadline = time.time() + 10.0
-        pre = None
-        rpm = 0.0
-        while time.time() < deadline:
-            s = _zc_stats(ctl)
-            if s['running'] and not s['old_routine'] and s['zero_crosses'] > 100:
-                rpm = rpm_from_state(sim, 0.2)
-                if rpm > 300:
-                    pre = s
-                    break
-            time.sleep(0.05)
-        assert pre is not None, (
-            'never reached established closed loop with rotor turning '
-            '(last rpm=%.0f)\n%s' % (rpm, sitl.log_tail()))
-        # Spool-up on this model legitimately produces a few desyncs, so the
-        # hold may ALREADY be armed here - observed locally as
-        # adv_kerpm_hold_ms=1 with desync_happened=6 at this point. Asserting
-        # it is zero outright is therefore flaky. Wait for it to expire (it
-        # decays at 1 kHz from ADV_ERPM_HOLD_MS) so that arming seen after the
-        # injection below is caused by the injection rather than being a
-        # decaying residual - which also keeps the causal link the mutation
-        # check relies on.
-        settle = time.time() + 2.0
-        while time.time() < settle:
-            pre = _zc_stats(ctl)
-            if pre['adv_kerpm_hold_ms'] == 0:
-                break
-            time.sleep(0.01)
-        assert pre['adv_kerpm_hold_ms'] == 0, (
-            'hold never expired before injection, so a later nonzero reading '
-            'could be residual rather than caused: %r\n%s' % (pre, sitl.log_tail()))
-
-        ci_us = max(pre['commutation_interval'] // 2, 100)
+        # Capture hold arming on real jump desyncs (spool roughness). Do not
+        # use mode-1 EXTI blackout: that path is blind / stall, not desync.
+        deadline = time.time() + 12.0
+        last_desync = 0
         seen_hold = 0
         seen_value = 0
         saw_desync = False
-        fault_us = max(80 * ci_us, 80_000)
-        for _ in range(10):
-            _zc_fault(ctl, mode=1, duration_us=fault_us)
-            probe_end = time.time() + 0.5
-            while time.time() < probe_end:
-                s = _zc_stats(ctl)
-                seen_hold = max(seen_hold, s['adv_kerpm_hold_ms'])
-                seen_value = max(seen_value, s['adv_kerpm_hold'])
-                if s['desync_happened'] > pre['desync_happened']:
-                    saw_desync = True
-            if seen_hold:
-                break
+        last = None
+        while time.time() < deadline:
+            s = _zc_stats(ctl)
+            last = s
+            if s['desync_happened'] > last_desync:
+                saw_desync = True
+                last_desync = s['desync_happened']
+                # Hold is assigned in the same branch as desync_happened++;
+                # poll a few ms so ZC_STATS is not a torn pre-assign sample.
+                probe_end = time.time() + 0.08
+                while time.time() < probe_end:
+                    s2 = _zc_stats(ctl)
+                    seen_hold = max(seen_hold, s2['adv_kerpm_hold_ms'])
+                    seen_value = max(seen_value, s2['adv_kerpm_hold'])
+                    if seen_hold and seen_value:
+                        break
+                    time.sleep(0.002)
+                if seen_hold and seen_value:
+                    break
+            time.sleep(0.01)
 
         assert saw_desync, (
-            'fault injection never produced a desync, so the hold was never '
-            'given a chance to arm\n' + sitl.log_tail())
+            'never observed a jump desync during spool, so the hold was '
+            'never given a chance to arm (last=%r)\n%s'
+            % (last, sitl.log_tail()))
         assert seen_hold > 0, (
-            'THE HOLD NEVER ARMED. adv_kerpm_hold_ms stayed 0 across the '
-            'injected desyncs - this is the exact no-op the first revision of '
+            'THE HOLD NEVER ARMED. adv_kerpm_hold_ms stayed 0 across real '
+            'jump desyncs - this is the exact no-op the first revision of '
             'PR #63 shipped. Check that runtimeProcessDesyncCheck still '
             'assigns adv_kerpm_hold and adv_kerpm_hold_ms in the desynced '
             'branch.\n' + sitl.log_tail())
         assert seen_value > 0, (
             'adv_kerpm_hold_ms armed but adv_kerpm_hold is 0, so the schedule '
             'holds nothing')
+        # Sanity: rotor actually turned while we watched.
+        rpm = rpm_from_state(sim, 0.2)
+        assert rpm > 100, 'rotor never turned: rpm=%.0f\n%s' % (rpm, sitl.log_tail())
     finally:
         tx.value = 0
         time.sleep(0.3)
-        _zc_fault(ctl, mode=0, duration_us=0)
         tx.stop()
         ctl.close()

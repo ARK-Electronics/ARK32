@@ -14,11 +14,17 @@ ENGAGEMENT of the consumer path:
   3. waitTime == sat(predicted/2 - advance) using the *exported* predicted
      and advance — if advance/waitTime still key on lagging CI while predicted
      is only computed for show, this equality fails when predicted != CI
-  4. after an injected desync that zeros zero_crosses, zc_trend is cleared
+  4. after an estimate collapse that zeros zero_crosses, zc_trend is cleared
      (stale-trend hygiene next to every zero_crosses = 0)
 
 Remove the predicted assignment into advance/waitTime, or drop bemfZcResetTrend
-on the desync path, and this test must fail.
+on the zero_crosses=0 path, and this test must fail.
+
+NOTE (layered recovery / blind): mode-1 EXTI blackout is ridden by blind
+steps. Short blackouts do not zero zero_crosses. A blackout longer than the
+dead-reckoning budget (BEMF_STALL_TICKS ≈ 22.5 ms) hands to the stall rail,
+which zeros zero_crosses and calls bemfZcResetTrend — that is the hygiene
+path exercised below, not jump desync.
 '''
 
 from __future__ import annotations
@@ -173,41 +179,40 @@ def test_accel_predictor_consumer_path(sitl_factory, state_stream):
             'the spool never produced a usable trend. last=%r\n%s' % (
                 last, sitl.log_tail()))
 
-        # --- stale-trend hygiene on desync ---
-        # Need a nonzero trend, then inject a desync and require that the
-        # zero_crosses=0 path also clears zc_trend.
+        # --- stale-trend hygiene on zero_crosses=0 (stall after long blackout) ---
         pre = _zc_stats(ctl)
         assert pre['running'] and pre['zero_crosses'] > 50, (
-            'lost closed loop before desync hygiene check: %r\n%s' % (
+            'lost closed loop before trend hygiene check: %r\n%s' % (
                 pre, sitl.log_tail()))
 
-        # If trend already settled to 0 at steady speed, kick throttle
-        # briefly or just accept a fault that still zeros crosses + trend.
+        # Past BEMF_STALL (22.5 ms). Floor 80 ms so loaded CI hosts still
+        # exhaust the dead-reckoning budget before the fault ends.
         ci_us = max(int(pre['commutation_interval']) // 2, 100)
+        fault_us = max(80 * ci_us, 80_000)
         cleared = False
         for _ in range(8):
-            _zc_fault(ctl, mode=1, duration_us=80 * ci_us)
-            probe_end = time.time() + 0.4
+            _zc_fault(ctl, mode=1, duration_us=fault_us)
+            probe_end = time.time() + 0.5
             while time.time() < probe_end:
                 s = _zc_stats(ctl)
                 if s['zero_crosses'] == 0 and s['zc_trend'] == 0:
                     cleared = True
                     break
-                # After a desync, zero_crosses may bounce back quickly; require
-                # that whenever crosses are still low the trend is not a large
-                # leftover from the prior run.
-                if (s['desync_happened'] > pre['desync_happened'] and
-                        s['zero_crosses'] < ZC_TREND_MIN_ZC and
-                        s['zc_trend'] == 0):
+                # zc may bounce back quickly after stall; require trend
+                # clear while crosses are still below the predictor arm gate.
+                if (s['zero_crosses'] < ZC_TREND_MIN_ZC and
+                        s['zc_trend'] == 0 and
+                        s['zero_crosses'] < pre['zero_crosses']):
                     cleared = True
                     break
             if cleared:
                 break
 
         assert cleared, (
-            'after desync, zc_trend was not cleared with zero_crosses. '
+            'after stall-rail zero_crosses=0, zc_trend was not cleared. '
             'bemfZcResetTrend must sit next to every zero_crosses = 0 '
-            '(runtime desync path is the usual miss). last=%r pre=%r\n%s' % (
+            '(stall path is the usual miss after a long EXTI blackout; '
+            'jump desync is rare under blind). last=%r pre=%r\n%s' % (
                 _zc_stats(ctl), pre, sitl.log_tail()))
     finally:
         tx.value = 0
