@@ -111,48 +111,13 @@ void changeCompInput()
 	}
 #ifdef COMP_BLANK_TICKS
 	/*
-	 * COMP output blanking is polarity-asymmetric, so it has to be armed per
-	 * commutation step instead of left latched on in COMPx_CSR.
+	 * ST G4 COMP blanking forces the output LOW (not hold-last). That only
+	 * blanks cleanly on falling-BEMF steps (pre-cross low / rising EXTI). On
+	 * rising-BEMF it manufactures falling edges into EXTI. Arm TIM1 OC5 only
+	 * when rising == 0; leave rising steps ungated.
 	 *
-	 * Blanking gates the comparator OUTPUT low while OC5REF is high. It does
-	 * not gate COMPx_CSR.VALUE — ST specifies that value is "taken before
-	 * polarity and blanking are applied" (stm32g4xx_ll_comp.h,
-	 * LL_COMP_ReadOutputLevel), which is what getCompOutputLevel() reads.
-	 * Zero crosses come from the EXTI edge on the gated output, so what
-	 * matters is what gating does to EDGES, and that depends on which level
-	 * the comparator sits at before the crossing:
-	 *
-	 *   rising == 0 (falling BEMF): phase is above neutral before the
-	 *     crossing, so the raw output sits LOW and the awaited edge is rising
-	 *     (armed below). Forcing LOW changes nothing before the crossing, and
-	 *     a crossing landing inside the window is not lost — the output goes
-	 *     high when the window closes, at most COMP_BLANK_TICKS late.
-	 *     Blanking is a pure win on these three steps.
-	 *
-	 *   rising == 1 (rising BEMF): the raw output sits HIGH before the
-	 *     crossing and the awaited edge is falling. Forcing LOW then
-	 *     MANUFACTURES a falling edge at every window open — exactly the
-	 *     armed polarity, once per PWM period, for the entire search window.
-	 *     And a real crossing inside the window is destroyed rather than
-	 *     delayed: the output is already low, the raw level is low by the
-	 *     time the window closes, so no edge is ever produced and the step
-	 *     falls through to a blind step.
-	 *
-	 * Hence: blank the falling-BEMF steps, run the rising ones ungated. The
-	 * manufactured edges do get rejected downstream today — interruptRoutine's
-	 * confirm loop reads the ungated CSR.VALUE and still sees the pre-crossing
-	 * level — so the visible cost was an ISR at the PWM rate plus a
-	 * confirm-reject storm rather than accepted false crossings. The destroyed
-	 * crossings were silent. Neither belongs on half the steps.
-	 *
-	 * Blanking all six steps would need COMPx_CSR.POLARITY inverted on the
-	 * rising steps so the pre-crossing level is LOW again, with the EXTI edge
-	 * flipped to match. That is only correct if POLARITY is applied BEFORE the
-	 * blanking gate in the G4 output path; if the gate comes first, inverting
-	 * reproduces the same manufactured edges with the sign flipped. RM0440
-	 * §24.3 does not state the order and the LL header only pins CSR.VALUE
-	 * ahead of both, so that variant needs a scope on a redirected COMP output
-	 * to settle — it is deliberately not guessed at here.
+	 * Full design note (ideal hold-last vs ST force-low, Alka, sizing,
+	 * alternatives): doc/g431-comp-blanking.md
 	 */
 	if (rising) {
 		LL_COMP_SetOutputBlankingSource(COMP1, LL_COMP_BLANKINGSRC_NONE);

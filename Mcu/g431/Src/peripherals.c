@@ -267,10 +267,10 @@ void MX_TIM1_Init(void)
 #ifdef COMP_BLANK_TICKS
 	/*
 	 * CH5 has no pin - it exists here only to generate OC5REF as the
-	 * comparator blanking source (see COMP_BLANK_TICKS in targets.h).
-	 * PWM1 with CCR5=N holds OC5REF high for CNT < N, i.e. the first N
-	 * ticks of every PWM period, spanning the dead time and the high-side
-	 * turn-on transient that ends it.
+	 * comparator blanking source (COMP_BLANK_TICKS in targets.h;
+	 * doc/g431-comp-blanking.md). PWM1 with CCR5=N holds OC5REF high for
+	 * CNT < N, i.e. the first N ticks of every PWM period, spanning the
+	 * dead time and the high-side turn-on transient that ends it.
 	 * No preload: the window is constant and must be live from the first
 	 * period, and it is never rewritten at runtime.
 	 */
