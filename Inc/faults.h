@@ -9,13 +9,31 @@
 
 #include <stdint.h>
 
-/* Optional fault IDs for future telemetry / logging (not yet exposed). */
+/* Optional fault IDs for telemetry / logging. */
 typedef enum {
 	FAULT_NONE = 0,
 	FAULT_STUCK_ROTOR,
 	FAULT_SIGNAL_TIMEOUT,
 	FAULT_BEMF_STALL,
+	/*
+	 * Gate-driver nFAULT classes (DRV8350H / DRV8328). The pin is a single
+	 * open-drain OR of UVLO/OCP/OTW/GDF — no SPI status on hardware-interface
+	 * parts — so these are ADC guesses at the latch edge (V / I / temp).
+	 */
+	FAULT_GD_UVLO,	  /* low bus voltage guess */
+	FAULT_GD_OCP,	  /* high current / was-driving guess */
+	FAULT_GD_OTW,	  /* high temperature guess */
+	FAULT_GD_UNKNOWN, /* nFAULT with no clear ADC signature */
 } fault_id_t;
+
+/*
+ * Latched gate-driver fault cause while nFAULT is active or sticky.
+ * FAULT_NONE when healthy. Best-effort only — not a DRV status register.
+ */
+fault_id_t faultGateDriverCause(void);
+
+/* Short name for logs ("UVLO", "OCP", "OTW", "nFAULT", or ""). */
+const char *faultGateDriverCauseName(fault_id_t cause);
 
 /*
  * Stuck-rotor protection (was the top of setInput after throttle map).
@@ -185,15 +203,17 @@ uint32_t faultErrorCount(void);
 void faultErrorCountReset(void);
 
 /*
- * Gate-driver nFAULT poll (DRV8350H FAULT_N on ARK_G431_CAN, etc.).
+ * Gate-driver nFAULT poll (DRV8350H FAULT_N on ARK_G431_CAN, DRV8328 on
+ * ARK_4IN1_F051 when the pin is defined).
  *
- * When USE_DRV_NFAULT is defined: if nFAULT is low (VDS OCP, UVLO, OTW,
- * gate-drive fault — threshold is board hardware), cut PWM, latch
- * ESC_FAULT_STUCK, and at zero throttle pulse DRV ENABLE (or clear the
- * software latch after ENABLE-low sleep) so latched trips can clear
- * without reboot. No-op on targets without the pin.
+ * The DRV pin is a single open-drain OR of VDS OCP, UVLO, OTW, and GDF —
+ * hardware interface parts (…H) do not expose SPI status. On assert we
+ * classify a best-effort cause from MCU bus voltage / current / temp
+ * (faultGateDriverCause), cut PWM, latch ESC_FAULT_STUCK, log the specific
+ * cause, and at zero throttle pulse DRV ENABLE (or clear the software latch
+ * after ENABLE-low sleep) so latched trips can clear without reboot.
  *
- * Call from the main loop (not the 20 kHz path).
+ * Call from the main loop (not the 20 kHz path). No-op without the pin.
  */
 void faultPollGateDriver(void);
 
