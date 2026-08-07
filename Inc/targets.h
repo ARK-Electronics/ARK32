@@ -66,8 +66,8 @@
  * Comparator output blanking window, in TIM1 ticks (6.25 ns @ 160 MHz).
  * The G4 COMP can gate its own output from TIM1 OC5 while OC5REF is high;
  * the F051's COMP cannot, so this has no 4IN1 equivalent. Armed per
- * commutation step in changeCompInput() — read the comment there before
- * touching this, because blanking is only safe on half the steps.
+ * commutation step in changeCompInput() — ST force-low blanking is only
+ * safe on falling-BEMF steps (see doc/g431-comp-blanking.md).
  *
  * Sizing. OC5 with CCR5=N holds OC5REF high for CNT < N, so the window is
  * the first N ticks of every PWM period, and the question is where the
