@@ -53,6 +53,145 @@
 #	define TARGET_MIN_BEMF_COUNTS 3
 #endif
 
+#ifdef ARK_G431_CAN
+#	define FIRMWARE_NAME "ARK_G431_CAN"
+#	define FILE_NAME "ARK_G431_CAN"
+#	define DRONECAN_SUPPORT 1
+#	define DRONECAN_NODE_NAME "com.ark_12s.esc"
+#	define DEAD_TIME 80 /* 500 ns @ 160 MHz TIM1 (CKD=1) */
+
+#	define HARDWARE_GROUP_G4_E
+#	define TARGET_STALL_PROTECTION_INTERVAL 20000
+/*
+ * Comparator output blanking window, in TIM1 ticks (6.25 ns @ 160 MHz).
+ * The G4 COMP can gate its own output from TIM1 OC5 while OC5REF is high;
+ * the F051's COMP cannot, so this has no 4IN1 equivalent. Armed per
+ * commutation step in changeCompInput() — ST force-low blanking is only
+ * safe on falling-BEMF steps (see doc/g431-comp-blanking.md).
+ *
+ * Sizing. OC5 with CCR5=N holds OC5REF high for CNT < N, so the window is
+ * the first N ticks of every PWM period, and the question is where the
+ * switching transient actually sits inside that period:
+ *
+ *   CNT == 0            OCxREF rises; the low side turns OFF immediately.
+ *   CNT == DEAD_TIME    the high side turns ON. This is the hard event —
+ *                       the phase node slews a 50 V bus in 55-81 ns
+ *                       (measured), ~500 ns to settle including the gate
+ *                       transition, into low-side body-diode recovery.
+ *
+ * So the transient is at 500 ns, not at 0. The original 80 ticks blanked
+ * [0, 500 ns) — the quiet dead-time interval — and un-gated the comparator
+ * at the exact instant of the edge it was meant to reject. 160 ticks =
+ * 1.0 us = DEAD_TIME plus the ~500 ns edge-and-settle, which is the
+ * smallest window that actually covers it.
+ *
+ * Upper bound. Crossings that physically occur in the PWM off-window are
+ * invisible to the comparator and are registered after turn-on (see the
+ * turn-on-pileup compensation in bemf_zc.c); bench puts that detection
+ * peak at 1.3-2.6 us, so 1.0 us clears it. On the steps that blank at all,
+ * a crossing inside the window is not suppressed anyway — it is delayed to
+ * the window close, at most 1.0 us late.
+ *
+ * Duty headroom. At the target's default 24 kHz (arr 6665) the 6% startup
+ * tier is 400 ticks of on-time, so the window is 40% of it and the
+ * comparator is live over [1.0, 2.5] us — which only just contains the
+ * pile-up peak. That tier is the first thing to check on the bench, and
+ * this is the single knob to sweep.
+ */
+#	define COMP_BLANK_TICKS 160
+/*
+ * Post-commutation search blank, in 64ths of the commutation interval. An
+ * edge before this is the freewheel demag clamp on the phase that was just
+ * released, not a crossing, so COMP1_2_3_IRQHandler discards it.
+ *
+ * 32 (= interval/2) is the historical value and the default; this exists to
+ * make it sweepable, because a longer software blank is the closest thing G4
+ * offers to the "run the comparator slow during startup" trick that other
+ * families get from a COMP power mode. G4 comparators are fixed ultra-fast
+ * and there is no speed/consumption field to trade away, so rejecting noise
+ * in TIME is the only remaining axis.
+ *
+ * There is a hard ceiling and it is worth knowing before turning this up.
+ * The schedule commutates waitTime = interval/2 - advance after a crossing,
+ * so the NEXT crossing is due at interval/2 + advance, i.e. (32 + advance)
+ * 64ths after commutation. auto_advance runs 13..23, putting the expected
+ * crossing at 45..55/64. A blank past ~40 starts eating the margin at the
+ * low-advance end, and past 45 it rejects the crossing it is waiting for.
+ * Raise this only with bench data, and only against the advance schedule
+ * actually in use.
+ */
+#	define ZC_SEARCH_BLANK_64THS 32
+/* USART2 TX on PB3 @ 115200 — matches bootloader USE_DEBUG_UART (AM32-bootloader#60). */
+#	define USE_DEBUG_UART
+#	define USE_SERIAL_TELEMETRY
+#	define VOLTAGE_ADC_PIN LL_GPIO_PIN_11
+#	define VOLTAGE_ADC_CHANNEL LL_ADC_CHANNEL_14
+#	define CURRENT_ADC_PIN LL_GPIO_PIN_3
+#	define CURRENT_ADC_PORT GPIOC
+#	define CURRENT_ADC_CHANNEL LL_ADC_CHANNEL_9
+#	define VOLTAGE_ADC_PORT GPIOB
+#	define USE_CURRENT_SENSE
+#	define MILLIVOLT_PER_AMP 10
+/* No CURRENT_OFFSET: idle sense is ~0 V (uses global default 0). */
+#	define TARGET_VOLTAGE_DIVIDER 310
+/* Match ARK_4IN1_F051 vehicle policy (voltage-comp ramp + eeprom max_ramp
+ * can only lower these ceilings). Was 1/1 (SLO-style) before the F051
+ * ramp/governor work was ported to this target. */
+#	define RAMP_SPEED_LOW_RPM 3
+#	define RAMP_SPEED_HIGH_RPM 8
+/* Unconfigured-eeprom max_ramp default — same 2 %/ms as 4IN1 / factory JSON. */
+#	define TARGET_DEFAULT_MAX_RAMP 20
+/* Closed-loop earlier at low RPM (same bench rationale as ARK_4IN1_F051). */
+#	ifndef POLLING_MODE_THRESHOLD
+#		define POLLING_MODE_THRESHOLD 5000
+#	endif
+// #define NO_POLLING_START
+#	define USE_RGB_LED
+#	define RED_PORT GPIOC
+#	define RED_PIN LL_GPIO_PIN_6
+#	define GREEN_PORT GPIOC
+#	define GREEN_PIN LL_GPIO_PIN_7
+#	define BLUE_PORT GPIOC
+#	define BLUE_PIN LL_GPIO_PIN_8
+
+#	define CAN_TERM_PIN GPIO_PORT_PIN(2, 12) // PC12
+#	define CAN_TERM_POLARITY 1		  // active high
+
+#	define EEPROM_START_ADD (uint32_t)0x0801F800
+
+#	define CAN_TX_PIN LL_GPIO_PIN_9
+#	define CAN_TX_PORT GPIOB
+#	define CAN_RX_PIN LL_GPIO_PIN_11
+#	define CAN_RX_PORT GPIOA
+
+/*
+	 * DRV8350H (hardware interface):
+	 *   ENABLE  = PC9  (DRV_ENABLE) — high = awake, low = sleep (~µA on VM).
+	 *             Gated by gate_driver.c: asleep when disarmed / armed-idle,
+	 *             awake for beeps, drive, and brake (tWAKE ≈ 1 ms).
+	 *   nFAULT  = PA12 (FAULT_N) — open-drain, external 20k to 3.3V;
+	 *             asserts on VDS OCP (resistor-set on VDS pin), UVLO, OTW, GDF
+	 *             (single wire OR — no SPI status). Firmware guesses cause
+	 *             from bus V / current / temp ADC at latch (faults.c).
+	 * Mode / IDRIVE / VDS thresholds are hardwired on the board; firmware
+	 * only enables the driver and reacts to FAULT_N.
+	 */
+#	define USE_DRV_ENABLE
+#	define DRV_ENABLE_PORT GPIOC
+#	define DRV_ENABLE_PIN LL_GPIO_PIN_9
+#	define USE_DRV_NFAULT
+#	define NFAULT_PORT GPIOA
+#	define NFAULT_PIN LL_GPIO_PIN_12
+
+#	define COM_TIMER TIM7
+#	define COM_TIMER_IRQ TIM7_IRQn
+
+#	define USE_HSE
+#	undef HSE_VALUE
+#	define HSE_VALUE 8000000
+#	define USE_HSE_BYPASS 0
+#endif
+
 #ifdef ARK_4IN1_F051
 #	define FILE_NAME "ARK_4IN1_F051"
 #	define FIRMWARE_NAME "ARK 4IN1"
@@ -1186,6 +1325,59 @@
 
 #endif
 
+#ifdef HARDWARE_GROUP_G4_E
+
+#	define MCU_G431
+#	define USE_TIMER_16_CHANNEL_1
+#	define INPUT_PIN LL_GPIO_PIN_4
+#	define INPUT_PIN_PORT GPIOB
+#	define IC_TIMER_CHANNEL LL_TIM_CHANNEL_CH1
+#	define IC_TIMER_REGISTER TIM16
+#	define IC_TIMER_POINTER htim16
+
+#	define INPUT_DMA_CHANNEL LL_DMA_CHANNEL_1
+#	define DMA_HANDLE_TYPE_DEF hdma_tim16_ch1
+#	define IC_DMA_IRQ_NAME DMA1_Channel1_IRQn
+
+#	define PHASE_A_GPIO_LOW LL_GPIO_PIN_15
+#	define PHASE_A_GPIO_PORT_LOW GPIOB
+#	define AF_A_LOW LL_GPIO_AF_4
+#	define PHASE_A_GPIO_HIGH LL_GPIO_PIN_10
+#	define PHASE_A_GPIO_PORT_HIGH GPIOA
+
+#	define PHASE_B_GPIO_LOW LL_GPIO_PIN_14
+#	define PHASE_B_GPIO_PORT_LOW GPIOB
+#	define PHASE_B_GPIO_HIGH LL_GPIO_PIN_9
+#	define PHASE_B_GPIO_PORT_HIGH GPIOA
+
+#	define PHASE_C_GPIO_LOW LL_GPIO_PIN_13
+#	define PHASE_C_GPIO_PORT_LOW GPIOB
+#	define PHASE_C_GPIO_HIGH LL_GPIO_PIN_8
+#	define PHASE_C_GPIO_PORT_HIGH GPIOA
+
+#	define PHASE_C_COMP LL_COMP_INPUT_MINUS_IO2 // pa0
+#	define PHASE_B_COMP LL_COMP_INPUT_MINUS_IO1 // pa4
+#	define PHASE_A_COMP LL_COMP_INPUT_MINUS_IO1 // pa5
+
+/* Virtual neutral. B and C are on COMP1 and take it from PA1; A is on COMP2,
+ * whose IO1 is not PA1, so it takes it from PA3. PA1 and PA3 are the same
+ * SENS_COMMON net on the board, so all three phases share one reference -
+ * the differing IO index is a pin-mux artifact, not a second divider. */
+#	define PHASE_C_INPUT_PLUS LL_COMP_INPUT_PLUS_IO1 //pa1
+#	define PHASE_B_INPUT_PLUS LL_COMP_INPUT_PLUS_IO1 //pa1
+#	define PHASE_A_INPUT_PLUS LL_COMP_INPUT_PLUS_IO2 //pa3
+
+#	define PHASE_C_EXTI_LINE LL_EXTI_LINE_21
+#	define PHASE_C_COMP_NUMBER COMP1
+
+#	define PHASE_B_EXTI_LINE LL_EXTI_LINE_21
+#	define PHASE_B_COMP_NUMBER COMP1
+
+#	define PHASE_A_EXTI_LINE LL_EXTI_LINE_22
+#	define PHASE_A_COMP_NUMBER COMP2
+
+#endif
+
 /************************************ G031 Hardware Groups
  * ************************************************/
 
@@ -2242,7 +2434,9 @@
 #	define INTERVAL_TIMER TIM2
 #	define TEN_KHZ_TIMER TIM6
 #	define UTILITY_TIMER TIM17
-#	define COM_TIMER TIM16
+#	ifndef COM_TIMER
+#		define COM_TIMER TIM16
+#	endif
 #	define APPLICATION_ADDRESS 0x08001000
 #	define MAIN_COMP COMP2
 #	define EXTI_LINE LL_EXTI_LINE_22
@@ -2264,9 +2458,25 @@
 #	ifndef AF_C_LOW
 #		define AF_C_LOW LL_GPIO_AF_6
 #	endif
+#	ifndef CAN_TX_PIN
+#		define CAN_TX_PIN LL_GPIO_PIN_12
+#		define CAN_TX_PORT GPIOA
+#	endif
+#	ifndef CAN_RX_PIN
+#		define CAN_RX_PIN LL_GPIO_PIN_11
+#		define CAN_RX_PORT GPIOA
+#	endif
+#	ifndef VOLTAGE_ADC_PORT
+#		define VOLTAGE_ADC_PORT GPIOA
+#	endif
+#	ifndef CURRENT_ADC_PORT
+#		define CURRENT_ADC_PORT GPIOA
+#	endif
 
 #	define DSHOT_PRIORITY_THRESHOLD 60
-#	define COM_TIMER_IRQ TIM1_UP_TIM16_IRQn
+#	ifndef COM_TIMER_IRQ
+#		define COM_TIMER_IRQ TIM1_UP_TIM16_IRQn
+#	endif
 #endif
 
 #ifdef MCU_GDE23
@@ -2488,6 +2698,19 @@
 #ifndef NOMINAL_PWM
 // use a nominal PWM for commutation via TIM1 of 24kHz
 #	define NOMINAL_PWM 24000U
+#endif
+
+#ifndef ZC_SEARCH_BLANK_64THS
+// half the commutation interval - the long-standing post-commutation blank
+#	define ZC_SEARCH_BLANK_64THS 32
+#endif
+// 64ths of the interval. The default is spelled as the shift it replaces so
+// that leaving the knob alone is provably a no-op - and so the general form's
+// intermediate product cannot overflow on an interval it never sees anyway.
+#if ZC_SEARCH_BLANK_64THS == 32
+#	define ZC_SEARCH_BLANK(interval) ((interval) >> 1)
+#else
+#	define ZC_SEARCH_BLANK(interval) (((uint32_t)(interval) * ZC_SEARCH_BLANK_64THS) >> 6)
 #endif
 
 #ifndef TIM1_AUTORELOAD

@@ -117,11 +117,10 @@ SRC_COMMON_BASE := $(filter-out $(SRC_OPTIONAL_BRUSHED) $(SRC_OPTIONAL_HWCI),$(S
 # with .incbin (Src/bl_image.S) rather than a generated C array, so the linked
 # bytes stay verifiable against the ARK32-bootloader release they came from
 # (see Bootloaders/README.md). .S, not .[cs]: the wildcard above skips it.
-# F051 embeds by default (including HWCI_PERF=1); LTO leaves enough flash for
-# both the 4 KiB image and the perf struct. Kill switches for size A/Bs:
+# F051 release embeds by default. HWCI_PERF=1 does not embed (4 KiB goes to the
+# perf struct / feature headroom; the rig already has a BL on-chip). Kill switches:
 #   make ARK_4IN1_F051 EMBED_BOOTLOADER=0
 #   make ARK_4IN1_F051 NO_EMBED_BL=1
-#   make ARK_4IN1_F051 HWCI_PERF=1 NO_EMBED_BL=1
 # Bumping the bootloader means dropping the new .bin (from the release .hex)
 # and editing this one line if the name changes.
 SRC_OPTIONAL_BL_IMAGE := $(MAIN_SRC_DIR)/bl_image.S
@@ -131,7 +130,8 @@ SRC_OPTIONAL_BL_IMAGE := $(MAIN_SRC_DIR)/bl_image.S
 BL_IMAGE_F051 := Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
 # 0x08000000..ORIGIN(FLASH_VECTAB); the F051 linker script asserts the match.
 BL_REGION_SIZE_F051 := 4096
-# Default on; set EMBED_BOOTLOADER=0 or NO_EMBED_BL=1 to strip the image.
+# Default on for release; set EMBED_BOOTLOADER=0 or NO_EMBED_BL=1 to strip.
+# Also stripped automatically when HWCI_PERF=1 (see xEMBED_BL below).
 EMBED_BOOTLOADER ?= 1
 
 # configure some directories that are relative to wherever ROOT_DIR is located
@@ -187,9 +187,10 @@ $(eval xLDSCRIPT := $$(if $$(call has_can_suffix,$$(2)),$(LDSCRIPT_CAN_$(1)),$(L
 $(eval xCFLAGS := $$(if $$(call has_can_suffix,$$(2)),$(CFLAGS_CAN_$(1))))
 $(eval xSRC := $$(if $$(call has_can_suffix,$$(2)),$(SRC_CAN_$(1))))
 
-# Embed the bootloader image on F051 by default (release and HWCI_PERF). Either
-# EMBED_BOOTLOADER=0 or NO_EMBED_BL=1 strips it for size emergencies / pure A/Bs.
-$(eval xEMBED_BL := $(if $(filter F051,$(1)),$(if $(or $(filter 0,$(EMBED_BOOTLOADER)),$(filter 1,$(NO_EMBED_BL))),,1)))
+# Embed the bootloader image on F051 release builds by default. Strip when
+# EMBED_BOOTLOADER=0, NO_EMBED_BL=1, or HWCI_PERF=1 (HWCI needs flash for the
+# perf instrumentation; field BL rewrite is a release feature).
+$(eval xEMBED_BL := $(if $(filter F051,$(1)),$(if $(or $(filter 0,$(EMBED_BOOTLOADER)),$(filter 1,$(NO_EMBED_BL)),$(filter 1,$(HWCI_PERF))),,1)))
 
 # Per-target app sources: drop brushed/hwci unless the product asks for them
 $(eval SRC_APP_$(2) := $(SRC_COMMON_BASE)$(if $(call has_brushed_suffix,$(2)), $(SRC_OPTIONAL_BRUSHED))$(if $(filter 1,$(HWCI_PERF)), $(SRC_OPTIONAL_HWCI))$(if $(xEMBED_BL), $(SRC_OPTIONAL_BL_IMAGE)))
@@ -259,40 +260,68 @@ codegen-check-ark:
 # Build ARK F051 and enforce flash/RAM headroom (F051 is tight).
 # -B forces a rebuild so a prior image is not size-checked by mistake.
 .PHONY : size-check-ark
-# Worst case is HWCI_PERF=1 with the embedded bootloader (default): it carries
-# both the perf struct and the 4 KiB .bl_image. That bounds release flash/RAM.
-# A second release-only build still runs so a pure release link regression is
-# not hidden by HWCI-only code paths. Strip the image with NO_EMBED_BL=1 /
-# EMBED_BOOTLOADER=0 if you need a headroom A/B outside this gate.
+# Two bounds: HWCI_PERF (no .bl_image) and release (with .bl_image). Each is
+# the production shape of that product path; neither is forced to carry both
+# the 4 KiB BL blob and the HWCI perf struct.
 size-check-ark:
-	$(QUIET)$(ECHO) "--- ARK_4IN1_F051 HWCI_PERF=1 (embedded bootloader, default) ---"
+	$(QUIET)$(ECHO) "--- ARK_4IN1_F051 HWCI_PERF=1 (no embedded bootloader) ---"
 	$(QUIET)$(MAKE) -B ARK_4IN1_F051 HWCI_PERF=1
 	$(QUIET)bash scripts/check-size-ark.sh
 	$(QUIET)$(ECHO) "--- ARK_4IN1_F051 release (embedded bootloader) ---"
 	$(QUIET)$(MAKE) -B ARK_4IN1_F051
 	$(QUIET)bash scripts/check-size-ark.sh
 
-# Production full-flash image for ARK 4IN1: bootloader + app + factory EEPROM
-# defaults in one 32 KiB binary (see factory/README.md). Replaces the old
-# flash-BL / flash-app / configurator / ST-Link dump release flow.
-.PHONY : factory-image factory-image-check
-FACTORY_PRODUCT := ARK_4IN1_F051
-FACTORY_APP_BASENAME := $(OBJ)/$(IDENTIFIER)_$(FACTORY_PRODUCT)_$(FIRMWARE_VERSION)
-FACTORY_DEFAULTS := factory/ARK_4IN1_F051_eeprom_defaults.json
-factory-image: $(FACTORY_PRODUCT)
-	$(QUIET)$(ECHO) "Building factory full-flash image for $(FACTORY_PRODUCT)"
+# Production full-flash images: bootloader + app + factory EEPROM defaults.
+# See factory/README.md. Replaces flash-BL / flash-app / configurator / dump.
+.PHONY : factory-image factory-image-f051 factory-image-g431-can factory-image-check
+FACTORY_F051_PRODUCT := ARK_4IN1_F051
+FACTORY_F051_BASENAME := $(OBJ)/$(IDENTIFIER)_$(FACTORY_F051_PRODUCT)_$(FIRMWARE_VERSION)
+FACTORY_F051_DEFAULTS := factory/ARK_4IN1_F051_eeprom_defaults.json
+FACTORY_G431_PRODUCT := ARK_G431_CAN
+FACTORY_G431_BASENAME := $(OBJ)/$(IDENTIFIER)_$(FACTORY_G431_PRODUCT)_$(FIRMWARE_VERSION)
+FACTORY_G431_DEFAULTS := factory/ARK_G431_CAN_eeprom_defaults.json
+# G431 CAN 16 KiB bootloader region (ARK 12S CAN ESC). Committed under
+# Bootloaders/ from ARK32-bootloader AM32_G431_BOOTLOADER_ARKG4_CAN. When
+# missing, factory-image-g431-can can still 0xFF-pad via --allow-empty-bootloader
+# if you override BL_IMAGE_G431_CAN to empty.
+BL_IMAGE_G431_CAN ?= Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin
+
+factory-image-f051: $(FACTORY_F051_PRODUCT)
+	$(QUIET)$(ECHO) "Building factory full-flash image for $(FACTORY_F051_PRODUCT)"
 	$(QUIET)python3 scripts/build_factory_image.py \
-		--defaults $(FACTORY_DEFAULTS) \
+		--defaults $(FACTORY_F051_DEFAULTS) \
 		--bootloader $(BL_IMAGE_F051) \
-		--app $(FACTORY_APP_BASENAME).bin \
+		--app $(FACTORY_F051_BASENAME).bin \
 		--version-h $(MAIN_INC_DIR)/version.h \
-		--out-bin $(FACTORY_APP_BASENAME).factory.bin \
-		--out-hex $(FACTORY_APP_BASENAME).factory.hex \
-		--out-eeprom $(FACTORY_APP_BASENAME).eeprom.bin
+		--out-bin $(FACTORY_F051_BASENAME).factory.bin \
+		--out-hex $(FACTORY_F051_BASENAME).factory.hex \
+		--out-eeprom $(FACTORY_F051_BASENAME).eeprom.bin
+
+factory-image-g431-can: $(FACTORY_G431_PRODUCT)
+	$(QUIET)$(ECHO) "Building factory full-flash image for $(FACTORY_G431_PRODUCT)"
+	$(QUIET)python3 scripts/build_factory_image.py \
+		--defaults $(FACTORY_G431_DEFAULTS) \
+		$(if $(wildcard $(BL_IMAGE_G431_CAN)),--bootloader $(BL_IMAGE_G431_CAN),--allow-empty-bootloader) \
+		--app $(FACTORY_G431_BASENAME).bin \
+		--version-h $(MAIN_INC_DIR)/version.h \
+		--out-bin $(FACTORY_G431_BASENAME).factory.bin \
+		--out-hex $(FACTORY_G431_BASENAME).factory.hex \
+		--out-eeprom $(FACTORY_G431_BASENAME).eeprom.bin
+
+# Default target builds both ARK production images.
+factory-image: factory-image-f051 factory-image-g431-can
 
 # Build + layout/defaults gate used by CI (.github/workflows/static-analysis.yml).
 factory-image-check: factory-image
-	$(QUIET)BL_IMAGE_F051=$(BL_IMAGE_F051) FACTORY_DEFAULTS=$(FACTORY_DEFAULTS) \
+	$(QUIET)$(ECHO) "--- factory check $(FACTORY_F051_PRODUCT) ---"
+	$(QUIET)FACTORY_PRODUCT=$(FACTORY_F051_PRODUCT) \
+		FACTORY_DEFAULTS=$(FACTORY_F051_DEFAULTS) \
+		BL_IMAGE=$(BL_IMAGE_F051) \
+		bash scripts/check-factory-image-ark.sh
+	$(QUIET)$(ECHO) "--- factory check $(FACTORY_G431_PRODUCT) ---"
+	$(QUIET)FACTORY_PRODUCT=$(FACTORY_G431_PRODUCT) \
+		FACTORY_DEFAULTS=$(FACTORY_G431_DEFAULTS) \
+		BL_IMAGE="$(BL_IMAGE_G431_CAN)" \
 		bash scripts/check-factory-image-ark.sh
 
 # Code formatting (clang-format ≈ PX4 astyle/Linux look; see .clang-format).

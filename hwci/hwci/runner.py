@@ -49,6 +49,7 @@ class Sources:
     perf_source: PerfSourceFn
     telem_source: TelemSourceFn
     perf_reader: Optional[PerfReader] = None
+    debug_uart: object | None = None  # DebugUartReader when G4 VCP is wired
     closers: list = field(default_factory=list)
 
     def close(self) -> None:
@@ -417,6 +418,12 @@ def run_profile(profile: Profile, sources: Sources, *,
                 # Cut throttle immediately on live desync — do not finish the
                 # remaining profile segments into a freewheeling/desynced rotor.
                 desync_watch.check(throttle, stand, pf)
+                # G4 debug UART (ST-Link VCP): nFAULT / desync text lines.
+                if sources.debug_uart is not None:
+                    fault = sources.debug_uart.drain_abort_fault()
+                    if fault is not None:
+                        raise DesyncTripped(
+                            f"debug UART fault: {fault}")
                 tick += 1
             prev_throttle = seg.throttle
     except DesyncTripped as e:
@@ -440,9 +447,19 @@ def run_profile(profile: Profile, sources: Sources, *,
     }
     if perf_poller is not None and perf_poller.last_error is not None:
         full_meta["perf_last_error"] = repr(perf_poller.last_error)
+    debug_uart_text: str | None = None
+    if sources.debug_uart is not None:
+        du_lines = sources.debug_uart.lines()
+        full_meta["debug_uart_line_count"] = len(du_lines)
+        full_meta["debug_uart_faults"] = sorted({
+            r.fault for r in du_lines if r.kind == "fault" and r.fault})
+        full_meta["debug_uart_errors"] = getattr(sources.debug_uart, "errors", 0)
+        debug_uart_text = "\n".join(
+            f"{r.t_mono:.3f}\t{r.text}" for r in du_lines) + (
+            "\n" if du_lines else "")
     if meta:
         full_meta.update(meta)
-    return RunResult(meta=full_meta, rows=rows)
+    return RunResult(meta=full_meta, rows=rows, debug_uart_text=debug_uart_text)
 
 
 def _safe(fn):
@@ -637,15 +654,15 @@ def build_live_sources(rig: RigConfig, profile: Profile, *,
     # --- perf struct via debugger ---
     perf_reader = None
     perf_source: PerfSourceFn = lambda: None
+    dbg = None
     if rig.debugger_backend == "openocd":
-        from .debugger.openocd import OpenOcdDebugger
+        from .debugger.factory import openocd_from_rig
         elf = rig.resolved_elf()
         if elf is None:
             raise FileNotFoundError(
                 f"no ELF for target {rig.target} in {rig.resolved_obj_dir()}; "
                 "build with HWCI_PERF=1 first")
-        dbg = OpenOcdDebugger(rig.openocd_configs, openocd_bin=rig.openocd_bin,
-                              search_dirs=rig.openocd_search_dirs).open()
+        dbg = openocd_from_rig(rig).open()
         perf_reader = PerfReader(dbg, str(elf))
         perf_source = perf_reader.read
         closers.append(dbg.close)
@@ -654,7 +671,7 @@ def build_live_sources(rig: RigConfig, profile: Profile, *,
             f"debugger_backend {rig.debugger_backend!r} is not a live backend "
             "(expected 'openocd' or 'none')")
 
-    # --- ESC telemetry ---
+    # --- ESC telemetry (KISS wire; optional) ---
     telem_source: TelemSourceFn = lambda: None
     if rig.telem_backend == "serial":
         telem = _SerialTelemetry(rig.telem_port, rig.telem_baud)
@@ -665,9 +682,21 @@ def build_live_sources(rig: RigConfig, profile: Profile, *,
             f"telem_backend {rig.telem_backend!r} is not a live backend "
             "(expected 'serial' or 'none')")
 
+    # --- G4 debug UART via ST-Link VCP (text console; not KISS) ---
+    debug_uart = None
+    if rig.debug_uart_backend == "serial":
+        from .debug_uart import DebugUartReader, resolve_stlink_vcp
+        port = resolve_stlink_vcp(rig.debug_uart_port) or rig.debug_uart_port
+        debug_uart = DebugUartReader(port, rig.debug_uart_baud).open()
+        closers.append(debug_uart.close)
+    elif rig.debug_uart_backend not in ("none", "sim"):
+        raise ValueError(
+            f"debug_uart_backend {rig.debug_uart_backend!r} is not a live "
+            "backend (expected 'serial' or 'none')")
+
     sources = Sources(throttle=throttle, stand=stand, perf_source=perf_source,
                       telem_source=telem_source, perf_reader=perf_reader,
-                      closers=closers)
+                      debug_uart=debug_uart, closers=closers)
     try:
         if perf_reader is not None:
             _ensure_app_alive(dbg, perf_reader, throttle)

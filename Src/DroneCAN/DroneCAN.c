@@ -23,6 +23,10 @@
 #	include "phaseouts.h"
 #	include "functions.h"
 #	include "filter.h"
+#	include "debug_uart.h"
+#	include "settings.h"
+#	include "motor_runtime.h"
+#	include "esc_state.h"
 
 // include the headers for the generated DroneCAN messages from the
 // dronecan_dsdlc compiler
@@ -110,6 +114,7 @@ static struct PACKED {
 } debug1;
 
 static void can_printf(const char *fmt, ...);
+static uint32_t millis32(void);
 
 // some convenience macros
 #	define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -190,7 +195,9 @@ static const struct parameter {
 	{"BRAKE_ON_STOP", T_BOOL, 0, 1, 1, &eepromBuffer.brake_on_stop},
 	{"DRIVING_BRAKE_STRENGTH", T_UINT8, 1, 10, 10, &eepromBuffer.driving_brake_strength},
 	{"DRAG_BRAKE_STRENGTH", T_UINT8, 1, 10, 10, &eepromBuffer.drag_brake_strength},
-	{"INPUT_SIGNAL_TYPE", T_UINT8, 0, 5, 5, &eepromBuffer.input_type},
+	/* 0=AUTO (detect DShot/PWM; DroneCAN wins while RawCommand is live),
+	 * 1=DSHOT, 2=SERVO, 3=SERIAL, 4=EDT_ARM, 5=DRONECAN-only (DShot/PWM IRQ off). */
+	{"INPUT_SIGNAL_TYPE", T_UINT8, 0, 5, 0, &eepromBuffer.input_type},
 	{"INPUT_FILTER_HZ", T_UINT8, 0, 100, 0, &eepromBuffer.can.filter_hz},
 #	ifdef CAN_TERM_PIN
 	{"CAN_TERM_ENABLE", T_BOOL, 0, 1, 0, &eepromBuffer.can.term_enable},
@@ -244,6 +251,25 @@ static void save_settings(void)
 {
 	saveEEpromSettings();
 	can_printf("saved settings");
+	debugUartPrint("param: saved settings\r\n");
+}
+
+/*
+  pending deferred save state. Param sets only mark settings dirty;
+  the main DroneCAN_update loop coalesces bursts into a single flash
+  write once the bus has been quiet for SETTINGS_SAVE_QUIET_MS.
+  (from am32-firmware/AM32#359)
+ */
+#	define SETTINGS_SAVE_QUIET_MS 500
+static struct {
+	bool dirty;
+	uint32_t last_change_ms;
+} pending_save;
+
+static void mark_settings_dirty(void)
+{
+	pending_save.dirty = true;
+	pending_save.last_change_ms = millis32();
 }
 
 /*
@@ -311,9 +337,11 @@ static uint32_t millis32(void)
   default settings, based on public/assets/eeprom_default.bin in AM32 configurator
   update to 2.19 default
  */
+/* Byte 46 = input_type: AUTO_IN (0) — first available of DShot/PWM; DroneCAN
+ * prioritised while RawCommand stream is live (see DroneCAN_active). */
 static const uint8_t default_settings[] = {0x01, 0x03, 0x01, 0x01, 0x23, 0xa0, 0x04, 0x00, 0x0a, 0x64, 0x00, 0x32, 0x02, 0x30, 0x35, 0x31,
 					   0x20, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x1a, 0x18, 0x64, 0x37, 0x0e, 0x00, 0x00, 0x05, 0x00,
-					   0x80, 0x80, 0x80, 0x32, 0x00, 0x32, 0x00, 0x00, 0x0f, 0x0a, 0x0a, 0x8d, 0x66, 0x06, 0x01, 0x00};
+					   0x80, 0x80, 0x80, 0x32, 0x00, 0x32, 0x00, 0x00, 0x0f, 0x0a, 0x0a, 0x8d, 0x66, 0x06, 0x00, 0x00};
 
 #	ifdef MCU_SITL
 // let the SITL eeprom emulation seed a missing eeprom file with defaults
@@ -329,24 +357,108 @@ static const uint8_t advance_level_v3_remap[] = {
 	0x00, 0x08, 0x10, 0x16 // old values 0-3 map to new values 0,8,16,22
 };
 
-// printf to CAN LogMessage for debugging
-static void can_printf(const char *fmt, ...)
+/*
+ * Broadcast uavcan.protocol.debug.LogMessage.
+ * level: UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_*
+ */
+static void can_log(uint8_t level, const char *fmt, ...)
 {
 	struct uavcan_protocol_debug_LogMessage pkt;
 	memset(&pkt, 0, sizeof(pkt));
+
+	pkt.level.value = level;
+	/* Short fixed source so GUI tools group ESC logs. */
+	static const char src[] = "AM32";
+	pkt.source.len = (uint8_t)(sizeof(src) - 1u);
+	memcpy(pkt.source.data, src, pkt.source.len);
 
 	uint8_t buffer[UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_MAX_SIZE];
 	va_list ap;
 	va_start(ap, fmt);
 	uint32_t n = vsnprintf((char *)pkt.text.data, sizeof(pkt.text.data), fmt, ap);
 	va_end(ap);
-	pkt.text.len = MIN(n, sizeof(pkt.text.data));
+	pkt.text.len = (uint8_t)MIN(n, sizeof(pkt.text.data));
 
 	uint32_t len = uavcan_protocol_debug_LogMessage_encode(&pkt, buffer);
 	static uint8_t logmsg_transfer_id;
 
 	canardBroadcast(&canard, UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_SIGNATURE, UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_ID, &logmsg_transfer_id,
 			CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
+}
+
+/* printf-style LogMessage at INFO (param/save notices, etc.). */
+static void can_printf(const char *fmt, ...)
+{
+	/* Wrap through can_log so source/level stay consistent. */
+	char buf[90];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "%s", buf);
+}
+
+/*
+ * One-shot fault LogMessages: rising edge of nFAULT latch or stuck-rotor
+ * latch. nFAULT also forces ESC_FAULT_STUCK — prefer the classified
+ * gate-driver cause ("UVLO"/"OCP"/"OTW"/"nFAULT") when both rise together.
+ */
+static void DroneCAN_pollFaultLogMessages(void)
+{
+	static uint8_t prev_nfault;
+	static uint8_t prev_stuck;
+
+	const uint8_t nfault = faultGateDriverFaultActive();
+	const uint8_t stuck = (uint8_t)(escGetState() == ESC_FAULT_STUCK);
+
+	if (nfault && !prev_nfault) {
+		/* ADC-guessed class (DRV pin is OR-only on hardware-interface parts). */
+		const fault_id_t cause = faultGateDriverCause();
+		switch (cause) {
+			case FAULT_GD_UVLO:
+				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT UVLO");
+				break;
+			case FAULT_GD_OCP:
+				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT OCP");
+				break;
+			case FAULT_GD_OTW:
+				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT OTW");
+				break;
+			default:
+				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT");
+				break;
+		}
+	} else if (stuck && !prev_stuck) {
+		can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "stuck");
+	}
+
+	prev_nfault = nfault;
+	prev_stuck = stuck;
+}
+
+/* Map ESC / gate state into NodeStatus.health for 1 Hz NodeStatus. */
+static uint8_t DroneCAN_nodeHealth(void)
+{
+	const esc_state_t st = escGetState();
+
+	/* Cannot drive: stuck latch, gate-driver trip, or LVC. */
+	if (st == ESC_FAULT_STUCK || faultGateDriverFaultActive() || st == ESC_FAULT_LVC) {
+		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_CRITICAL;
+	}
+	/* Signal loss is usually followed by reset — still an error while held. */
+	if (st == ESC_FAULT_SIGNAL) {
+		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_ERROR;
+	}
+	/*
+	 * WARNING only for established hard trips (faultErrorCount: stall +
+	 * established jump desync) or active post-desync holdoff. Acquisition
+	 * roughness at low startup duty must stay OK — those no longer increment
+	 * desync_happened (see runtimeProcessDesyncCheck).
+	 */
+	if (faultErrorCount() > 0 || faultDesyncRestartHoldoffActive()) {
+		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_WARNING;
+	}
+	return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_OK;
 }
 
 /*
@@ -374,6 +486,8 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 	if (p != NULL && req.name.len != 0 && req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_EMPTY) {
 		const char last_dir_reversed = eepromBuffer.dir_reversed;
 		const char last_bi_direction = eepromBuffer.bi_direction;
+		int32_t set_log_val = 0;
+		uint8_t set_log_is_str = 0;
 
 		/*
 	  a parameter set command
@@ -383,19 +497,29 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				uint8_t *ptr8 = (uint8_t *)p->ptr;
 				if (ptr8 == &eepromBuffer.limits.current) {
 					*ptr8 = req.value.integer_value / 2;
+					set_log_val = (int32_t)req.value.integer_value; /* user-facing amps */
 				} else {
 					*ptr8 = req.value.integer_value;
+					set_log_val = (int32_t)req.value.integer_value;
 				}
 				if (ptr8 == &eepromBuffer.advance_level) {
 					*ptr8 = req.value.integer_value + 10; // adjust for advance level offset for eeprom v3
+					set_log_val = (int32_t)req.value.integer_value;
+				}
+				if (ptr8 == &eepromBuffer.motor_poles) {
+					applyMotorIdentitySettings();
 				}
 				break;
 			}
 			case T_UINT16: {
 				uint16_t *ptr16 = (uint16_t *)p->ptr;
 				*ptr16 = req.value.integer_value;
+				set_log_val = (int32_t)req.value.integer_value;
 				if (ptr16 == &motor_kv) {
 					eepromBuffer.motor_kv = (uint8_t)((*(uint16_t *)p->ptr - 20) / 40);
+					/* Advance / RPM envelopes were computed at boot from
+					 * old kV — refresh them now (AM32 identity tables). */
+					applyMotorIdentitySettings();
 				} else if (ptr16 == &low_cell_volt_cutoff) {
 					eepromBuffer.low_cell_volt_cutoff = (uint8_t)(*ptr16 - 250);
 				}
@@ -403,6 +527,7 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 			}
 			case T_BOOL:
 				*(uint8_t *)p->ptr = req.value.boolean_value ? 1 : 0;
+				set_log_val = req.value.boolean_value ? 1 : 0;
 				break;
 			case T_STRING:
 				if (req.value.union_tag == UAVCAN_PROTOCOL_PARAM_VALUE_STRING_VALUE) {
@@ -414,12 +539,29 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 								eepromBuffer.tune[i] = 0xFF;
 							}
 						}
+						set_log_is_str = 1;
 					}
 				}
 				break;
 			default:
 				return;
 		}
+
+#	ifdef USE_DEBUG_UART
+		if (set_log_is_str) {
+			debugUartPrintf("param: %s=<string len=%u>\r\n", p->name, (unsigned)req.value.string_value.len);
+		} else {
+			debugUartPrintf("param: %s=%ld\r\n", p->name, (long)set_log_val);
+		}
+		if (p->ptr == (void *)&motor_kv || p->ptr == (void *)&eepromBuffer.motor_poles) {
+			debugUartPrintf("param: applied kv=%u poles=%u erpm_lo=%u erpm_hi=%u adv_q12=%u\r\n", (unsigned)motor_kv,
+					(unsigned)eepromBuffer.motor_poles, (unsigned)low_rpm_level, (unsigned)high_rpm_level,
+					(unsigned)advance_erpm_scale_q12);
+		}
+#	else
+		(void)set_log_val;
+		(void)set_log_is_str;
+#	endif
 
 		if (last_dir_reversed != eepromBuffer.dir_reversed || last_bi_direction != eepromBuffer.bi_direction) {
 			// make dir_reversed and bi_direction change work without
@@ -429,6 +571,9 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 			armed = 0;
 			set_input(0);
 		}
+
+		/* Coalesce flash writes: deferred save in DroneCAN_update (AM32#359). */
+		mark_settings_dirty();
 	}
 
 	/*
@@ -540,6 +685,7 @@ static void handle_param_ExecuteOpcode(CanardInstance *ins, CanardRxTransfer *tr
 			save_flash_nolib(eepromBuffer.buffer, sizeof(eepromBuffer.buffer), eeprom_address);
 			loadEEpromSettings();
 			load_settings();
+			pending_save.dirty = false;
 			pkt.ok = true;
 		}
 	}
@@ -547,6 +693,7 @@ static void handle_param_ExecuteOpcode(CanardInstance *ins, CanardRxTransfer *tr
 		if (!safe_to_write_settings()) {
 			can_printf("No save while running");
 		} else {
+			pending_save.dirty = false;
 			save_settings();
 			pkt.ok = true;
 		}
@@ -582,6 +729,7 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
 	memset(&pkt, 0, sizeof(pkt));
 
 	node_status.uptime_sec = micros64() / 1000000ULL;
+	node_status.health = DroneCAN_nodeHealth();
 	pkt.status = node_status;
 
 	// fill in your major and minor firmware version
@@ -973,14 +1121,15 @@ static bool shouldAcceptTransfer(const CanardInstance *ins, uint64_t *out_data_t
 
 /*
   send the 1Hz NodeStatus message. This is what allows a node to show
-  up in the DroneCAN GUI tool and in the flight controller logs
+  up in the DroneCAN GUI tool and in the flight controller logs.
+  health reflects latched faults / recent hard errors (see DroneCAN_nodeHealth).
 */
 static void send_NodeStatus(void)
 {
 	uint8_t buffer[UAVCAN_PROTOCOL_GETNODEINFO_RESPONSE_MAX_SIZE];
 
 	node_status.uptime_sec = micros64() / 1000000ULL;
-	node_status.health = UAVCAN_PROTOCOL_NODESTATUS_HEALTH_OK;
+	node_status.health = DroneCAN_nodeHealth();
 	node_status.mode = UAVCAN_PROTOCOL_NODESTATUS_MODE_OPERATIONAL;
 	node_status.sub_mode = 0;
 
@@ -1042,7 +1191,14 @@ static void send_ESCStatus(void)
 
 	pkt.temperature = C_TO_KELVIN(degrees_celsius);
 	pkt.rpm = (e_rpm * 200) / eepromBuffer.motor_poles;
-	pkt.power_rating_pct = 0; // how do we get this?
+	/* Instant demand factor: applied duty 0..2000 → 0..100% of full scale. */
+	{
+		uint16_t pct = duty_cycle / 20u;
+		if (pct > 100u) {
+			pct = 100u;
+		}
+		pkt.power_rating_pct = (uint8_t)pct;
+	}
 	pkt.esc_index = eepromBuffer.can.esc_index;
 
 	uint32_t len = uavcan_equipment_esc_Status_encode(&pkt, buffer);
@@ -1161,10 +1317,13 @@ static void DroneCAN_Startup(void)
 	// initialise low level CAN peripheral hardware
 	sys_can_init();
 
+	/*
+	 * DRONECAN_IN (5) is exclusive: disable DShot/PWM IRQs so noise on the
+	 * signal pin cannot fight CAN. AUTO (0) and the fixed wire types keep
+	 * capture live; when both CAN and wire are present, DroneCAN_active()
+	 * makes RawCommand win until the stream times out (~250 ms).
+	 */
 	if (eepromBuffer.input_type == DRONECAN_IN) {
-		/*
-          disable interrupts for DShot and PWM
-         */
 #	ifdef MCU_L431
 		NVIC_DisableIRQ(DMA1_Channel5_IRQn);
 		NVIC_DisableIRQ(EXTI15_10_IRQn);
@@ -1217,6 +1376,9 @@ void DroneCAN_update()
 
 	const uint64_t ts = micros64();
 
+	/* Rising-edge stuck / nFAULT → one LogMessage (not rate-limited spam). */
+	DroneCAN_pollFaultLogMessages();
+
 	if (ts >= next_1hz_service_at) {
 		next_1hz_service_at += 1000000ULL;
 		process1HzTasks(ts);
@@ -1231,6 +1393,12 @@ void DroneCAN_update()
 	}
 
 	DroneCAN_processTxQueue();
+
+	/* Deferred settings save: quiet window + safe to write flash (AM32#359). */
+	if (pending_save.dirty && (millis32() - pending_save.last_change_ms) >= SETTINGS_SAVE_QUIET_MS && safe_to_write_settings()) {
+		pending_save.dirty = false;
+		save_settings();
+	}
 
 	if (canstats.last_raw_command_us != 0 && ts - canstats.last_raw_command_us > 250000ULL) {
 		/*
@@ -1268,7 +1436,13 @@ void DroneCAN_update()
 
 bool DroneCAN_active(void)
 {
-	return canstats.total_commands != 0;
+	/*
+	 * True while a RawCommand stream is live (refreshed by handle_RawCommand
+	 * and cleared by the 250 ms failsafe above). Sticky total_commands is
+	 * NOT used: after CAN drops out, DShot/PWM under AUTO must be able to
+	 * take over without a reboot.
+	 */
+	return canstats.last_raw_command_us != 0;
 }
 
 #endif // DRONECAN_SUPPORT
