@@ -66,6 +66,8 @@ static uint16_t acq_grace_ms;
  */
 #if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
 #	define FAULT_HAS_DRV_NFAULT 1
+#else
+#	define FAULT_HAS_DRV_NFAULT 0
 #endif
 
 #if FAULT_HAS_DRV_NFAULT
