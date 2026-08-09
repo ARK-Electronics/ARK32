@@ -68,7 +68,14 @@ typedef union EEprom_u {
 			uint8_t filter_hz;	       // 181
 			uint8_t debug_rate;	       // 182
 			uint8_t term_enable;	       // 183
-			uint8_t reserved[8];	       // 184-191
+			/* Width in C of the thermal foldback ramp below full
+			 * derate; the onset is limits.temperature. Lives in the
+			 * can block because that is where the free bytes are -
+			 * the limiter itself is target-agnostic, and 0xFF on a
+			 * board that never wrote this page is coerced in
+			 * settings.c. */
+			uint8_t temp_derate_band; // 184
+			uint8_t reserved[7];	  // 185-191
 		} can;
 	};
 	uint8_t buffer[192];

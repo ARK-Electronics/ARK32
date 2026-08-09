@@ -118,6 +118,16 @@ char use_speed_control_loop = 0;
 int32_t input_override = 0;
 int16_t use_current_limit_adjust = 2000;
 char use_current_limit = 0;
+/* Protection ceilings, both 0..2000 duty units, both min-combined onto
+ * duty_cycle_setpoint in setInput(). thermal_duty_ceiling is written at
+ * 1 kHz by runtimeThermalLimitTick(); duty_limit_ceiling is whichever of
+ * the two was actually binding on the last setInput() pass, published so
+ * a bench/SITL run can tell a derating ESC from a weak motor. */
+volatile uint16_t thermal_duty_ceiling = 2000;
+volatile uint16_t duty_limit_ceiling = 2000;
+volatile int16_t degrees_celsius_filtered = 0;
+/* Foldback ramp width in C, sanitized from eeprom in settings.c. */
+uint8_t temp_derate_band_c = THERMAL_DERATE_BAND_DEFAULT;
 int32_t stall_protection_adjust = 0;
 uint32_t MCU_Id = 0;
 uint32_t REV_Id = 0;

@@ -71,6 +71,44 @@ Both products ship the same ramp/timing/kV policy; input type differs:
 | Timing advance | **15° fixed** | **15° fixed** |
 | PWM input min/max | 1020 / 1980 µs | 1020 / 1980 µs |
 | Input type | DShot (`1`) | **DroneCAN** (`5`) |
+| Thermal derate | off (`141`) | **105 → 120 °C die** |
+| Derate band | — (15 °C default) | **15 °C** (byte 184) |
+| Current limit | off (`102`) | **200 A** (stored `100`, 2 A/count) |
+| Current PID (P/I/D) | 100 / 0 / 50 | 100 / 0 / 50 |
+
+The two protection limits are the one place the products differ on policy.
+Both are stored as a single byte whose *armed* range is narrow — 70..140 °C
+and 1..100 (2..200 A), per `Src/settings.c` — and the AM32 configurator
+skeleton both JSONs were seeded from carries 141/102, which sit just outside
+those ranges and therefore mean OFF. The G431 CAN board arms both:
+
+- **Thermal**: a soft foldback, never a cutoff. The duty ceiling falls
+  linearly from full authority at the onset (`temperature_limit`) to 10%
+  one band later (`temperature_derate_band`, DroneCAN `TEMP_DERATE_BAND`,
+  5..40 °C), off a 64 ms-filtered die temperature. 105 → 120 °C by default.
+- **Current**: a 200 A backstop below the DRV8350 VDS trip, ~80% of the
+  shunt rating. It regulates 50 ms-averaged current, so it protects against
+  sustained draw, not against a short.
+- The two compose by `min()` in `setInput()` and both only ever lower the
+  ceiling; the 20 kHz ramp limiter slews applied duty toward it either way.
+- **Do not lower `current_P`.** The ceiling moves by `pid_output / 10000`
+  duty units per tick and that integer divide is a dead zone: the loop is
+  inert until the overshoot exceeds `5000/Kp` centiamps. At the shipped
+  Kp 200 that is ~0.5 A of resolution. Measured in SITL on `heavy_13inch`
+  with an 8 A limit: P=100 holds 7.7 A, P=50 7.1 A, P=25 6.5 A, and P=5
+  fails outright at 14.7 A.
+
+The 105 °C onset follows professional 12S practice (APD and industrial
+T-Motor fold back around 110 °C), with one caveat to settle on the bench:
+**those vendors read an NTC on the power stage, this reads the MCU die.**
+The G4 die sensor is factory-calibrated at 30 °C and 110 °C, so the default
+band keeps almost the whole ramp inside the calibrated span and puts full
+derate below the part's 125 °C junction limit — but if the die-to-FET delta
+on this board turns out large, the onset belongs lower.
+
+The 4IN1 stays off: its shunt is shared by all four ESCs, so per-motor
+current limiting is not meaningful there, and its thermal placement has not
+been benched.
 
 Encodings follow `Inc/eeprom.h` and `Src/settings.c`. Rebuild after editing JSON:
 

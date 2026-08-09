@@ -385,6 +385,85 @@ void runtimeSendTelemetryIfNeeded(void)
 }
 
 /*
+ * Thermal duty limiter, 1 kHz (main-loop context, fresh degrees_celsius).
+ *
+ * A CONTINUOUS derate, not a threshold. Upstream mapped
+ * [limit-10, limit+10] onto [throttle_max_at_high_rpm/2, 1] but only
+ * entered that map at temp > limit, so the first degree over the limit
+ * stepped the ceiling from full authority to ~22% and one degree back
+ * restored it in full: a bang-bang whose amplitude is the entire derate
+ * range, cycling on the board's thermal time constant. It also
+ * OVERWROTE duty_cycle_maximum, discarding the low-rpm map and the
+ * post-desync ceiling hold (dcm_hold, PR #62) in the process.
+ *
+ * Here the derate starts AT the limit and falls linearly to
+ * THERMAL_CEIL_FLOOR over temp_derate_band_c degrees, and it lands in its own
+ * ceiling that setInput() min-combines with every other one. A
+ * proportional derate settles where a threshold cannot: shedding duty
+ * sheds heat, so the ESC finds an equilibrium inside the band instead of
+ * oscillating across its edge.
+ *
+ * The input is filtered because it is not smooth. degrees_celsius is a
+ * whole-degree integer from a single unaveraged conversion of the MCU die
+ * sensor (every ARK target - no board NTC), so it dithers +-1 C and a
+ * derate driven straight off it would step by 1/20th of the band at the
+ * dither rate. The Q12 IIR (tau ~64 ms at 1 kHz) removes the dither and
+ * gives the derate the sub-degree resolution the integer input lacks.
+ * Q12 rather than Q8 so the >> in the filter never rounds a small delta
+ * to zero: at Q8 a positive delta under 64 (0.25 C) stalls the filter and
+ * biases it permanently cold, which is the direction that under-protects.
+ *
+ * The floor is authority, not protection: BAND_C over the limit the ESC
+ * still allows 10% duty rather than the 0.05% upstream allowed, because a
+ * multirotor that loses a motor outright is worse off than one flying on
+ * a derated motor, and the gate driver's own thermal shutdown is the real
+ * backstop below this. Placed correctly the floor is unreachable anyway -
+ * equilibrium lands inside the band.
+ *
+ * Nothing here is gated on limits.temperature being in range: settings.c
+ * coerces anything outside 70..140 to 255, which no die reading reaches,
+ * so a disabled limit falls out of the arithmetic as a constant 2000.
+ */
+#define THERMAL_CEIL_FLOOR 200 /* 10% of full scale; see above */
+#define THERMAL_FILT_Q 12
+#define THERMAL_FILT_SHIFT 6 /* tau ~64 ms at 1 kHz */
+
+void runtimeThermalLimitTick(void)
+{
+	static int32_t temp_q;
+	static uint8_t temp_seeded;
+
+	const int32_t sample_q = (int32_t)degrees_celsius << THERMAL_FILT_Q;
+	if (!temp_seeded) {
+		/* Seed on the first sample: ramping up from 0 C would read cold
+		 * (i.e. unprotected) for the filter's settling time at boot. */
+		temp_q = sample_q;
+		temp_seeded = 1;
+	} else {
+		temp_q += (sample_q - temp_q) >> THERMAL_FILT_SHIFT;
+	}
+	/* ROUND, do not truncate. The IIR stalls once the remaining delta is
+	 * under one shift step (1/64 C here), so temp_q settles just short of
+	 * the input - and truncating 99.98 to 99 would report a whole degree
+	 * cold forever. The residue is far too small to matter to the derate
+	 * (which uses full-resolution temp_q below), but the published degree
+	 * is what a bench or a test compares against. */
+	degrees_celsius_filtered = (int16_t)((temp_q + (1 << (THERMAL_FILT_Q - 1))) >> THERMAL_FILT_Q);
+
+	const int32_t over_q = temp_q - ((int32_t)eepromBuffer.limits.temperature << THERMAL_FILT_Q);
+	if (over_q <= 0) {
+		thermal_duty_ceiling = 2000;
+		return;
+	}
+	const int32_t band_q = (int32_t)temp_derate_band_c << THERMAL_FILT_Q;
+	if (over_q >= band_q) {
+		thermal_duty_ceiling = THERMAL_CEIL_FLOOR;
+		return;
+	}
+	thermal_duty_ceiling = (uint16_t)(2000 - (((2000 - THERMAL_CEIL_FLOOR) * over_q) / band_q));
+}
+
+/*
  * Transient governor, 1 kHz (main-loop context, fresh battery_voltage).
  *
  * (a) Voltage-compensated ramp: max_ramp_* are duty-per-tick, so the same
@@ -615,6 +694,9 @@ void runtimeProcessAdcAndProtections(void)
 {
 	if (PROCESS_ADC_FLAG == 1) { // for adc and telemetry set adc counter at 1khz loop rate
 		adcAppServiceConversion();
+		/* Fresh degrees_celsius: the derate filter needs a fixed rate, and
+		 * this 1 kHz block is the only one the ADC actually updates at. */
+		runtimeThermalLimitTick();
 #ifndef BRUSHED_MODE
 		runtimeTransientGovernorTick();
 #endif
@@ -741,10 +823,10 @@ void runtimeMotorModeTick(void)
 			duty_cycle_maximum = 2000;
 		}
 
-		if (degrees_celsius > eepromBuffer.limits.temperature) {
-			duty_cycle_maximum = map(degrees_celsius, eepromBuffer.limits.temperature - 10,
-						 eepromBuffer.limits.temperature + 10, throttle_max_at_high_rpm / 2, 1);
-		}
+		/* The thermal derate used to overwrite duty_cycle_maximum here.
+		 * It is now its own ceiling (runtimeThermalLimitTick, 1 kHz) that
+		 * setInput() min-combines, so duty_cycle_maximum stays what its
+		 * name says - the rpm-based ceiling plus the post-desync hold. */
 		if (zero_crosses < 100 && commutation_interval > 500) {
 			filter_level = ZC_FILTER_MAX;
 		} else {

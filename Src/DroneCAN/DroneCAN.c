@@ -200,7 +200,13 @@ static const struct parameter {
 	{"LOW_VOLTAGE_CUTOFF", T_UINT8, 0, 2, 0, &eepromBuffer.low_voltage_cut_off},
 	{"CELL_VOLTAGE_THRESHOLD", T_UINT16, 250, 350, 300, &low_cell_volt_cutoff},
 	{"ABSOLUTE_VOLTAGE_CUTOFF", T_UINT8, 1, 100, 10, &eepromBuffer.absolute_voltage_cutoff},
-	{"CURRENT_LIMIT", T_UINT8, 0, 200, 0, &eepromBuffer.limits.current},
+	/* Defaults are the stored encoding, which for CURRENT_LIMIT is 2 A per
+	 * count: 100 = 200 A (also the largest value settings.c will arm). Both
+	 * match default_settings[43]/[44] - load_settings() falls back to these
+	 * when the stored byte is out of range, and an out-of-range byte must
+	 * not be a back door to a disabled limiter. 255 remains settable to
+	 * turn the thermal derate off deliberately. */
+	{"CURRENT_LIMIT", T_UINT8, 0, 200, 100, &eepromBuffer.limits.current},
 	/* The current-limit PID in the units the loop uses: settings.c computes
 	 * Kp = current_P * 2 and Kd = current_D * 2, so these scale x2 on read
 	 * and /2 on write exactly like CURRENT_LIMIT - hence max 510 for a
@@ -208,7 +214,12 @@ static const struct parameter {
 	{"CURRENT_P", T_UINT8, 0, 510, 200, &eepromBuffer.current_P},
 	{"CURRENT_I", T_UINT8, 0, 255, 0, &eepromBuffer.current_I},
 	{"CURRENT_D", T_UINT8, 0, 510, 100, &eepromBuffer.current_D},
-	{"TEMPERATURE_LIMIT", T_UINT8, 70, 255, 255, &eepromBuffer.limits.temperature},
+	{"TEMPERATURE_LIMIT", T_UINT8, 70, 255, 105, &eepromBuffer.limits.temperature},
+	/* Foldback slope: degrees from the onset to full derate. The response
+	 * is always a ramp - there is no hard-cut mode to select, because
+	 * dropping a motor outright on a multirotor is worse than flying on a
+	 * derated one. This is the knob that sets how abrupt the ramp is. */
+	{"TEMP_DERATE_BAND", T_UINT8, 5, 40, 15, &eepromBuffer.can.temp_derate_band},
 	/* 0 = off, 1 = brake, 2 = active brake (requires arming) - also was a
 	 * bool, so mode 2 could not be selected over CAN. */
 	{"BRAKE_ON_STOP", T_UINT8, 0, 2, 0, &eepromBuffer.brake_on_stop},
@@ -365,10 +376,36 @@ static uint32_t millis32(void)
   update to 2.19 default
  */
 /* Byte 46 = input_type: AUTO_IN (0) — first available of DShot/PWM; DroneCAN
- * prioritised while RawCommand stream is live (see DroneCAN_active). */
+ * prioritised while RawCommand stream is live (see DroneCAN_active).
+ *
+ * Bytes 43/44 = temperature/current limit, and they are ARK values, not the
+ * configurator's. Upstream ships 0x8d (141) and 0x66 (102), which are both
+ * just OUTSIDE the ranges settings.c arms (70..140 C, 1..100 raw = 2..200 A),
+ * so the stock eeprom silently disables both limiters. That is where the
+ * factory JSONs got their disabled values from, by copying this skeleton.
+ * A DroneCAN param ERASE memcpy's this array over the whole page, so leaving
+ * it stock would mean a "restore defaults" quietly turns the protections off
+ * on a shipped ESC - the one config change nobody would think to re-check.
+ *
+ * 105 C: foldback onset, in line with professional 12S practice (APD/T-Motor
+ * derate around 110) and inside the G4 die sensor's factory calibration span
+ * (30..110 C). CAVEAT worth carrying: those vendors read an NTC on the power
+ * stage, this reads the MCU die, and the die-to-FET delta on this board has
+ * not been benched - if it turns out large, the onset belongs lower.
+ * 100 raw = 200 A: the highest the enable gate accepts, ~80% of the ARK 12S
+ * shunt rating, and above anything a healthy craft draws - a backstop, not a
+ * flight limiter.
+ *
+ * The foldback WIDTH (byte 184) is past the end of this array, so an erase
+ * leaves it 0xFF and settings.c coerces it to the 15 C default.
+ *
+ * NOTE this array is still upstream's everywhere else, so an erase also
+ * reverts e.g. byte 5 max_ramp to 0xa0 (16 %/ms) rather than the ARK 2 %/ms.
+ * That is a pre-existing hole in the erase path and wants its own fix.
+ */
 static const uint8_t default_settings[] = {0x01, 0x03, 0x01, 0x01, 0x23, 0xa0, 0x04, 0x00, 0x0a, 0x64, 0x00, 0x32, 0x02, 0x30, 0x35, 0x31,
 					   0x20, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x1a, 0x18, 0x64, 0x37, 0x0e, 0x00, 0x00, 0x05, 0x00,
-					   0x80, 0x80, 0x80, 0x32, 0x00, 0x32, 0x00, 0x00, 0x0f, 0x0a, 0x0a, 0x8d, 0x66, 0x06, 0x00, 0x00};
+					   0x80, 0x80, 0x80, 0x32, 0x00, 0x32, 0x00, 0x00, 0x0f, 0x0a, 0x0a, 0x69, 0x64, 0x06, 0x00, 0x00};
 
 #	ifdef MCU_SITL
 // let the SITL eeprom emulation seed a missing eeprom file with defaults

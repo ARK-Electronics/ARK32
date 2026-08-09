@@ -122,6 +122,15 @@ void loadEEpromSettings(void)
 			eepromBuffer.limits.temperature = 255;
 		}
 
+		/* Foldback ramp width. 0xFF on any page that never wrote the CAN
+		 * block (every non-DroneCAN product) lands here, so the coercion
+		 * is the normal path, not an error case. */
+		if (eepromBuffer.can.temp_derate_band < THERMAL_DERATE_BAND_MIN ||
+		    eepromBuffer.can.temp_derate_band > THERMAL_DERATE_BAND_MAX) {
+			eepromBuffer.can.temp_derate_band = THERMAL_DERATE_BAND_DEFAULT;
+		}
+		temp_derate_band_c = eepromBuffer.can.temp_derate_band;
+
 		if (eepromBuffer.limits.current > 0 && eepromBuffer.limits.current <= 100) {
 			use_current_limit = 1;
 		}
