@@ -326,6 +326,8 @@ factory-image-check: factory-image
 		FACTORY_DEFAULTS=$(FACTORY_G431_DEFAULTS) \
 		BL_IMAGE="$(BL_IMAGE_G431_CAN)" \
 		bash scripts/check-factory-image-ark.sh
+	$(QUIET)$(ECHO) "--- erase-defaults check ---"
+	$(QUIET)python3 scripts/check-erase-defaults.py $(FACTORY_G431_PRODUCT)
 
 # Code formatting (clang-format ≈ PX4 astyle/Linux look; see .clang-format).
 # Same target names as PX4:
