@@ -195,8 +195,28 @@ void loadEEpromSettings(void)
 		max_ramp_low_rpm = RAMP_SPEED_LOW_RPM;
 		max_ramp_high_rpm = RAMP_SPEED_HIGH_RPM;
 		if (eepromBuffer.max_ramp < 10) {
+			/*
+			 * Fine mode: one step every 10th 20 kHz tick, so a step of N
+			 * is N counts per 500 us = 0.1*N %/ms - a tenth of what the
+			 * same number means in coarse mode.
+			 *
+			 * STARTUP KEEPS ITS COARSE RATE. It used to take the eeprom
+			 * value like the other two regimes, which silently handed the
+			 * spool-up ramp to a cruise setting: ARK_G431_CAN's 0.5 %/ms
+			 * left the racer plant unable to start at all in SITL
+			 * (test_acq_desync_rail: "motor never entered running", 12 s,
+			 * deterministic - clean at the old 16 %/ms default). That
+			 * contradicts the schedule's own documented intent, which is
+			 * that RAMP_SPEED_STARTUP governs spool-up reliability and is
+			 * deliberately NOT a vehicle-tuning knob (see targets.h).
+			 *
+			 * x10 converts the coarse ceiling into fine-cadence units, so
+			 * startup slews at exactly the rate it would in coarse mode
+			 * while low/high rpm honour the requested value. Nothing here
+			 * lets the eeprom RAISE a regime past its targets.h ceiling.
+			 */
 			ramp_divider = 9;
-			max_ramp_startup = eepromBuffer.max_ramp;
+			max_ramp_startup = RAMP_SPEED_STARTUP * 10;
 			max_ramp_low_rpm = eepromBuffer.max_ramp;
 			max_ramp_high_rpm = eepromBuffer.max_ramp;
 		} else {

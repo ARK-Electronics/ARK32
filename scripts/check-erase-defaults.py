@@ -30,11 +30,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# (macro suffix, DroneCAN.c eeprom offset or None, JSON key)
+# (macro suffix, DroneCAN.c eeprom offset or None, JSON key, JSON scale)
+# scale converts the human JSON unit to the stored byte; max_ramp is the one
+# field the JSON expresses in %/ms rather than raw counts.
 FIELDS = (
-    ("TEMPERATURE_LIMIT", 43, "temperature_limit"),
-    ("CURRENT_LIMIT", 44, "current_limit"),
-    ("TEMP_DERATE_BAND", None, "temperature_derate_band"),
+    ("TEMPERATURE_LIMIT", 43, "temperature_limit", 1),
+    ("CURRENT_LIMIT", 44, "current_limit", 1),
+    ("TEMP_DERATE_BAND", None, "temperature_derate_band", 1),
+    # offset None: default_settings[5] still carries upstream's 160 on
+    # purpose (see the MAX_RAMP note in DroneCAN.c), so only the macro and
+    # the product JSON are held together here.
+    ("MAX_RAMP", None, "max_ramp_percent_per_ms", 10),
 )
 
 
@@ -49,7 +55,7 @@ def target_macros(product: str) -> dict[str, int]:
     nxt = text.find("\n#ifdef ", start + 1)
     block = text[start:nxt if nxt > 0 else len(text)]
     out = {}
-    for suffix, _off, _key in FIELDS:
+    for suffix, _off, _key, _scale in FIELDS:
         m = re.search(r"#\s*define\s+TARGET_DEFAULT_%s\s+(\d+)" % suffix, block)
         if m:
             out[suffix] = int(m.group(1))
@@ -73,7 +79,7 @@ def check(product: str) -> list[str]:
         return ["%s: missing %s" % (product, jpath)]
     settings = json.loads(jpath.read_text(encoding="utf-8"))["settings"]
 
-    for suffix, off, key in FIELDS:
+    for suffix, off, key, scale in FIELDS:
         macro = "TARGET_DEFAULT_%s" % suffix
         if suffix not in macros:
             errors.append(
@@ -85,9 +91,11 @@ def check(product: str) -> list[str]:
         if key not in settings:
             errors.append("%s: factory JSON has no %s (macro says %d)"
                           % (product, key, want))
-        elif int(settings[key]) != want:
-            errors.append("%s: factory JSON %s=%d but %s=%d"
-                          % (product, key, int(settings[key]), macro, want))
+        else:
+            shipped = int(round(float(settings[key]) * scale))
+            if shipped != want:
+                errors.append("%s: factory JSON %s=%s (stored %d) but %s=%d"
+                              % (product, key, settings[key], shipped, macro, want))
         if off is not None:
             if off >= len(arr):
                 errors.append("%s: default_settings[] too short for byte %d"
@@ -122,11 +130,17 @@ def main(argv: list[str]) -> int:
         for e in errors:
             print("  - %s" % e, file=sys.stderr)
         return 1
+    arr = erase_bytes()
     for p in products:
         m = target_macros(p)
         print("OK %s: erase restores thermal %d C over %d C band, current %d A"
               % (p, m["TEMPERATURE_LIMIT"], m["TEMP_DERATE_BAND"],
                  m["CURRENT_LIMIT"] * 2))
+        # Said separately because it is NOT restored: the array still carries
+        # upstream's value, so an erase changes the ramp the product ships.
+        print("   ramp: ships %.1f %%/ms, erase writes %.1f %%/ms%s"
+              % (m["MAX_RAMP"] / 10.0, arr[5] / 10.0,
+                 "" if arr[5] == m["MAX_RAMP"] else "  <-- not restored"))
     return 0
 
 
