@@ -466,14 +466,45 @@ void setInput()
 			if (duty_cycle_setpoint > duty_cycle_maximum) {
 				duty_cycle_setpoint = duty_cycle_maximum;
 			}
-			if (use_current_limit) {
-				if (duty_cycle_setpoint > use_current_limit_adjust) {
-					duty_cycle_setpoint = use_current_limit_adjust;
-				}
-			}
 
 			if (stall_protection_adjust > 0 && input > DSHOT_CMD_MAX) {
 				duty_cycle_setpoint = duty_cycle_setpoint + (uint16_t)(stall_protection_adjust / 10000);
+			}
+
+			/*
+			 * Protection ceilings, composed and applied last.
+			 *
+			 * min(), not a product: each ceiling is an independent "do
+			 * not exceed", so the binding one wins. Scaling them
+			 * together would double-derate - thermal at 50% and current
+			 * at 50% would give 25%, when 50% is what either one asked
+			 * for. min() also makes them safe to run simultaneously
+			 * without any cross-coupling: whichever is slack sits at
+			 * 2000 and contributes nothing, and the current loop's
+			 * integrator cannot wind up behind a binding thermal
+			 * ceiling because it is clamped to 2000 either way.
+			 *
+			 * Neither can step thrust. The thermal ceiling moves with a
+			 * filtered die temperature (64 ms IIR over a thermal mass
+			 * measured in seconds), the current ceiling is itself an
+			 * integrator moving at most 10 duty units per 1 kHz tick,
+			 * and the 20 kHz ramp limiter slews applied duty toward
+			 * whatever they allow at max_duty_cycle_change in BOTH
+			 * directions (control_loop.c ~line 750).
+			 *
+			 * After the stall-protection boost, not before: a boost that
+			 * can push duty back through a protection ceiling is not a
+			 * ceiling. This is a deliberate change from upstream, where
+			 * the current clamp ran first and the crawler boost could
+			 * overshoot it.
+			 */
+			uint16_t protect_ceiling = thermal_duty_ceiling;
+			if (use_current_limit && use_current_limit_adjust < (int16_t)protect_ceiling) {
+				protect_ceiling = (uint16_t)use_current_limit_adjust;
+			}
+			duty_limit_ceiling = protect_ceiling;
+			if (duty_cycle_setpoint > protect_ceiling) {
+				duty_cycle_setpoint = protect_ceiling;
 			}
 		}
 	}
@@ -674,6 +705,18 @@ RAM_FUNC void tenKhzRoutine()
 			one_khz_loop_counter = 0;
 			faultDesyncEpisodeTick1kHz();
 			if (use_current_limit && escIsDriving()) {
+				/*
+				 * The /10000 is a DEAD ZONE, not just a scale: it is an
+				 * integer divide, so the ceiling does not move at all
+				 * until the PID output exceeds 10000 - i.e. until the
+				 * overshoot exceeds 5000/Kp centiamps. At the shipped
+				 * Kp 200 (current_P 100) that is ~0.5 A of resolution;
+				 * at Kp 10 it would be 10 A, and the limiter would sit
+				 * inert while current ran to twice the setpoint.
+				 * Measured, SITL heavy_13inch at an 8 A limit: P=100
+				 * holds 7.7 A, P=50 7.1 A, P=25 6.5 A, P=5 14.7 A.
+				 * Lower these gains only with a bench number in hand.
+				 */
 				use_current_limit_adjust -=
 					(int16_t)(doPidCalculations(&currentPid, actual_current, eepromBuffer.limits.current * 2 * 100) /
 						  10000);
@@ -683,6 +726,28 @@ RAM_FUNC void tenKhzRoutine()
 				if (use_current_limit_adjust > 2000) {
 					use_current_limit_adjust = 2000;
 				}
+			} else {
+				/*
+				 * Release the ceiling whenever the loop that owns it is
+				 * not running. It is an integrator with no other reset:
+				 * a run that ended while current-limited used to leave
+				 * it low, and the NEXT start then found its setpoint
+				 * capped below min_startup_duty (the clamp is applied
+				 * after the startup floor) until the PID walked it back
+				 * up - hundreds of ms of weak spool-up inherited from
+				 * the previous run.
+				 *
+				 * This does release across a desync coast too, so a
+				 * restart begins with full authority and the loop needs
+				 * ~100 ms to re-bind if the load is still over the
+				 * limit. That is the right trade here: this limiter is
+				 * a 50 ms-averaged backstop against SUSTAINED current
+				 * and never caught that transient anyway, the ramp
+				 * limiter still bounds how fast duty can return, and on
+				 * ARK_G431_CAN the DRV8350 VDS trip is what covers the
+				 * instantaneous case.
+				 */
+				use_current_limit_adjust = 2000;
 			}
 			if (eepromBuffer.stall_protection && escIsDriving()) { // this boosts throttle as the rpm gets lower, for crawlers
 				// and rc cars only, do not use for multirotors.
