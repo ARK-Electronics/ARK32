@@ -16,7 +16,8 @@
     "minor": "from_version_h"
   },
   "settings": {
-    "max_ramp_percent_per_ms": 2.0,
+    "max_ramp_percent_per_ms": 0.5,
+    "max_ramp_meaning": "Throttle slew ceiling, both directions, applied to duty by the 20 kHz ramp limiter. 0.5 %/ms = full scale in 200 ms, matching what larger 12S ESCs ship (APD/Hargrave default 50 % per 100 ms). The ARK 4IN1 stays at 2.0. Stored as percent*10, so 5 - under 10 the firmware switches to fine mode (ramp_divider 9, steps every 500 us) and applies the value to ALL THREE regimes including startup, rather than min-ing against the targets.h ceilings.",
     "motor_kv": 1020,
     "motor_poles": 14,
     "variable_pwm": 1,

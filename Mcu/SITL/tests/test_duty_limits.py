@@ -381,3 +381,39 @@ def test_thermal_limit_can_still_be_disabled(
             'derate engaged with the limit disabled: %s' % (st,))
     finally:
         tx.stop()
+
+
+def test_fine_ramp_keeps_the_startup_rate(sitl_factory, state_stream, workdir):
+    '''max_ramp < 10 must not hand the spool-up ramp to a cruise setting
+
+    ARK_G431_CAN ships max_ramp 5 (0.5 %/ms, matching larger 12S ESCs). That
+    is fine mode: one step every 10th 20 kHz tick, so the stored number means
+    a tenth of what it means in coarse mode. It used to be applied to all
+    three regimes, which handed RAMP_SPEED_STARTUP to the cruise value and
+    left the racer plant unable to start at all (test_acq_desync_rail, 12 s,
+    deterministic). settings.c now scales the coarse startup ceiling into
+    fine-cadence units instead.
+
+    Read straight out of ZC_STATS: no motor, no timing, so this cannot go
+    flaky and cannot pass by accident.
+    '''
+    import sitl_params
+
+    with open(os.path.join(workdir, 'am32_eeprom.bin'), 'wb') as f:
+        f.write(sitl_params.build_image({'MAX_RAMP': 5}))
+
+    sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
+    sim = state_stream(sitl)
+    assert wait_for_state(sim), sitl.log_tail()
+    ctl = _open_ctl(sitl)
+    tx = _keepalive(sitl)
+    try:
+        st = _zc_stats(ctl)
+        assert st['ramp_divider'] == 9, 'not in fine mode: %s' % (st,)
+        # RAMP_SPEED_STARTUP (2, coarse) x10 == the same %/ms at this cadence.
+        assert st['max_ramp_startup'] == 20, (
+            'startup ramp took the cruise value: %s' % (st,))
+        assert st['max_ramp_low'] == 5 and st['max_ramp_high'] == 5, (
+            'cruise regimes did not take the eeprom value: %s' % (st,))
+    finally:
+        tx.stop()
