@@ -182,19 +182,45 @@ static const struct parameter {
 	{"PWM_FREQUENCY", T_UINT8, 8, 144, 24, &eepromBuffer.pwm_frequency},
 	{"MAX_RAMP", T_UINT8, 1, 200, 160, &eepromBuffer.max_ramp},
 	{"MIN_DUTY_CYCLE", T_UINT8, 0, 50, 4, &eepromBuffer.minimum_duty_cycle},
-	{"USE_SIN_START", T_BOOL, 0, 1, 0, &eepromBuffer.use_sine_start},
 	{"COMP_PWM", T_BOOL, 0, 1, 1, &eepromBuffer.comp_pwm},
-	{"STUCK_ROTOR_PROTECTION", T_BOOL, 0, 1, 1, &eepromBuffer.stuck_rotor_protection},
 	{"ADVANCE_LEVEL", T_UINT8, 0, 30, 26, &eepromBuffer.advance_level},
 	{"AUTO_ADVANCE", T_BOOL, 0, 1, 0, &eepromBuffer.auto_advance},
-	{"STARTUP_POWER", T_UINT8, 50, 150, 10, &eepromBuffer.startup_power},
-	{"CURRENT_LIMIT", T_UINT8, 0, 200, 0, &eepromBuffer.limits.current},
-	{"TEMPERATURE_LIMIT", T_UINT8, 70, 255, 255, &eepromBuffer.limits.temperature},
-	{"LOW_VOLTAGE_CUTOFF", T_BOOL, 0, 1, 0, &eepromBuffer.low_voltage_cut_off},
+	/* Was 10, below this parameter's own minimum of 50: an out-of-range
+	 * stored byte got "repaired" to another out-of-range value. */
+	{"STARTUP_POWER", T_UINT8, 50, 150, 100, &eepromBuffer.startup_power},
+	{"STALL_PROTECTION", T_UINT8, 0, 3, 0, &eepromBuffer.stall_protection},
+	{"STUCK_ROTOR_PROTECTION", T_BOOL, 0, 1, 1, &eepromBuffer.stuck_rotor_protection},
+	{"DISABLE_STICK_CALIBRATION", T_BOOL, 0, 1, 0, &eepromBuffer.disable_stick_calibration},
+	{"SERVO_LOW_THRESHOLD", T_UINT8, 0, 250, 128, &eepromBuffer.servo.low_threshold},
+	{"SERVO_HIGH_THRESHOLD", T_UINT8, 0, 250, 128, &eepromBuffer.servo.high_threshold},
+	{"SERVO_NEUTRAL", T_UINT8, 0, 250, 128, &eepromBuffer.servo.neutral},
+	{"SERVO_DEAD_BAND", T_UINT8, 0, 250, 50, &eepromBuffer.servo.dead_band},
+	/* 0 = off, 1 = per-cell, 2 = absolute. settings.c reads all three, but
+	 * this was exposed as a bool, so mode 2 was unreachable over CAN. */
+	{"LOW_VOLTAGE_CUTOFF", T_UINT8, 0, 2, 0, &eepromBuffer.low_voltage_cut_off},
 	{"CELL_VOLTAGE_THRESHOLD", T_UINT16, 250, 350, 300, &low_cell_volt_cutoff},
-	{"BRAKE_ON_STOP", T_BOOL, 0, 1, 1, &eepromBuffer.brake_on_stop},
+	{"ABSOLUTE_VOLTAGE_CUTOFF", T_UINT8, 1, 100, 10, &eepromBuffer.absolute_voltage_cutoff},
+	{"CURRENT_LIMIT", T_UINT8, 0, 200, 0, &eepromBuffer.limits.current},
+	/* The current-limit PID in the units the loop uses: settings.c computes
+	 * Kp = current_P * 2 and Kd = current_D * 2, so these scale x2 on read
+	 * and /2 on write exactly like CURRENT_LIMIT - hence max 510 for a
+	 * byte-backed field, and the uint16 max_value in load_settings. */
+	{"CURRENT_P", T_UINT8, 0, 510, 200, &eepromBuffer.current_P},
+	{"CURRENT_I", T_UINT8, 0, 255, 0, &eepromBuffer.current_I},
+	{"CURRENT_D", T_UINT8, 0, 510, 100, &eepromBuffer.current_D},
+	{"TEMPERATURE_LIMIT", T_UINT8, 70, 255, 255, &eepromBuffer.limits.temperature},
+	/* 0 = off, 1 = brake, 2 = active brake (requires arming) - also was a
+	 * bool, so mode 2 could not be selected over CAN. */
+	{"BRAKE_ON_STOP", T_UINT8, 0, 2, 0, &eepromBuffer.brake_on_stop},
 	{"DRIVING_BRAKE_STRENGTH", T_UINT8, 1, 10, 10, &eepromBuffer.driving_brake_strength},
 	{"DRAG_BRAKE_STRENGTH", T_UINT8, 1, 10, 10, &eepromBuffer.drag_brake_strength},
+	{"ACTIVE_BRAKE_POWER", T_UINT8, 0, 5, 2, &eepromBuffer.active_brake_power},
+	{"RC_CAR_REVERSE", T_BOOL, 0, 1, 0, &eepromBuffer.rc_car_reverse},
+	{"USE_SIN_START", T_BOOL, 0, 1, 0, &eepromBuffer.use_sine_start},
+	{"SINE_MODE_CHANGEOVER_THROTTLE", T_UINT8, 5, 25, 15, &eepromBuffer.sine_mode_changeover_thottle_level},
+	{"SINE_MODE_POWER", T_UINT8, 1, 10, 6, &eepromBuffer.sine_mode_power},
+	{"USE_HALL_SENSORS", T_BOOL, 0, 1, 0, &eepromBuffer.use_hall_sensors},
+	{"SERIAL_TELEM_INTERVAL", T_UINT8, 0, 255, 0, &eepromBuffer.telemetry_on_interval},
 	/* 0=AUTO (detect DShot/PWM; DroneCAN wins while RawCommand is live),
 	 * 1=DSHOT, 2=SERVO, 3=SERIAL, 4=EDT_ARM, 5=DRONECAN-only (DShot/PWM IRQ off). */
 	{"INPUT_SIGNAL_TYPE", T_UINT8, 0, 5, 0, &eepromBuffer.input_type},
@@ -225,7 +251,8 @@ static void load_settings(void)
 			case T_BOOL:
 			case T_UINT8: {
 				uint8_t *pvalue = (uint8_t *)p->ptr;
-				uint8_t max_value = p->max_value;
+				/* uint16: CURRENT_P/D advertise 510 (Kp = byte * 2). */
+				uint16_t max_value = p->max_value;
 				if (pvalue == &eepromBuffer.limits.current) {
 					max_value = max_value / 2;
 				}
@@ -495,7 +522,8 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 		switch (p->vtype) {
 			case T_UINT8: {
 				uint8_t *ptr8 = (uint8_t *)p->ptr;
-				if (ptr8 == &eepromBuffer.limits.current) {
+				if (ptr8 == &eepromBuffer.limits.current || ptr8 == &eepromBuffer.current_P ||
+				    ptr8 == &eepromBuffer.current_D) {
 					*ptr8 = req.value.integer_value / 2;
 					set_log_val = (int32_t)req.value.integer_value; /* user-facing amps */
 				} else {
@@ -600,7 +628,8 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				pkt.min_value.integer_value = p->min_value;
 
 				// special case scaling
-				if ((uint8_t *)p->ptr == &eepromBuffer.limits.current) {
+				if ((uint8_t *)p->ptr == &eepromBuffer.limits.current || (uint8_t *)p->ptr == &eepromBuffer.current_P ||
+				    (uint8_t *)p->ptr == &eepromBuffer.current_D) {
 					pkt.default_value.integer_value *= 2;
 					pkt.value.integer_value *= 2;
 				}
