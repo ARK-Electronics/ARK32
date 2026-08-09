@@ -126,6 +126,28 @@ extern fastPID stallPid;
 extern char use_speed_control_loop;
 extern char use_current_limit;
 extern int16_t use_current_limit_adjust;
+/* Protection ceilings (duty units) + the filtered die temperature the
+ * thermal one derates from. See runtimeThermalLimitTick() / setInput(). */
+extern volatile uint16_t thermal_duty_ceiling;
+extern volatile uint16_t duty_limit_ceiling;
+extern volatile int16_t degrees_celsius_filtered;
+/*
+ * Thermal foldback ramp width, in C below full derate. The onset is
+ * eepromBuffer.limits.temperature; authority falls linearly from there to
+ * THERMAL_CEIL_FLOOR over this many degrees. Tunable (DroneCAN
+ * TEMP_DERATE_BAND) because the right slope depends on how hard the
+ * airframe loads the ESC: a wide band trades a longer partial-power
+ * excursion for a gentler thrust change, a narrow one the reverse.
+ *
+ * Default 15 C keeps the whole ramp inside the die sensor's useful range
+ * on ARK_G431_CAN: the G4 factory calibration points are 30 C and 110 C
+ * (stm32g4xx_ll_adc.h), so 105 -> 120 C only extrapolates over the last
+ * 10 C, and full derate lands below the part's 125 C junction limit.
+ */
+#define THERMAL_DERATE_BAND_DEFAULT 15
+#define THERMAL_DERATE_BAND_MIN 5
+#define THERMAL_DERATE_BAND_MAX 40
+extern uint8_t temp_derate_band_c;
 extern int32_t input_override;
 extern int32_t stall_protection_adjust;
 extern uint16_t stall_protect_target_interval;

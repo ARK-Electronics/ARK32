@@ -225,6 +225,11 @@ def build_eeprom_page(defaults: dict, version_major: int, version_minor: int,
     put(45, int(s["sine_mode_power"]))
     put(46, int(s["input_type"]))
     put(47, int(s["auto_advance"]))
+    # 184: thermal foldback width. Outside the 48-byte configurator skeleton,
+    # so a product that omits it keeps 0xFF and settings.c applies the 15 C
+    # default - the same value a DroneCAN param erase leaves behind.
+    if "temperature_derate_band" in s:
+        put(184, int(s["temperature_derate_band"]))
 
     return bytes(buf)
 

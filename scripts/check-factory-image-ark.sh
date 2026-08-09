@@ -157,6 +157,28 @@ expect(32, servo_lo, "servo_low")
 expect(33, servo_hi, "servo_high")
 expect(46, int(s["input_type"]), "input_type")
 expect(47, int(s["auto_advance"]), "auto_advance")
+# Protection limits and the current loop that enforces one of them. Gated
+# because "armed" and "disabled" differ by a single byte just outside a
+# range check (settings.c), which is how both products shipped with the
+# limiters silently off. The gate is equality with the JSON; whether that
+# JSON arms them is a product decision, reported below either way.
+expect(9, int(s["current_P"]), "current_P")
+expect(10, int(s["current_I"]), "current_I")
+expect(11, int(s["current_D"]), "current_D")
+expect(43, int(s["temperature_limit"]), "temperature_limit")
+expect(44, int(s["current_limit"]), "current_limit")
+if "temperature_derate_band" in s:
+    expect(184, int(s["temperature_derate_band"]), "temp_derate_band")
+elif ee[184] != 0xFF:
+    errors.append(f"eeprom[184] temp_derate_band: got {ee[184]} want 255 (JSON omits it)")
+
+t_lim = int(s["temperature_limit"])
+i_lim = int(s["current_limit"])
+band = int(s.get("temperature_derate_band", 15))
+thermal_desc = (
+    f"derate {t_lim}->{t_lim + band} C" if 70 <= t_lim <= 140 else f"OFF ({t_lim})"
+)
+current_desc = f"{i_lim * 2} A" if 0 < i_lim <= 100 else f"OFF ({i_lim})"
 
 if any(b != 0xFF for b in ee[192:]):
     errors.append(f"eeprom page bytes 192..{EEPROM_PAGE - 1} are not 0xFF")
@@ -177,5 +199,9 @@ print(
     f"advance={adv_level} (~{s['advance_degrees']}°) "
     f"pwm={s['pwm_input_min_us']}/{s['pwm_input_max_us']} "
     f"input_type={s['input_type']} auto_advance={s['auto_advance']}"
+)
+print(
+    f"  limits: thermal={thermal_desc} current={current_desc} "
+    f"current_pid={s['current_P']}/{s['current_I']}/{s['current_D']}"
 )
 PY
