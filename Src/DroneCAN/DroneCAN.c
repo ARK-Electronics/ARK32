@@ -406,6 +406,24 @@ static uint32_t millis32(void)
 static const uint8_t default_settings[] = {0x01, 0x03, 0x01, 0x01, 0x23, 0xa0, 0x04, 0x00, 0x0a, 0x64, 0x00, 0x32, 0x02, 0x30, 0x35, 0x31,
 					   0x20, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x1a, 0x18, 0x64, 0x37, 0x0e, 0x00, 0x00, 0x05, 0x00,
 					   0x80, 0x80, 0x80, 0x32, 0x00, 0x32, 0x00, 0x00, 0x0f, 0x0a, 0x0a, 0x69, 0x64, 0x06, 0x00, 0x00};
+/* Bytes 43/44 above are TARGET_DEFAULT_TEMPERATURE_LIMIT / _CURRENT_LIMIT
+   (105, 100) spelled as literals on purpose: Mcu/SITL/sitl_params.py parses
+   this array to build eeprom images, so it has to stay pure hex. Agreement
+   with the macros and with each product JSON is gated by
+   scripts/check-erase-defaults.py in CI. */
+
+/*
+  Bytes the erase has to restore that live PAST the 48-byte configurator
+  skeleton. Without this the band would come back 0xFF and settings.c would
+  coerce it to the compile-time default - which happens to equal what
+  ARK_G431_CAN ships, so the behaviour is right today by coincidence and
+  would break silently the first time a product shipped a different band.
+  Keep the skeleton itself 48 bytes so it stays configurator-compatible.
+ */
+static void apply_post_skeleton_defaults(void)
+{
+	eepromBuffer.can.temp_derate_band = TARGET_DEFAULT_TEMP_DERATE_BAND;
+}
 
 #	ifdef MCU_SITL
 // let the SITL eeprom emulation seed a missing eeprom file with defaults
@@ -748,6 +766,7 @@ static void handle_param_ExecuteOpcode(CanardInstance *ins, CanardRxTransfer *tr
 			can_printf("resetting to defaults");
 			memset(eepromBuffer.buffer, 0xff, sizeof(eepromBuffer.buffer));
 			memcpy(eepromBuffer.buffer, default_settings, sizeof(default_settings));
+			apply_post_skeleton_defaults();
 			save_flash_nolib(eepromBuffer.buffer, sizeof(eepromBuffer.buffer), eeprom_address);
 			loadEEpromSettings();
 			load_settings();
