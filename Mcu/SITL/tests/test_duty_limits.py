@@ -78,10 +78,10 @@ CEIL_FLOOR = 200
 FULL_CEIL = 2000
 # Src/DroneCAN/DroneCAN.c default_settings[43] / factory/*_eeprom_defaults.json
 DEFAULT_TEMP_LIMIT_C = 105
-# The reported die temperature is a truncated integer while the filter runs
-# in Q12, so up to ~1 C of derate can be in flight below the printed value.
-CEIL_TOL_LOW = 110
-CEIL_TOL_HIGH = 15
+# The published degree is rounded while the derate uses full-resolution Q12,
+# so the ceiling can legitimately sit up to half a degree either side of the
+# curve for the degree being reported: 0.5 C * (1800/band) counts, plus slack.
+CEIL_TOL = 75
 
 
 def _expected_ceiling(temp_c, limit_c=DEFAULT_TEMP_LIMIT_C, band=DERATE_BAND_C):
@@ -142,9 +142,12 @@ def _settle_at(sim, ctl, workdir, temp_c, timeout=10.0):
         time.sleep(0.2)
         st = _zc_stats(ctl)
         if st['degrees_celsius_filt'] == int(temp_c):
-            # let the Q12 residue drain so the ceiling matches the degree
+            # Let the Q12 residue drain, then require the reading to still be
+            # there: one sample can land mid-transition on a loaded host.
             time.sleep(0.4)
-            return _zc_stats(ctl)
+            st = _zc_stats(ctl)
+            if st['degrees_celsius_filt'] == int(temp_c):
+                return st
     raise AssertionError(
         'die temperature never settled at %d C (raw=%s filt=%s)'
         % (temp_c, st and st['degrees_celsius'],
@@ -159,10 +162,16 @@ def _keepalive(sitl, value=0):
 
 
 def _assert_on_curve(st, temp_c, band=DERATE_BAND_C):
-    want = _expected_ceiling(temp_c, band=band)
+    '''the ceiling must lie on the derate curve for the temperature the
+    firmware is actually reporting - not for the one the test asked for.
+    Under host load the filter can still be a degree away from the request,
+    which is a slow SITL, not a wrong derate.'''
+    filt = st['degrees_celsius_filt']
+    want = _expected_ceiling(filt, band=band)
     got = st['thermal_duty_ceiling']
-    assert want - CEIL_TOL_LOW <= got <= want + CEIL_TOL_HIGH, (
-        'at %d C ceiling %d, expected ~%d (%s)' % (temp_c, got, want, st))
+    assert want - CEIL_TOL <= got <= want + CEIL_TOL, (
+        'at %d C (asked %d) ceiling %d, expected ~%d (%s)'
+        % (filt, temp_c, got, want, st))
 
 
 def test_thermal_derate_is_continuous_and_armed_by_default(
