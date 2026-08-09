@@ -210,7 +210,13 @@ static const struct parameter {
 	/* The current-limit PID in the units the loop uses: settings.c computes
 	 * Kp = current_P * 2 and Kd = current_D * 2, so these scale x2 on read
 	 * and /2 on write exactly like CURRENT_LIMIT - hence max 510 for a
-	 * byte-backed field, and the uint16 max_value in load_settings. */
+	 * byte-backed field, and the uint16 max_value in load_settings.
+	 *
+	 * Read the dead-zone note in control_loop.c before lowering Kp: the
+	 * ceiling moves by pid_output/10000 duty units per tick, and that
+	 * integer divide means the loop is inert until the overshoot exceeds
+	 * 5000/Kp centiamps. Kp 200 resolves ~0.5 A; Kp 10 needs 10 A, and
+	 * measured in SITL it fails to hold the limit at all. */
 	{"CURRENT_P", T_UINT8, 0, 510, 200, &eepromBuffer.current_P},
 	{"CURRENT_I", T_UINT8, 0, 255, 0, &eepromBuffer.current_I},
 	{"CURRENT_D", T_UINT8, 0, 510, 100, &eepromBuffer.current_D},
