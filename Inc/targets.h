@@ -139,8 +139,12 @@
  * ramp/governor work was ported to this target. */
 #	define RAMP_SPEED_LOW_RPM 3
 #	define RAMP_SPEED_HIGH_RPM 8
-/* Unconfigured-eeprom max_ramp default — same 2 %/ms as 4IN1 / factory JSON. */
-#	define TARGET_DEFAULT_MAX_RAMP 20
+/* Unconfigured-eeprom max_ramp default; matches the factory JSON. 5 = fine
+	 * mode, 0.5 %/ms, full scale in 200 ms - what larger 12S ESCs ship
+	 * (APD/Hargrave default 50 % per 100 ms) rather than the 4IN1's 2.0 %/ms.
+	 * Fine mode (<10) applies to every regime including startup, so spool-up
+	 * slews at this rate too; that is the part to watch on the bench. */
+#	define TARGET_DEFAULT_MAX_RAMP 5
 /* Protection envelope a DroneCAN "restore defaults" must land on. Same
 	 * values as factory/ARK_G431_CAN_eeprom_defaults.json, enforced by
 	 * scripts/check-erase-defaults.py: an erase has to leave the ESC with the

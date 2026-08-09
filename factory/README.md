@@ -62,13 +62,14 @@ openocd -f interface/stlink.cfg -f target/stm32f0x.cfg \
 
 ## Production EEPROM defaults (shared ARK vehicle policy)
 
-Both products ship the same ramp/timing/kV policy; input type differs:
+Both products share the timing/kV policy; the throttle ramp and the
+protection limits differ by product:
 
 | Setting | ARK 4IN1 F051 | ARK G431 CAN |
 |---------|---------------|--------------|
 | Variable PWM | PWM by RPM | PWM by RPM |
 | Motor kV | 1020 | 1020 |
-| Throttle ramp | **2 %/ms** | **2 %/ms** |
+| Throttle ramp | **2 %/ms** | **0.5 %/ms** (200 ms full scale) |
 | Timing advance | **15° fixed** | **15° fixed** |
 | PWM input min/max | 1020 / 1980 µs | 1020 / 1980 µs |
 | Input type | DShot (`1`) | **DroneCAN** (`5`) |
@@ -76,6 +77,19 @@ Both products ship the same ramp/timing/kV policy; input type differs:
 | Derate band | — (15 °C default) | **15 °C** (byte 184) |
 | Current limit | off (`102`) | **200 A** (stored `100`, 2 A/count) |
 | Current PID (P/I/D) | 100 / 0 / 50 | 100 / 0 / 50 |
+
+The 12S CAN board ramps at **0.5 %/ms** (full scale in 200 ms), matching what
+larger 12S ESCs ship — APD and Hargrave default to 50 % per 100 ms — rather
+than the 4IN1's 2.0 %/ms. Two consequences worth knowing:
+
+- Below 10 the stored byte selects the firmware's *fine* mode
+  (`ramp_divider 9`, a step every 500 µs) and applies the rate to **all three
+  regimes including startup**, instead of min-ing against the `RAMP_SPEED_*`
+  ceilings in `targets.h`. So spool-up slews at 0.5 %/ms too; that is the part
+  to watch on the bench.
+- It is a rate limit, not a bandwidth limit: only commands large enough to hit
+  the limit are slewed, so ordinary attitude corrections are untouched while a
+  full-stick step takes 200 ms.
 
 The two protection limits are the one place the products differ on policy.
 Both are stored as a single byte whose *armed* range is narrow — 70..140 °C

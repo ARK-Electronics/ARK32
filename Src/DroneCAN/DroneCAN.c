@@ -180,6 +180,12 @@ static const struct parameter {
 	{"BEEP_VOLUME", T_UINT8, 0, 11, 5, &eepromBuffer.beep_volume},
 	{"VARIABLE_PWM", T_UINT8, 0, 2, 1, &eepromBuffer.variable_pwm},
 	{"PWM_FREQUENCY", T_UINT8, 8, 144, 24, &eepromBuffer.pwm_frequency},
+	/* Still upstream's 160 (16 %/ms), NOT the 5 the 12S board ships. Moving
+	 * it means an erase also changes the SITL seed image, and six
+	 * fault-injection tests provoke desync by slewing fast - at 0.5 %/ms
+	 * they cannot create the condition they assert about. Fixing that
+	 * means pinning the ramp inside those tests, which is the right change
+	 * but not this one. Until then an erase widens the ramp 32x. */
 	{"MAX_RAMP", T_UINT8, 1, 200, 160, &eepromBuffer.max_ramp},
 	{"MIN_DUTY_CYCLE", T_UINT8, 0, 50, 4, &eepromBuffer.minimum_duty_cycle},
 	{"COMP_PWM", T_BOOL, 0, 1, 1, &eepromBuffer.comp_pwm},
