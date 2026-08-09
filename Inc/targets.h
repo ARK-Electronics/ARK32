@@ -141,6 +141,14 @@
 #	define RAMP_SPEED_HIGH_RPM 8
 /* Unconfigured-eeprom max_ramp default — same 2 %/ms as 4IN1 / factory JSON. */
 #	define TARGET_DEFAULT_MAX_RAMP 20
+/* Protection envelope a DroneCAN "restore defaults" must land on. Same
+	 * values as factory/ARK_G431_CAN_eeprom_defaults.json, enforced by
+	 * scripts/check-erase-defaults.py: an erase has to leave the ESC with the
+	 * protection it shipped with, not the AM32 configurator's disabled pair.
+	 * 105 C foldback onset over a 15 C band, 100 = 200 A. */
+#	define TARGET_DEFAULT_TEMPERATURE_LIMIT 105
+#	define TARGET_DEFAULT_CURRENT_LIMIT 100
+#	define TARGET_DEFAULT_TEMP_DERATE_BAND 15
 /* Closed-loop earlier at low RPM (same bench rationale as ARK_4IN1_F051). */
 #	ifndef POLLING_MODE_THRESHOLD
 #		define POLLING_MODE_THRESHOLD 5000
@@ -282,6 +290,30 @@
  * override; upstream-equivalent 160 (16%/ms) otherwise. */
 #ifndef TARGET_DEFAULT_MAX_RAMP
 #	define TARGET_DEFAULT_MAX_RAMP 160
+#endif
+
+/*
+ * Protection defaults restored by a DroneCAN param ERASE, and the single
+ * source of truth for default_settings[] bytes 43/44 plus the
+ * post-skeleton band byte (184). These must equal what the product's
+ * factory eeprom defaults JSON ships, or "restore defaults" in the field
+ * silently changes a shipped ESC's protection envelope - the one config
+ * change nobody re-checks afterwards. check-factory-image-ark.sh gates the
+ * JSON against the built image; scripts/check-erase-defaults.py gates
+ * these macros against the JSON.
+ *
+ * Values are the eeprom storage encoding: temperature in C, current in
+ * 2 A counts (so 100 = 200 A, the largest settings.c will arm), band in C.
+ * 255 in the temperature slot means "no thermal derate".
+ */
+#ifndef TARGET_DEFAULT_TEMPERATURE_LIMIT
+#	define TARGET_DEFAULT_TEMPERATURE_LIMIT 255
+#endif
+#ifndef TARGET_DEFAULT_CURRENT_LIMIT
+#	define TARGET_DEFAULT_CURRENT_LIMIT 0
+#endif
+#ifndef TARGET_DEFAULT_TEMP_DERATE_BAND
+#	define TARGET_DEFAULT_TEMP_DERATE_BAND THERMAL_DERATE_BAND_DEFAULT
 #endif
 
 #ifndef RAMP_SPEED_STARTUP
