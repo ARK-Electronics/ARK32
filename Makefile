@@ -206,7 +206,12 @@ $(eval xLDFLAGS_COMMON := $(if $(LDFLAGS_COMMON_$(1)),$(LDFLAGS_COMMON_$(1)),$(L
 # BL_IMAGE_FILE is repo-relative and resolved by the assembler against the cwd,
 # which make always sets to the repo root. The 4 KiB image only fits because LTO
 # is on by default (see CFLAGS_COMMON above); it does not turn LTO on itself.
-CFLAGS_$(2) = -DAM32_MCU=\"$(MCU)\" $(MCU_$(1)) -D$(2) $(CFLAGS_$(1)) $(xCFLAGS_COMMON) $(xCFLAGS) \
+# EXTRA_CFLAGS is the user hook for A/B sweeps, e.g.
+#   make ARK_G431_CAN EXTRA_CFLAGS=-DZC_SEARCH_BLANK_64THS=40
+# Do NOT use xCFLAGS for this: it is populated above with the CAN include
+# paths for *_CAN targets, so assigning it on the command line silently
+# drops them and the DroneCAN headers stop resolving.
+CFLAGS_$(2) = -DAM32_MCU=\"$(MCU)\" $(MCU_$(1)) -D$(2) $(CFLAGS_$(1)) $(xCFLAGS_COMMON) $(xCFLAGS) $(EXTRA_CFLAGS) \
 	$(if $(xEMBED_BL),-DEMBED_BOOTLOADER -DBL_IMAGE_FILE=\"$(BL_IMAGE_F051)\" -DBL_REGION_SIZE=$(BL_REGION_SIZE_F051))
 LDFLAGS_$(2) = $(xLDFLAGS_COMMON) $(LDFLAGS_$(1)) $(if $(xLDSCRIPT),-T$(xLDSCRIPT))
 

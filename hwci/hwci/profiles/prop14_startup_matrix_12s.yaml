@@ -1,0 +1,75 @@
+name: prop14_startup_matrix_12s
+description: >
+  Cold-start matrix for the 14x5.5 (MRP 365x140) + RCINPOWER GTS 4715-360KV
+  at 12S. Three starts at each of 10/12/15/20/25%, for tuning the STARTUP
+  zero-cross behaviour on a high-inertia prop.
+
+  Why this article needs its own startup data: the 48/12/9 filter pack was
+  validated on a 1980KV 5-inch free-run bell, whose operating band (~147-168k
+  eRPM) this setup never reaches, and whose rotational inertia is a fraction
+  of a 365 mm prop's. Steady-state zero-cross health is already confirmed
+  fine here (jitter 1.8-4.5% across the loaded sweep, 0 demag, 0 bemf
+  timeouts), so the open-loop -> closed-loop handoff under inertia is the one
+  regime genuinely changed by the new article and the only one worth tuning.
+
+  Lowest rung is 10%, not the noprop matrix's 6%: minimum_duty_cycle is 18
+  (9%), so commands below that floor test the clamp rather than acquisition.
+
+  Off segments are 5 s, not the noprop matrix's 2.5 s. A 365 mm prop with
+  brake_on_stop=0 coasts far longer than a bare 5-inch bell, and a start that
+  begins on a still-spinning rotor is not a cold start. Verify rpm actually
+  reaches ~0 before each start* segment when reading the results; if it does
+  not, lengthen these before trusting the numbers.
+
+  Safety from the measured 60% run (Ct 0.0663, P ~ n^3.15): 25% steady is
+  ~2 A / ~4 N, far under these limits, which are sized for the start
+  transient rather than the steady point.
+sample_rate_hz: 100
+arm_settle_s: 3.0
+steady_tail_fraction: 0.5
+demag_rpm_drop_fraction: 0.30
+demag_commutation_spike: 3.0
+
+safety:
+  max_current_a: 40.0
+  max_thrust_n: 45.0
+  max_rpm: 12000
+  max_motor_temp_c: 80.0
+
+segments:
+  - {label: idle, throttle: 0.00, duration_s: 2.0}
+
+  - {label: start10a, throttle: 0.10, duration_s: 3.0}
+  - {label: off10a,   throttle: 0.00, duration_s: 5.0}
+  - {label: start10b, throttle: 0.10, duration_s: 3.0}
+  - {label: off10b,   throttle: 0.00, duration_s: 5.0}
+  - {label: start10c, throttle: 0.10, duration_s: 3.0}
+  - {label: off10c,   throttle: 0.00, duration_s: 5.0}
+
+  - {label: start12a, throttle: 0.12, duration_s: 3.0}
+  - {label: off12a,   throttle: 0.00, duration_s: 5.0}
+  - {label: start12b, throttle: 0.12, duration_s: 3.0}
+  - {label: off12b,   throttle: 0.00, duration_s: 5.0}
+  - {label: start12c, throttle: 0.12, duration_s: 3.0}
+  - {label: off12c,   throttle: 0.00, duration_s: 5.0}
+
+  - {label: start15a, throttle: 0.15, duration_s: 3.0}
+  - {label: off15a,   throttle: 0.00, duration_s: 5.0}
+  - {label: start15b, throttle: 0.15, duration_s: 3.0}
+  - {label: off15b,   throttle: 0.00, duration_s: 5.0}
+  - {label: start15c, throttle: 0.15, duration_s: 3.0}
+  - {label: off15c,   throttle: 0.00, duration_s: 5.0}
+
+  - {label: start20a, throttle: 0.20, duration_s: 3.0}
+  - {label: off20a,   throttle: 0.00, duration_s: 5.0}
+  - {label: start20b, throttle: 0.20, duration_s: 3.0}
+  - {label: off20b,   throttle: 0.00, duration_s: 5.0}
+  - {label: start20c, throttle: 0.20, duration_s: 3.0}
+  - {label: off20c,   throttle: 0.00, duration_s: 5.0}
+
+  - {label: start25a, throttle: 0.25, duration_s: 3.0}
+  - {label: off25a,   throttle: 0.00, duration_s: 5.0}
+  - {label: start25b, throttle: 0.25, duration_s: 3.0}
+  - {label: off25b,   throttle: 0.00, duration_s: 5.0}
+  - {label: start25c, throttle: 0.25, duration_s: 3.0}
+  - {label: stop,     throttle: 0.00, duration_s: 3.0}
