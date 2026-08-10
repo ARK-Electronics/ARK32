@@ -180,7 +180,8 @@
 	 * DRV8350H (hardware interface):
 	 *   ENABLE  = PC9  (DRV_ENABLE) — high = awake, low = sleep (~µA on VM).
 	 *             Gated by gate_driver.c: asleep when disarmed / armed-idle,
-	 *             awake for beeps, drive, and brake (tWAKE ≈ 1 ms).
+	 *             awake for beeps, drive, and brake. Wake: PWM inactive →
+	 *             ENABLE high → ~3 ms settle (charge pump) → then PWM.
 	 *   nFAULT  = PA12 (FAULT_N) — open-drain, external 20k to 3.3V;
 	 *             asserts on VDS OCP (resistor-set on VDS pin), UVLO, OTW, GDF
 	 *             (single wire OR — no SPI status). Firmware guesses cause

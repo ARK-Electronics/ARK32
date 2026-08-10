@@ -1,8 +1,11 @@
 /*
  * gate_driver.h - sleep/wake for DRV8350 ENABLE / DRV8328 nSLEEP
  *
- * Active-high run: low = sleep, high = awake. After rising edge, block ~1 ms
- * (datasheet tWAKE) before PWM/commutation — IC bias must settle; pin stays high.
+ * Active-high run: low = sleep, high = awake. After rising edge, block for
+ * t_WAKE settle (1 ms DRV8328; 3 ms DRV8350H) before PWM/commutation.
+ *
+ * DRV8350H (ARK 12S CAN, USE_DRV_ENABLE): wake forces bridge inputs inactive
+ * (allOff + duty 0) before ENABLE rises — avoids the common sleep-exit blip.
  */
 #ifndef GATE_DRIVER_H_
 #define GATE_DRIVER_H_
