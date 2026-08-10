@@ -56,6 +56,17 @@ uint32_t gcr[37] = {0};
 uint16_t dshot_frametime;
 uint16_t dshot_goodcounts;
 uint16_t dshot_badcounts;
+/* Consecutive drive-demand frames discarded before throttle may leave zero.
+ * 2 discards = the 3rd corroborating frame is the one accepted, costing two
+ * frame periods (2.5 ms at 800 Hz) on a genuine spool-up and nothing at all
+ * once moving. See the idle-exit holdoff in computeDshotDMA(). */
+#define DSHOT_IDLE_EXIT_HOLDOFF_FRAMES 2
+static uint8_t dshot_idle_exit_holdoff;
+/* Diagnostic, alongside good/badcounts: frames rejected by the holdoff. A
+ * healthy link ticks this by exactly DSHOT_IDLE_EXIT_HOLDOFF_FRAMES per real
+ * spool-up; anything beyond that is single-frame drive demands that never
+ * corroborated, i.e. the fault the holdoff exists to absorb. */
+uint16_t dshot_idle_exit_blocked;
 uint8_t dshot_extended_telemetry = 0;
 uint16_t processtime = 0;
 uint16_t halfpulsetime = 0;
@@ -144,6 +155,36 @@ void computeDshotDMA()
 						return;
 					}
 #endif
+					/* Idle-exit holdoff. Neither integrity check in this
+					 * function can reject a single corrupted frame that
+					 * decodes to full throttle: an all-ones capture
+					 * (0xFFFF) is a CRC-VALID DShot frame carrying
+					 * throttle 2047, and its frame span lands only
+					 * +1.63% off nominal - inside the +-6.25% span gate
+					 * above. One lost edge on the signal line inverts
+					 * the pulse/gap pairing, so a commanded stop
+					 * (0x0000, every pulse short) becomes commanded
+					 * full throttle. Worse, newinput then LATCHES: it
+					 * is only overwritten by the next accepted frame,
+					 * and the same marginal link that corrupted this
+					 * one tends to drop the next several, so the bogus
+					 * demand survives for as long as the dropout.
+					 * Measured on an ARK G431 CAN bench as a 30-90 ms,
+					 * ~29% duty spin-up kick at armed idle, roughly
+					 * once a minute (hwci/runs/gate_blip_watch.log).
+					 *
+					 * So require the demand to repeat before acting on
+					 * it, but only while throttle is still at zero -
+					 * once moving this costs nothing, and in-flight
+					 * slew stays governed by max_duty_cycle_change /
+					 * max_ramp in the duty domain. */
+					if (newinput == 0 && dshot_idle_exit_holdoff < DSHOT_IDLE_EXIT_HOLDOFF_FRAMES) {
+						dshot_idle_exit_holdoff++;
+						dshot_idle_exit_blocked++;
+						dshotcommand = 0;
+						command_count = 0;
+						return;
+					}
 					newinput = tocheck;
 					dshotcommand = 0;
 					command_count = 0;
@@ -152,6 +193,10 @@ void computeDshotDMA()
 			}
 
 			if ((tocheck <= DSHOT_CMD_MAX) && (tocheck > DSHOT_CMD_MOTOR_STOP)) {
+				/* Any non-drive frame breaks the run of drive demands the
+				 * holdoff above is counting - reset ahead of the DroneCAN
+				 * early-out so the run always reflects the wire. */
+				dshot_idle_exit_holdoff = 0;
 #if DRONECAN_SUPPORT
 				if (DroneCAN_active()) {
 					return;
@@ -161,6 +206,7 @@ void computeDshotDMA()
 				dshotcommand = tocheck;
 			}
 			if (tocheck == DSHOT_CMD_MOTOR_STOP) {
+				dshot_idle_exit_holdoff = 0;
 				if (EDT_ARM_ENABLE == 1) {
 					EDT_ARMED = 0;
 				}
