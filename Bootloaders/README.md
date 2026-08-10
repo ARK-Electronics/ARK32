@@ -13,7 +13,7 @@ These files are release (or branch) artifacts as flat binaries. They are stored 
 |---|---|---|---|
 | `AM32_F051_BOOTLOADER_ARK4IN1_V18.bin` | STM32F051, ARK 4IN1 (default embed) | PB4; **PA15 nSLEEP low** | [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) `master` (`cdce0a2`, #4); product `AM32_F051_BOOTLOADER_ARK4IN1` |
 | `AM32_F051_BOOTLOADER_PB4_V18.bin` | STM32F051 generic PB4 (reference only) | PB4 | [ARK32-bootloader v18.0.0](https://github.com/ARK-Electronics/ARK32-bootloader/releases/tag/v18.0.0) (`0d667c5`), asset `AM32_F051_BOOTLOADER_PB4_V18.hex` |
-| `AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin` | STM32G431/G491, ARK 12S CAN ESC (`ARK_G431_CAN`) | PB4 (also FDCAN TX PB9 / RX PA11); **DRV ENABLE low** | [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) dual-protocol + bl-params (`086755b`), target `AM32_G431_BOOTLOADER_ARKG4_CAN` |
+| `AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin` | STM32G431/G491, ARK 12S CAN ESC (`ARK_G431_CAN`) | PB4 (also FDCAN TX PB9 / RX PA11); **DRV ENABLE (PC9) held low** | [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) `feat/ark-g431-can-dual-protocol` (`0a764a2`, PR #2: dual-protocol + `bl_gate_driver_off`), target `AM32_G431_BOOTLOADER_ARKG4_CAN` |
 
 | Resource | URL |
 |---|---|

@@ -12,6 +12,7 @@
 #include "common.h"
 #include "comparator.h"
 #include "phaseouts.h"
+#include "gate_driver.h"
 #include "targets.h"
 #include "IO.h"
 #include "peripherals.h"
@@ -317,8 +318,10 @@ void setInput()
 			// faultHandleStuckRotorIfNeeded gate above honors that flag;
 			// the episode rail is independent of it).
 			if (!escIsDriving() && !escIsFault() && !faultDesyncRestartHoldoffActive()) {
-				/* comStep/fullBrake gateDriverEnsure() wakes DRV once. */
+				/* Wake DRV with IRQs enabled (ENABLE settle is multi-ms on
+				 * DRV8350H). comStep gateDriverEnsure() is then a no-op. */
 				allOff();
+				gateDriverWakeBlocking();
 				if (!old_routine) {
 					startMotor();
 				}
