@@ -14,13 +14,13 @@ class BuildArtifacts:
 
 
 def find_artifact(obj_dir: Path, target: str, ext: str) -> Path | None:
-    """Newest ``obj/AM32_<target>_*.<ext>`` build artifact, or None.
+    """Newest ``obj/ARK32_<target>_*.<ext>`` build artifact, or None.
 
     The single place that knows the Makefile's artifact naming; RigConfig's
     ELF resolution reuses it so the flashed binary and the parsed ELF can
     never be picked by two different rules.
     """
-    hits = sorted(obj_dir.glob(f"AM32_{target}_*.{ext}"))
+    hits = sorted(obj_dir.glob(f"ARK32_{target}_*.{ext}"))
     return hits[-1] if hits else None
 
 

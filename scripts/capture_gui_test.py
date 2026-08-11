@@ -13,7 +13,7 @@ motor - notably that Abort stops a run in flight.
 
   capture_gui_test.py
   capture_gui_test.py --binary dist/am32-capture
-  capture_gui_test.py --sitl obj/AM32_AM32_SITL_CAN_2.20.elf
+  capture_gui_test.py --sitl obj/ARK32_AM32_SITL_CAN_2.20.elf
 '''
 
 import argparse

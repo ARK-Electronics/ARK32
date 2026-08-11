@@ -7,7 +7,9 @@ OBJCOPY = $(ARM_SDK_PREFIX)objcopy
 ECHO = echo
 
 # common variables
-IDENTIFIER := AM32
+# Release / build artifact prefix: ARK32_<FILE_NAME>_<version>.{hex,bin,elf}
+# (not upstream AM32_). Bootloader blobs under Bootloaders/ keep their AM32_* names.
+IDENTIFIER := ARK32
 
 # Folders
 HAL_FOLDER := Mcu

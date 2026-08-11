@@ -59,24 +59,24 @@ jobs:
           fi
 
           # Configurator resolves:
-          #   AM32_${escInfo.meta.am32.fileName}_${tagWithoutV_and_rc}.hex
-          # so every artifact must stay AM32_<target>_<version>.hex.
+          #   ARK32_${escInfo.meta.am32.fileName}_${tagWithoutV_and_rc}.hex
+          # so every artifact must stay ARK32_<target>_<version>.hex.
           bad=0
           for f in "${hexes[@]}"; do
             base=$(basename "$f")
             case "$base" in
-              AM32_*_*.hex)
-                # Reject empty target/version segments (AM32__.hex, AM32_x_.hex).
+              ARK32_*_*.hex)
+                # Reject empty target/version segments (ARK32__.hex, ARK32_x_.hex).
                 # MAJOR.MINOR[.PATCH][-tag], e.g. 3.0-ark, 3.0.1-ark
-                if [[ ! "$base" =~ ^AM32_[A-Za-z0-9][A-Za-z0-9_]*_[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9._-]+)?\.hex$ ]]; then
-                  echo "error: hex name does not match AM32_<target>_<MAJOR.MINOR[.PATCH][-tag]>.hex: $base" >&2
+                if [[ ! "$base" =~ ^ARK32_[A-Za-z0-9][A-Za-z0-9_]*_[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9._-]+)?\.hex$ ]]; then
+                  echo "error: hex name does not match ARK32_<target>_<MAJOR.MINOR[.PATCH][-tag]>.hex: $base" >&2
                   bad=1
                 else
                   echo "ok: $base"
                 fi
                 ;;
               *)
-                echo "error: hex name does not match AM32_<target>_<version>.hex: $base" >&2
+                echo "error: hex name does not match ARK32_<target>_<version>.hex: $base" >&2
                 bad=1
                 ;;
             esac
@@ -92,9 +92,9 @@ jobs:
             for f in "${hexes[@]}"; do
               base=$(basename "$f")
               case "$base" in
-                AM32_*_"${expect_ver}".hex) ;;
+                ARK32_*_"${expect_ver}".hex) ;;
                 *)
-                  echo "error: $base is not AM32_<target>_${expect_ver}.hex (tag ${GITHUB_REF_NAME})" >&2
+                  echo "error: $base is not ARK32_<target>_${expect_ver}.hex (tag ${GITHUB_REF_NAME})" >&2
                   bad=1
                   ;;
               esac
@@ -109,7 +109,7 @@ jobs:
       - name: Archive build
         uses: actions/upload-artifact@v4
         with:
-          name: AM32-binaries
+          name: ARK32-binaries
           path: |
             obj/*.hex
           retention-days: 60

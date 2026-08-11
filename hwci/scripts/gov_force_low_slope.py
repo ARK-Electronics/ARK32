@@ -10,7 +10,7 @@ ceiling-bind. Pair with profile ``pr65_gov_unlatch_900kv``:
       --battery-cells 6 --out runs/pr65-gov-unlatch
 
   # terminal B — ~4 s into seed25 (after arm_settle + ramp + ~1 s hold)
-  python3 scripts/gov_force_low_slope.py --elf ../obj/AM32_ARK_4IN1_F051_*.elf \\
+  python3 scripts/gov_force_low_slope.py --elf ../obj/ARK32_ARK_4IN1_F051_*.elf \\
       --slope 8 --conf 300
 
 Default slope 8 is well below a healthy 900KV/10\" Q10 observation and binds

@@ -14,14 +14,14 @@ BUILD=1
 [ "$1" = "--no-build" ] && BUILD=0
 
 if [ "$BUILD" = 1 ]; then
-    rm -f obj/AM32_AM32_SITL_CAN_2.20.elf obj/AM32_AM32_SITL_CAN_2.20.d \
+    rm -f obj/ARK32_AM32_SITL_CAN_2.20.elf obj/ARK32_AM32_SITL_CAN_2.20.d \
           obj/*.gcda obj/*.gcno
     make AM32_SITL_CAN SITL_COVERAGE=1
 fi
 rm -f obj/*.gcda
 
 mkdir -p coverage
-python3 Mcu/SITL/run_ci_tests.py --sitl obj/AM32_AM32_SITL_CAN_*.elf || true
+python3 Mcu/SITL/run_ci_tests.py --sitl obj/ARK32_AM32_SITL_CAN_*.elf || true
 
 FILTERS=(--filter 'Src/' --filter 'Mcu/SITL/sim/' --filter 'Mcu/SITL/Src/'
          --exclude 'Src/DroneCAN/dsdl_generated/'

@@ -26,7 +26,7 @@ from sitl_gui_backend import SimStream  # noqa: E402
 def find_sitl_binary(explicit=None):
     if explicit:
         return os.path.abspath(explicit)
-    pat = os.path.join(REPO_ROOT, 'obj', 'AM32_AM32_SITL_CAN_*.elf')
+    pat = os.path.join(REPO_ROOT, 'obj', 'ARK32_AM32_SITL_CAN_*.elf')
     hits = sorted(glob.glob(pat))
     if not hits:
         return None

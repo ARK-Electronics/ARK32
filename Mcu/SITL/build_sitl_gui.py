@@ -49,7 +49,7 @@ def _find_sitl(given):
     if sys.platform.startswith('win') and os.path.isfile(win):
         return win
     hits = sorted(glob.glob(os.path.join(ROOT, 'obj',
-                                         'AM32_AM32_SITL_CAN_*.elf')))
+                                         'ARK32_AM32_SITL_CAN_*.elf')))
     return hits[0] if hits else None
 
 

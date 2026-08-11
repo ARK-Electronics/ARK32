@@ -281,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--bootloader", type=Path, required=True,
                    help="Bootloaders/AM32_F051_BOOTLOADER_*.bin")
     p.add_argument("--app", type=Path, required=True,
-                   help="obj/AM32_ARK_4IN1_F051_*.bin application image")
+                   help="obj/ARK32_ARK_4IN1_F051_*.bin application image")
     p.add_argument("--version-h", type=Path, default=Path("Inc/version.h"))
     p.add_argument("--out-bin", type=Path, required=True,
                    help="full 32 KiB flash image (.bin)")

@@ -12,14 +12,14 @@ BL="${BL_IMAGE_F051:-Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin}"
 DEFAULTS_JSON="${FACTORY_DEFAULTS:-factory/ARK_4IN1_F051_eeprom_defaults.json}"
 
 shopt -s nullglob
-factory_bins=("$OBJ"/AM32_ARK_4IN1_F051_*.factory.bin)
+factory_bins=("$OBJ"/ARK32_ARK_4IN1_F051_*.factory.bin)
 # App .bin only: exclude factory, eeprom, and local experiment names (*nsleep*).
 app_bins=()
-for f in "$OBJ"/AM32_ARK_4IN1_F051_*.bin; do
+for f in "$OBJ"/ARK32_ARK_4IN1_F051_*.bin; do
 	base="$(basename "$f")"
 	case "$base" in
 		*.factory.bin|*.eeprom.bin|*factory*|*nsleep*|*hwci*) ;;
-		AM32_ARK_4IN1_F051_*.bin) app_bins+=("$f") ;;
+		ARK32_ARK_4IN1_F051_*.bin) app_bins+=("$f") ;;
 	esac
 done
 

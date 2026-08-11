@@ -71,7 +71,7 @@ The blob lands at the `.bl_image` symbols, so it can be pulled straight back out
 
 ```sh
 arm-none-eabi-objcopy -O binary --only-section=.bl_image \
-  obj/AM32_ARK_4IN1_F051_*.elf /tmp/embedded.bin
+  obj/ARK32_ARK_4IN1_F051_*.elf /tmp/embedded.bin
 cmp -n "$(wc -c < Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin)" \
   /tmp/embedded.bin Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
 ```

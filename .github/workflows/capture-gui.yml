@@ -37,7 +37,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           python3 scripts/capture_gui_test.py \
-            --sitl obj/AM32_AM32_SITL_CAN_*.elf
+            --sitl obj/ARK32_AM32_SITL_CAN_*.elf
 
   build:
     strategy:

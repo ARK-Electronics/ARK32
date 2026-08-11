@@ -30,7 +30,7 @@ only one device may drive the ESC signal wire.
 ```bash
 cd hwci
 # flash + free-run smoke (stand drives throttle)
-.venv/bin/python -m hwci flash --config rig.yaml --bin ../obj/AM32_ARK_4IN1_F051_*.bin
+.venv/bin/python -m hwci flash --config rig.yaml --bin ../obj/ARK32_ARK_4IN1_F051_*.bin
 .venv/bin/python -m hwci run --config rig.yaml --profile noprop_smoke_100pct_3a --out runs/stand-smoke-1
 ```
 
@@ -53,7 +53,7 @@ cd hwci
 cd hwci
 # flash instrumented FW (throttle not driven by harness)
 .venv/bin/python -m hwci flash --config config/rig.px4_bdshot.yaml \
-  --bin ../obj/AM32_ARK_4IN1_F051_*.bin
+  --bin ../obj/ARK32_ARK_4IN1_F051_*.bin
 
 # drive motor via PX4 ACTUATOR_TEST (soft re-fire + ramp-down)
 ./scripts/px4_motor_stream.py --port /dev/ttyACM2 \

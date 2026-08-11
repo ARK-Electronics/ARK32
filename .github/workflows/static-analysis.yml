@@ -66,8 +66,8 @@ jobs:
         with:
           name: ark-f051-hwci-perf
           path: |
-            obj/AM32_ARK_4IN1_F051_*.elf
-            obj/AM32_ARK_4IN1_F051_*.bin
+            obj/ARK32_ARK_4IN1_F051_*.elf
+            obj/ARK32_ARK_4IN1_F051_*.bin
           if-no-files-found: ignore
           retention-days: 14
 
@@ -110,8 +110,8 @@ jobs:
         with:
           name: ark-4in1-factory-image
           path: |
-            obj/AM32_ARK_4IN1_F051_*.factory.bin
-            obj/AM32_ARK_4IN1_F051_*.factory.hex
-            obj/AM32_ARK_4IN1_F051_*.eeprom.bin
+            obj/ARK32_ARK_4IN1_F051_*.factory.bin
+            obj/ARK32_ARK_4IN1_F051_*.factory.hex
+            obj/ARK32_ARK_4IN1_F051_*.eeprom.bin
           if-no-files-found: error
           retention-days: 30

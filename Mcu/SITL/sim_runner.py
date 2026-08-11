@@ -38,7 +38,7 @@ def bundled_sitl():
         if os.path.isfile(cand):
             return cand
     import glob
-    for pat in ('obj/AM32_AM32_SITL_CAN_*.elf', 'obj/AM32_SITL_CAN*'):
+    for pat in ('obj/ARK32_AM32_SITL_CAN_*.elf', 'obj/ARK32_AM32_SITL_CAN*'):
         hits = sorted(glob.glob(os.path.join(base, pat)))
         if hits:
             return hits[0]

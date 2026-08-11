@@ -5,7 +5,7 @@ test AM32 SITL over DroneCAN multicast UDP
 runs a throttle ramp via esc.RawCommand and reports esc.Status
 telemetry. Needs the SITL binary already running on the same mcast bus,
 eg:
-  obj/AM32_AM32_SITL_CAN_*.elf --node-id 10 --verbose
+  obj/ARK32_AM32_SITL_CAN_*.elf --node-id 10 --verbose
   python3 Mcu/SITL/sitl_can_test.py --throttle 0.5 --duration 20
 '''
 

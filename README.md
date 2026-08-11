@@ -44,7 +44,7 @@ Native Linux build of the firmware against a simulated motor / bridge / battery,
 ```bash
 make arm_sdk_install   # once, for cross toolchain (SITL itself is host gcc)
 make AM32_SITL_CAN
-obj/AM32_AM32_SITL_CAN_*.elf --node-id 10 --verbose
+obj/ARK32_AM32_SITL_CAN_*.elf --node-id 10 --verbose
 ```
 
 ### HITL / Hardware-CI
@@ -85,7 +85,7 @@ make -j$(nproc) ARK_4IN1_F051
 
 # Production full-flash image (bootloader + app + factory EEPROM defaults)
 make factory-image
-# -> obj/AM32_ARK_4IN1_F051_<ver>.factory.bin  (flash at 0x08000000)
+# -> obj/ARK32_ARK_4IN1_F051_<ver>.factory.bin  (flash at 0x08000000)
 make factory-image-check   # same + layout/defaults gate (CI)
 ```
 
@@ -107,7 +107,7 @@ That links the release app, then runs [`scripts/build_factory_image.py`](scripts
 | Application @ `0x08001000` | `make ARK_4IN1_F051` |
 | EEPROM @ `0x08007C00` | [`factory/ARK_4IN1_F051_eeprom_defaults.json`](factory/ARK_4IN1_F051_eeprom_defaults.json) |
 
-Ship/program `obj/AM32_ARK_4IN1_F051_*.factory.bin` (or `.factory.hex`). Defaults (PWM-by-RPM, 1020 kV, 2 %/ms ramp, 15° fixed advance, PWM min/max 1020/1980 µs) are documented in [`factory/README.md`](factory/README.md).
+Ship/program `obj/ARK32_ARK_4IN1_F051_*.factory.bin` (or `.factory.hex`). Defaults (PWM-by-RPM, 1020 kV, 2 %/ms ramp, 15° fixed advance, PWM min/max 1020/1980 µs) are documented in [`factory/README.md`](factory/README.md).
 
 Optional static analysis / size / format helpers:
 

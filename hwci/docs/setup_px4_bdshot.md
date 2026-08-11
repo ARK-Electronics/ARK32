@@ -169,7 +169,7 @@ Practical interim approach:
 
    ```bash
    cd hwci
-   .venv/bin/python -m hwci flash --config rig.yaml --bin ../obj/AM32_ARK_4IN1_F051_*.bin
+   .venv/bin/python -m hwci flash --config rig.yaml --bin ../obj/ARK32_ARK_4IN1_F051_*.bin
    # Use OpenOCD live mem, or a short custom poller reading hwci_perf
    ```
 
