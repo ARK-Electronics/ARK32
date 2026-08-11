@@ -226,7 +226,7 @@ static const struct parameter {
 	{"CURRENT_P", T_UINT8, 0, 510, 200, &eepromBuffer.current_P},
 	{"CURRENT_I", T_UINT8, 0, 255, 0, &eepromBuffer.current_I},
 	{"CURRENT_D", T_UINT8, 0, 510, 100, &eepromBuffer.current_D},
-	{"TEMPERATURE_LIMIT", T_UINT8, 70, 255, 105, &eepromBuffer.limits.temperature},
+	{"TEMPERATURE_LIMIT", T_UINT8, THERMAL_LIMIT_MIN_C, 255, TARGET_DEFAULT_TEMPERATURE_LIMIT, &eepromBuffer.limits.temperature},
 	/* Foldback slope: degrees from the onset to full derate. The response
 	 * is always a ramp - there is no hard-cut mode to select, because
 	 * dropping a motor outright on a multirotor is worse than flying on a

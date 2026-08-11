@@ -118,8 +118,44 @@ void loadEEpromSettings(void)
 			startup_max_duty_cycle = startup_max_duty_cycle + dead_time_override;
 			setPwmDeadTime(dead_time_override);
 		}
-		if (eepromBuffer.limits.temperature < 70 || eepromBuffer.limits.temperature > 140) {
-			eepromBuffer.limits.temperature = 255;
+		/* Valid window for the thermal ceiling. Outside it resolves to the
+		 * target's shipped limit (see the fail-safe note below); only the
+		 * explicit 255 sentinel means "derate disabled".
+		 *
+		 * The lower bound is a build-time override ONLY
+		 * so a bench can exercise the derate at a temperature the board
+		 * actually reaches: the derate starts AT limits.temperature and
+		 * hits THERMAL_CEIL_FLOOR at +temp_derate_band_c, so verifying it
+		 * against the shipped 70 C floor needs the die driven past 70,
+		 * which a propped ESC in its own slipstream may never do (a 5-inch
+		 * 6S attempt plateaued at 57 C). Do not lower this in a shipping
+		 * build - 70 C is the floor the product's protection envelope
+		 * assumes, and check-erase-defaults.py gates the shipped pair.
+		 *
+		 * THERMAL_LIMIT_MIN_C lives in targets.h because this is NOT the
+		 * only floor: the DroneCAN parameter table re-validates this same
+		 * byte at boot against TEMPERATURE_LIMIT's own min and substitutes
+		 * its default, so lowering only this one gets silently overridden
+		 * (observed: a 30 C write came back as 105). Both now share the
+		 * macro; keep it that way.
+		 */
+		if (eepromBuffer.limits.temperature != THERMAL_LIMIT_DISABLED &&
+		    (eepromBuffer.limits.temperature < THERMAL_LIMIT_MIN_C ||
+		     eepromBuffer.limits.temperature > THERMAL_LIMIT_MAX_C)) {
+			/* FAIL SAFE, not fail open. This used to coerce to 255
+			 * (= derate disabled), which also defeated the DroneCAN
+			 * parameter layer's own safety net: load_settings() resets
+			 * an out-of-range value to TEMPERATURE_LIMIT's default, but
+			 * 255 is INSIDE its accepted 70..255 window, so the 255
+			 * written here always survived and the ESC came up with no
+			 * thermal protection at all. A garbled or mis-set byte now
+			 * lands on the target's shipped limit instead. 255 itself
+			 * still means "deliberately disabled" and is preserved.
+			 *
+			 * Non-DroneCAN targets are unaffected: their
+			 * TARGET_DEFAULT_TEMPERATURE_LIMIT is 255, so out-of-range
+			 * still resolves to disabled exactly as before. */
+			eepromBuffer.limits.temperature = TARGET_DEFAULT_TEMPERATURE_LIMIT;
 		}
 
 		/* Foldback ramp width. 0xFF on any page that never wrote the CAN
