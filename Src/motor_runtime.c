@@ -12,8 +12,23 @@
 #include "targets.h"
 #include "eeprom.h"
 #include "signal.h"
+#include "version.h"
 
 #include <assert.h>
+
+/* Ship version embedded after FILE_NAME in the .file_name region so the
+ * configurator can show major.minor.patch[-tag]. EEPROM still only has the
+ * two upstream major/minor bytes. */
+#define AM32_VER_STR_HELPER(x) #x
+#define AM32_VER_STR(x) AM32_VER_STR_HELPER(x)
+#if defined(VERSION_PATCH) && defined(VERSION_TAG)
+#	define FIRMWARE_VERSION_EMBED                                                                                                     \
+		AM32_VER_STR(VERSION_MAJOR) "." AM32_VER_STR(VERSION_MINOR) "." AM32_VER_STR(VERSION_PATCH) "-" VERSION_TAG
+#elif defined(VERSION_PATCH)
+#	define FIRMWARE_VERSION_EMBED AM32_VER_STR(VERSION_MAJOR) "." AM32_VER_STR(VERSION_MINOR) "." AM32_VER_STR(VERSION_PATCH)
+#else
+#	define FIRMWARE_VERSION_EMBED AM32_VER_STR(VERSION_MAJOR) "." AM32_VER_STR(VERSION_MINOR)
+#endif
 
 //===========================================================================
 //=============================  Defaults =============================
@@ -103,8 +118,14 @@ uint16_t low_cell_volt_cutoff = 330; // 3.3volts per cell
 
 /* used: nothing in C reads this - the configurator reads the .file_name region
  * out of the image - so LTO drops it as dead without the attribute, leaving the
- * section empty and the firmware unidentifiable. */
-const char filename[30] __attribute__((used)) AM32_FLASH_SECTION(".file_name") = FILE_NAME;
+ * section empty and the firmware unidentifiable.
+ *
+ * Layout (32-byte region below EEPROM): `FILE_NAME\0VERSION\0…`
+ * VERSION is the full ship string (e.g. 3.0.2-ark). Older tools only decode
+ * up to the first NUL and still see the board identity for asset matching.
+ */
+const char filename[32] __attribute__((used)) AM32_FLASH_SECTION(".file_name") = FILE_NAME "\0" FIRMWARE_VERSION_EMBED;
+_Static_assert(sizeof(FILE_NAME "\0" FIRMWARE_VERSION_EMBED) <= 32, "FILE_NAME + version exceed .file_name region");
 _Static_assert(sizeof(FIRMWARE_NAME) <= 13, "Firmware name too long"); // max 12 character firmware name plus NULL
 
 // move these to targets folder or peripherals for each mcu
