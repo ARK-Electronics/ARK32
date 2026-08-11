@@ -351,6 +351,32 @@
 #	define TARGET_DEFAULT_TEMP_DERATE_BAND THERMAL_DERATE_BAND_DEFAULT
 #endif
 
+/*
+ * Lowest thermal ceiling the firmware will arm. TWO independent places
+ * enforce this and they must agree, or the one you did not change silently
+ * wins: settings.c coerces an out-of-range limits.temperature to 255
+ * (disabled), and the DroneCAN parameter table re-validates the same byte
+ * at boot and substitutes TEMPERATURE_LIMIT's default (105) instead. A
+ * bench that lowered only settings.c saw its 30 C write come back as 105.
+ *
+ * Build-time override for bench verification ONLY - the derate runs from
+ * limits.temperature upward to +temp_derate_band_c, so exercising it at
+ * the shipped 70 C floor needs the die driven past 70, which a propped ESC
+ * in its own slipstream may never reach:
+ *   make ARK_G431_CAN HWCI_PERF=1 EXTRA_CFLAGS=-DTHERMAL_LIMIT_MIN_C=30
+ * Never lower it in a shipping build.
+ */
+#ifndef THERMAL_LIMIT_MIN_C
+#	define THERMAL_LIMIT_MIN_C 70
+#endif
+/* Upper end of the same window. 255 is NOT part of it - that is the
+ * explicit "no thermal derate" sentinel and is preserved on purpose. */
+#ifndef THERMAL_LIMIT_MAX_C
+#	define THERMAL_LIMIT_MAX_C 140
+#endif
+/* Value the temperature slot is disabled with. */
+#define THERMAL_LIMIT_DISABLED 255
+
 #ifndef RAMP_SPEED_STARTUP
 #	define RAMP_SPEED_STARTUP 2 // adjusted 2.14 to match duty cycle change between mcu targets.
 #endif
