@@ -125,33 +125,30 @@
  * bare #define collided with -Werror on redefinition, which is why the
  * knob this comment calls sweepable was not actually sweepable.
  *
- * Bench sweep, RCINPOWER GTS 4715-360KV + 14x5.5 (MRP 365x140) at 12S,
- * prop14_startup_matrix_12s, 3 cold starts per rung (runs/startup-blank*):
+ * A 32/36/40 sweep was attempted on the RCINPOWER GTS 4715-360KV + 14x5.5
+ * at 12S and its result was WITHDRAWN as invalid - see below - so this
+ * stays at the long-standing 32 until someone re-runs it properly.
  *
- *   blank   mean peak start A at 12/15/20%   mean ttr   max ttr   desync+stall
- *   32       16.9 / 21.6 / 30.9              18.6 ms     30 ms     14
- *   36       15.4 / 18.3 / 25.4              24.7 ms    133 ms     14
- *   40       15.6 / 17.9 / 23.7              20.1 ms     24 ms     10
+ * How it went wrong, because the trap is easy to repeat: the override was
+ * applied with `make ARK_G431_CAN EXTRA_CFLAGS=-DZC_SEARCH_BLANK_64THS=N`
+ * and the board was then programmed with `hwci flash`, which calls
+ * build_firmware() -> plain `make <target>`. That recompiles WITHOUT the
+ * override (verified: the .bin md5 reverts), so all three "different"
+ * builds were the same default binary and the differences between runs
+ * were run-to-run variance. Flash a swept build with
+ *   hwci flash --bin obj/AM32_ARK_G431_CAN_<ver>.bin
+ * which skips the rebuild, and confirm the value actually took before
+ * trusting any comparison.
  *
- * 40 wins on every axis that matters: lowest start current at the rungs
- * that draw real current, tightest worst-case acquisition, and the only
- * value that reduces the desync/stall count. 36 is NOT the safe middle it
- * looks like - it produced a 133 ms acquisition outlier and no reduction
- * in desync/stall events.
- *
- * Margin check for 40 on THIS article: the ceiling above is stated against
- * auto_advance sweeping 13..23 (crossing at 45..55/64). Here auto_advance
- * is 0 and advance_level is fixed, so the expected-crossing position does
- * not vary run to run and 40 keeps a deterministic margin. Re-verify this
- * before enabling auto_advance - the low-advance end is where 40 bites.
- *
- * Not fixed by any blank value: a 25% cold start stalls (rotor reaches
- * ~370 rpm, loses sync, 29-37 A with the rotor barely turning). That is
- * torque-vs-inertia at the open-loop handoff, not crossing detection -
- * the lever is startup_power / the startup duty ceiling.
+ * Still valid from that session, measured on the default build: 13 cold
+ * starts at 10/12/15/20% all acquired in 10-30 ms, and a 25% cold start
+ * stalls (rotor reaches ~370 rpm, loses sync, 29-37 A while barely
+ * turning). That stall is torque-vs-inertia at the open-loop handoff, not
+ * crossing detection - the lever is startup_power / the startup duty
+ * ceiling, and no blank value was ever shown to change it.
  */
 #	ifndef ZC_SEARCH_BLANK_64THS
-#		define ZC_SEARCH_BLANK_64THS 40
+#		define ZC_SEARCH_BLANK_64THS 32
 #	endif
 /* USART2 TX on PB3 @ 115200 — matches bootloader USE_DEBUG_UART (AM32-bootloader#60). */
 #	define USE_DEBUG_UART
