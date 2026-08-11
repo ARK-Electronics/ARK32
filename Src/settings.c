@@ -140,8 +140,7 @@ void loadEEpromSettings(void)
 		 * macro; keep it that way.
 		 */
 		if (eepromBuffer.limits.temperature != THERMAL_LIMIT_DISABLED &&
-		    (eepromBuffer.limits.temperature < THERMAL_LIMIT_MIN_C ||
-		     eepromBuffer.limits.temperature > THERMAL_LIMIT_MAX_C)) {
+		    (eepromBuffer.limits.temperature < THERMAL_LIMIT_MIN_C || eepromBuffer.limits.temperature > THERMAL_LIMIT_MAX_C)) {
 			/* FAIL SAFE, not fail open. This used to coerce to 255
 			 * (= derate disabled), which also defeated the DroneCAN
 			 * parameter layer's own safety net: load_settings() resets
