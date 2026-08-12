@@ -62,7 +62,7 @@ Defined in [`ARK_4IN1_F051_eeprom_defaults.json`](ARK_4IN1_F051_eeprom_defaults.
 | PWM input max | **1980 µs** |
 | Input type | DShot (servo endpoints still stored for PWM mode) |
 
-Encodings follow `Inc/eeprom.h` and `Src/settings.c`. Rebuild after editing the JSON:
+Encodings follow `Inc/eeprom.h` and `Src/settings.c`. What each setting does, including the ones not listed above, is in [`doc/eeprom-settings.md`](../doc/eeprom-settings.md). Rebuild after editing the JSON:
 
 ```bash
 make factory-image
