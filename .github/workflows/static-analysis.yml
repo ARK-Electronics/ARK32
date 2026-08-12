@@ -55,9 +55,7 @@ jobs:
           submodules: recursive
 
       - name: Install Arm toolchain
-        run: |
-          make arm_sdk_install
-          make arm_sdk_check
+        uses: ./.github/actions/setup-arm-sdk
 
       - name: Build ARK + size check
         run: make size-check-ark -j$(nproc)
@@ -82,9 +80,7 @@ jobs:
           submodules: recursive
 
       - name: Install Arm toolchain
-        run: |
-          make arm_sdk_install
-          make arm_sdk_check
+        uses: ./.github/actions/setup-arm-sdk
 
       # Guards the two things LTO breaks without failing a build or a test:
       # RAM_FUNC hot paths inlined back into flash, and .file_name /
@@ -103,9 +99,7 @@ jobs:
           submodules: recursive
 
       - name: Install Arm toolchain
-        run: |
-          make arm_sdk_install
-          make arm_sdk_check
+        uses: ./.github/actions/setup-arm-sdk
 
       - name: Build + verify factory full-flash image
         run: make factory-image-check -j$(nproc)
