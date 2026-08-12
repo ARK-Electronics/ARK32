@@ -11,8 +11,8 @@ The configurator serves the same text as **Settings guide** (always available) a
 | Bootloader revision | `BOOT_LOADER_REVISION` | integer | stamped by the bootloader | Bootloader version. The bootloader overwrites this on every settings-page write, so changing it does nothing. |
 | Firmware major | `MAIN_REVISION` | integer | from the running firmware | Firmware major version, rewritten on boot. Not a setting. |
 | Firmware minor | `SUB_REVISION` | integer | from the running firmware | Firmware minor version, rewritten on boot. Not a setting. |
-| Ramp rate | `MAX_RAMP` | 0.1–20 % duty / ms | 2.0 %/ms | How fast duty may change, as a percent of full throttle per millisecond — not a percent of the loop rate. 2 %/ms means 0→100% takes 50 ms; lower is safer on large props, and values under 1.0 use a finer 0.1 %/ms step. Firmware also caps each rpm band, so this setting only lowers that cap. |
-| Minimum duty cycle | `MINIMUM_DUTY_CYCLE` | 0–25% | 2% | Lowest PWM the ESC will apply once spinning. Raise if the motor will not start or growls at idle. Too high wastes hover power. |
+| Ramp rate | `MAX_RAMP` | 0.1–20 % duty / ms | 2.0 %/ms | How fast duty may change, as a percent of full throttle per millisecond. 2 %/ms means 0→100% takes 50 ms; lower is safer on large props, and values under 1.0 use a finer 0.1 %/ms step. Firmware also caps each rpm band, so this setting only lowers that cap. |
+| Minimum duty cycle | `MINIMUM_DUTY_CYCLE` | 0–25% | 2% | Lowest motor duty the ESC will apply once spinning, on DShot and servo alike. Raise if the motor will not start or growls at idle. Too high wastes hover power. |
 | Disable stick calibration | `DISABLE_STICK_CALIBRATION` | Off / On | Off | Skips the PWM high/low stick calibration on boot. Irrelevant for DShot. |
 | Absolute voltage cutoff | `ABSOLUTE_VOLTAGE_CUTOFF` | 0.5–50 V (0.5 V steps) | 5.0 V | Pack voltage that Absolute LVC treats as empty. Unused unless Low voltage cut off is Absolute. |
 | Current P | `CURRENT_P` | 0–255 | 100 | Proportional gain of the current limiter. Only runs when a current limit is set. Leave the factory value unless you are tuning the limiter. |
@@ -21,7 +21,7 @@ The configurator serves the same text as **Settings guide** (always available) a
 | Active brake power | `ACTIVE_BRAKE_POWER` | 0–5% duty (0 is off) | 2% | Duty applied in Active brake mode. Unused unless Brake on stop is Active brake. |
 | Reversed | `MOTOR_DIRECTION` | Off / On | Off | Swaps rotation direction. Same as the Reversed checkbox on each ESC card. |
 | 3D mode | `BIDIRECTIONAL_MODE` | Off / On | Off | Center throttle is stop; above is forward, below is reverse. For 3D planes, not multirotors. |
-| Sinusoidal startup | `SINUSOIDAL_STARTUP` | Off / On | Off | Open-loop sine drive at the start of spool-up, smoother on large, high-inertia motors. Requires Complementary PWM. Off on stock ARK 4IN1. |
+| Sinusoidal startup | `SINUSOIDAL_STARTUP` | Off / On | Off | Open-loop sine drive at the start of spool-up, smoother on large, high-inertia motors. Requires Complementary PWM. ARK 4IN1 ships this off; the feature is still available. |
 | Complementary PWM | `COMPLEMENTARY_PWM` | Off / On | On | Drives the low-side FETs during the off time (active freewheeling). More efficient, and required for sine start and braking. Leave on for multirotors. |
 | PWM type | `VARIABLE_PWM_FREQUENCY` | Fixed / Variable / By RPM | Variable | Fixed uses the kHz setting. Variable sweeps that setting up to 2× as rpm rises. By RPM picks frequency from commutation speed and ignores the kHz slider. |
 | Stuck rotor protection | `STUCK_ROTOR_PROTECTION` | Off / On | On | Cuts drive if the motor never produces BEMF (jammed or missing prop). Leave on. |
@@ -29,7 +29,7 @@ The configurator serves the same text as **Settings guide** (always available) a
 | PWM frequency | `PWM_FREQUENCY` | 8–144 kHz | 24 kHz | FET switching rate when PWM Type is Fixed or Variable. Higher is quieter and costs more heat. Ignored when PWM Type is By RPM. |
 | Startup power | `STARTUP_POWER` | 50–150% | 100% | Extra duty added on top of Minimum duty cycle during startup. Raise if the motor will not break out; lower if it lurches or overshoots. |
 | Motor KV | `MOTOR_KV` | 20–10220 (40 kV steps) | 1020 | Nameplate kV. Used for the low-rpm throttle envelope and for auto timing. Wrong kV can cap top end or make timing too aggressive. |
-| Motor poles | `MOTOR_POLES` | 2–36 (configurator); firmware accepts 2–64 | 14 | Magnet count, usually 14. Scales rpm telemetry and the same envelope/timing math as Motor KV. |
+| Motor poles | `MOTOR_POLES` | 2–64 | 14 | Magnet count, usually 14. Scales rpm telemetry and the same envelope/timing math as Motor KV. |
 | Brake on stop | `BRAKE_ON_STOP` | Off / Brake on stop / Active brake | Off | Off coasts at zero throttle; Brake on stop shorts the windings (drag brake). Active brake applies a small reverse duty and only runs while armed. Leave off for multirotors. |
 | Stall protection | `STALL_PROTECTION` | Off / On | Off | Boosts throttle as rpm falls, for crawlers and RC cars. Do not use on multirotors. |
 | Beeper volume | `BEEP_VOLUME` | 0–11 | 5 | Loudness of motor-as-speaker beeps. 0 is effectively silent. Beeps only play when the motor is not spinning. |
