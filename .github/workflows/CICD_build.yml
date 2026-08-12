@@ -42,12 +42,11 @@ jobs:
         with:
           submodules: "recursive"
 
+      - name: Install Arm toolchain
+        uses: ./.github/actions/setup-arm-sdk
+
       - name: Build CI
-        run: |
-          # Installs + verifies the xPack GCC 15 pin from make/tools.mk.
-          make arm_sdk_install
-          make arm_sdk_check
-          make -j8
+        run: make -j8
 
       - name: Assert hex naming convention
         run: |

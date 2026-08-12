@@ -1,0 +1,29 @@
+name: Setup pinned Arm GCC
+description: Restore or install the xPack GNU Arm Embedded GCC pin from make/tools.mk
+
+runs:
+  using: composite
+  steps:
+    - name: Read toolchain pin
+      id: pin
+      shell: bash
+      run: |
+        ver=$(sed -n 's/^XPACK_GCC_VER := //p' make/tools.mk)
+        if [ -z "$ver" ]; then
+          echo "error: XPACK_GCC_VER not found in make/tools.mk" >&2
+          exit 1
+        fi
+        echo "ver=$ver" >> "$GITHUB_OUTPUT"
+        echo "dir=tools/linux/xpack-arm-none-eabi-gcc-$ver" >> "$GITHUB_OUTPUT"
+
+    - name: Cache Arm GCC
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.pin.outputs.dir }}
+        key: xpack-gcc-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.ver }}
+
+    - name: Install Arm GCC
+      shell: bash
+      run: |
+        make arm_sdk_install
+        make arm_sdk_check

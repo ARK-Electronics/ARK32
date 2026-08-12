@@ -14,15 +14,19 @@ XPACK_GCC_VER ?= 15.2.1-1.1
 XPACK_GCC_DIR ?= xpack-arm-none-eabi-gcc-$(XPACK_GCC_VER)
 XPACK_GCC_REL := https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v$(XPACK_GCC_VER)
 
-# Download helper: wget preferred, curl fallback. No apt/system-gcc fallback.
+# Download helper: curl preferred (retries + HTTP fail), wget fallback.
+# Refuse a truncated or non-gzip file so a GitHub HTML error page cannot
+# reach `tar` as "unexpected end of file".
 define xpack_download
-	if command -v wget >/dev/null 2>&1; then \
-		wget -q --show-progress -O $(1) $(2) || wget -q -O $(1) $(2); \
-	elif command -v curl >/dev/null 2>&1; then \
-		curl -fL --retry 3 --retry-delay 2 -o $(1) $(2); \
+	rm -f $(1); \
+	if command -v curl >/dev/null 2>&1; then \
+		curl -fL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 20 -o $(1) $(2); \
+	elif command -v wget >/dev/null 2>&1; then \
+		wget -q --tries=5 --retry-connrefused --timeout=30 -O $(1) $(2); \
 	else \
 		echo "error: need wget or curl to fetch $(2)" >&2; exit 1; \
-	fi
+	fi; \
+	gzip -t $(1)
 endef
 
 # Windows helper utilities (make, etc.) — not the compiler
@@ -72,9 +76,13 @@ endif
 arm_sdk_install:
 	@echo Installing macos tools \(gcc $(XPACK_GCC_VER)\)
 	@if [ ! -x tools/macos/$(XPACK_GCC_DIR)/bin/arm-none-eabi-gcc ]; then \
-		echo "downloading $(MAC_XPACK_ASSET)"; \
 		mkdir -p tools/macos downloads; \
-		$(call xpack_download,downloads/$(MAC_XPACK_ASSET),$(XPACK_GCC_REL)/$(MAC_XPACK_ASSET)); \
+		if [ ! -s downloads/$(MAC_XPACK_ASSET) ] || ! gzip -t downloads/$(MAC_XPACK_ASSET) >/dev/null 2>&1; then \
+			echo "downloading $(MAC_XPACK_ASSET)"; \
+			$(call xpack_download,downloads/$(MAC_XPACK_ASSET),$(XPACK_GCC_REL)/$(MAC_XPACK_ASSET)); \
+		else \
+			echo "using existing downloads/$(MAC_XPACK_ASSET)"; \
+		fi; \
 		tar -xzf downloads/$(MAC_XPACK_ASSET) -C tools/macos; \
 	else \
 		echo "already installed: tools/macos/$(XPACK_GCC_DIR)"; \
@@ -95,9 +103,13 @@ endif
 arm_sdk_install:
 	@echo Installing linux tools \(gcc $(XPACK_GCC_VER)\)
 	@if [ ! -x tools/linux/$(XPACK_GCC_DIR)/bin/arm-none-eabi-gcc ]; then \
-		echo "downloading $(LINUX_XPACK_ASSET)"; \
 		mkdir -p tools/linux downloads; \
-		$(call xpack_download,downloads/$(LINUX_XPACK_ASSET),$(XPACK_GCC_REL)/$(LINUX_XPACK_ASSET)); \
+		if [ ! -s downloads/$(LINUX_XPACK_ASSET) ] || ! gzip -t downloads/$(LINUX_XPACK_ASSET) >/dev/null 2>&1; then \
+			echo "downloading $(LINUX_XPACK_ASSET)"; \
+			$(call xpack_download,downloads/$(LINUX_XPACK_ASSET),$(XPACK_GCC_REL)/$(LINUX_XPACK_ASSET)); \
+		else \
+			echo "using existing downloads/$(LINUX_XPACK_ASSET)"; \
+		fi; \
 		tar -xzf downloads/$(LINUX_XPACK_ASSET) -C tools/linux; \
 	else \
 		echo "already installed: tools/linux/$(XPACK_GCC_DIR)"; \
