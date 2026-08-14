@@ -54,6 +54,11 @@ static bool done_startup;
 #	define APP_SIGNATURE_MAGIC1 0x68f058e6
 #	define APP_SIGNATURE_MAGIC2 0xafcee5a0
 
+#	ifndef DRONECAN_HW_VERSION_MAJOR
+#		define DRONECAN_HW_VERSION_MAJOR 0
+#		define DRONECAN_HW_VERSION_MINOR 71
+#	endif
+
 /*
   application signature, filled in by set_app_signature.py
 
@@ -77,6 +82,55 @@ const struct {
 	.crc1 = 0,
 	.crc2 = 0,
 	.mcu = AM32_MCU,
+};
+
+/*
+  PX4 APDescriptor (APDesc00). PX4 copies any SD-card-root .bin whose first
+  1 KiB contains this block to /ufw/<board_id>.bin and flashes nodes whose
+  GetNodeInfo hardware_version matches board_id = (hw_major << 8) | hw_minor.
+
+  CRCs / image_size / git_hash are filled by scripts/px4_uavcan_image.py
+  *before* set_app_signature.py so the AM32 bootloader CRC stays valid.
+  GetNodeInfo reads image_crc back so PX4 does not re-flash every boot.
+ */
+#	define PX4_APDESC_SIGNATURE_0 0x40
+#	define PX4_APDESC_SIGNATURE_1 0xa2
+#	define PX4_APDESC_SIGNATURE_2 0xe4
+#	define PX4_APDESC_SIGNATURE_3 0xf1
+#	define PX4_APDESC_SIGNATURE_4 0x64
+#	define PX4_APDESC_SIGNATURE_5 0x68
+#	define PX4_APDESC_SIGNATURE_6 0x91
+#	define PX4_APDESC_SIGNATURE_7 0x06
+
+struct px4_app_descriptor {
+	uint8_t signature[8];
+	union {
+		uint64_t image_crc;
+		struct {
+			uint32_t crc32_block1;
+			uint32_t crc32_block2;
+		};
+	};
+	uint32_t image_size;
+	uint32_t git_hash;
+	uint8_t major_version;
+	uint8_t minor_version;
+	uint16_t board_id;
+	uint8_t reserved[8];
+} __attribute__((packed));
+
+_Static_assert(sizeof(struct px4_app_descriptor) == 36, "PX4 APDescriptor must be 36 bytes");
+
+const struct px4_app_descriptor px4_app_descriptor __attribute__((used, aligned(8))) AM32_FLASH_SECTION(".px4_app_descriptor") = {
+	.signature = {PX4_APDESC_SIGNATURE_0, PX4_APDESC_SIGNATURE_1, PX4_APDESC_SIGNATURE_2, PX4_APDESC_SIGNATURE_3,
+		      PX4_APDESC_SIGNATURE_4, PX4_APDESC_SIGNATURE_5, PX4_APDESC_SIGNATURE_6, PX4_APDESC_SIGNATURE_7},
+	.image_crc = 0,
+	.image_size = 0,
+	.git_hash = 0,
+	.major_version = VERSION_MAJOR,
+	.minor_version = VERSION_MINOR,
+	.board_id = (uint16_t)((DRONECAN_HW_VERSION_MAJOR << 8) | DRONECAN_HW_VERSION_MINOR),
+	.reserved = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
 };
 
 enum VarType {
@@ -832,12 +886,13 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
 	// fill in your major and minor firmware version
 	pkt.software_version.major = VERSION_MAJOR;
 	pkt.software_version.minor = VERSION_MINOR;
-	pkt.software_version.optional_field_flags = 0;
-	pkt.software_version.vcs_commit = 0; // should put git hash in here
+	pkt.software_version.optional_field_flags = UAVCAN_PROTOCOL_SOFTWAREVERSION_OPTIONAL_FIELD_FLAG_IMAGE_CRC |
+						    UAVCAN_PROTOCOL_SOFTWAREVERSION_OPTIONAL_FIELD_FLAG_VCS_COMMIT;
+	pkt.software_version.vcs_commit = px4_app_descriptor.git_hash;
+	pkt.software_version.image_crc = px4_app_descriptor.image_crc;
 
-	// should fill in hardware version
-	pkt.hardware_version.major = 2;
-	pkt.hardware_version.minor = 3;
+	pkt.hardware_version.major = DRONECAN_HW_VERSION_MAJOR;
+	pkt.hardware_version.minor = DRONECAN_HW_VERSION_MINOR;
 
 	sys_can_getUniqueID(pkt.hardware_version.unique_id);
 

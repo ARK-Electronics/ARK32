@@ -266,6 +266,22 @@ ARK ESCs use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootl
 
 To put ARK32 on a **blank production ESC**, flash the full-chip factory image (`make factory-image` → `obj/*factory.bin` at `0x08000000`) so bootloader, app, and EEPROM defaults land in one step — see [factory/README.md](factory/README.md). For development or field app-only updates, flash a matching **ARK32-bootloader** with ST-LINK (if needed), then the application `.bin`/`.hex` at `0x08001000` (or use a configurator / one-wire serial). Later app flashes can also carry and apply a newer BL via the embed path above.
 
+### PX4 SD-card update (ARK 12S CAN)
+
+`make ARK_G431_CAN` signs the application image with a PX4 APDescriptor and emits a second copy named for the SD-card workflow:
+
+```text
+obj/<board_id>-<MAJOR.MINOR[.PATCH]>.uavcan.bin
+```
+
+`board_id` is `(hw_major << 8) | hw_minor`. This target reports hardware version **0.71**, so `board_id` is **71**. The rest of the name is the numeric ship version (no `-ark`), e.g. `71-3.0.2.uavcan.bin`.
+
+1. Copy that `.uavcan.bin` to the **root** of the PX4 SD card (or to `ufw_staging/`).
+2. Reboot the flight controller. PX4 moves it to `/ufw/71.bin` and begins a DroneCAN firmware update on every matching ESC.
+3. Leave the motor disarmed; the ESC must be idle for `BeginFirmwareUpdate` to be accepted.
+
+The same bytes are in `obj/AM32_ARK_G431_CAN_<ver>.bin`. The `.uavcan.bin` name is what PX4's firmware database records; the APDescriptor inside is what makes PX4 accept the file.
+
 ## EEPROM settings
 
 Every user-facing EEPROM field is documented in [`doc/eeprom-settings.md`](doc/eeprom-settings.md): what it does, the range the configurator shows, and the ARK 4IN1 factory default. The same text is the **Settings guide** in [ARK32 Configurator](https://github.com/ARK-Electronics/ark32-configurator).

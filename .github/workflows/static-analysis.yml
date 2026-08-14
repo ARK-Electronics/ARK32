@@ -118,6 +118,7 @@ jobs:
             obj/ARK32_ARK_G431_CAN_*.factory.bin
             obj/ARK32_ARK_G431_CAN_*.factory.hex
             obj/ARK32_ARK_G431_CAN_*.eeprom.bin
+            obj/*.uavcan.bin
           if-no-files-found: error
           retention-days: 30
 
@@ -148,5 +149,6 @@ jobs:
             obj/AM32_ARK_G431_CAN_*.elf
             obj/AM32_ARK_G431_CAN_*.bin
             obj/AM32_ARK_G431_CAN_*.hex
+            obj/*.uavcan.bin
           if-no-files-found: ignore
           retention-days: 14
