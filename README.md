@@ -112,7 +112,7 @@ make -j$(nproc) ARK_4IN1_F051
 
 # Production full-flash image (bootloader + app + factory EEPROM defaults)
 make factory-image
-# -> obj/ARK32_ARK_4IN1_F051_<ver>.factory.bin  (flash at 0x08000000)
+# -> obj/ARK32_ARK_4IN1_F051_<ver>.factory.img  (flash at 0x08000000)
 make factory-image-check   # same + layout/defaults gate (CI)
 ```
 
@@ -134,7 +134,7 @@ That links the release app, then runs [`scripts/build_factory_image.py`](scripts
 | Application @ `0x08001000` | `make ARK_4IN1_F051` |
 | EEPROM @ `0x08007C00` | [`factory/ARK_4IN1_F051_eeprom_defaults.json`](factory/ARK_4IN1_F051_eeprom_defaults.json) |
 
-Ship/program `obj/ARK32_ARK_4IN1_F051_*.factory.bin` (or `.factory.hex`). Defaults (variable PWM, 1020 kV, 2 %/ms ramp, 15° fixed advance, PWM min/max 1020/1980 µs) are documented in [`factory/README.md`](factory/README.md).
+Ship/program `obj/ARK32_ARK_4IN1_F051_*.factory.img` (or `.factory.hex`). Defaults (variable PWM, 1020 kV, 2 %/ms ramp, 15° fixed advance, PWM min/max 1020/1980 µs) are documented in [`factory/README.md`](factory/README.md).
 
 Optional static analysis / size / format helpers:
 
@@ -264,7 +264,9 @@ ARK ESCs use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootl
 | Committed images for app embed | [`Bootloaders/`](Bootloaders/) (see [Bootloaders/README.md](Bootloaders/README.md)) |
 | App-side BL update | F051 release and **every G431 CAN** build embed the image and rewrite the on-chip BL if it differs (`Src/bootloader_update.c`). Success soft-resets; the next boot plays **`playBootloaderUpdatedTone`** (two rising beeps) then the normal startup tune. Strip with `EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`. F051 `HWCI_PERF=1` omits the blob (flash is tight); G431 CAN keeps it. |
 
-To put ARK32 on a **blank production ESC**, flash the full-chip factory image (`make factory-image` → `obj/*factory.bin` at `0x08000000`) so bootloader, app, and EEPROM defaults land in one step — see [factory/README.md](factory/README.md). For development or field app-only updates, flash the application `.bin`/`.hex` at the app base (F051 `0x08001000`, G431 CAN `0x08004000`). The first boot applies a newer BL via the embed path above if the on-chip image differs.
+To put ARK32 on a **blank production ESC**, flash the full-chip factory image (`make factory-image` → `obj/*.factory.img` at `0x08000000`) so bootloader, app, and EEPROM defaults land in one step — see [factory/README.md](factory/README.md). For development or field app-only updates, flash the application `.bin`/`.hex` at the app base (F051 `0x08001000`, G431 CAN `0x08004000`). The first boot applies a newer BL via the embed path above if the on-chip image differs.
+
+Do **not** copy a factory image to a PX4 SD card. PX4 globs every `*.bin` on the card root and scans the **whole file** for an APDescriptor (the documented 1 KiB window is a no-op). A G431 `*.factory.bin` would be staged as `/ufw/71.bin` and written at the app base. Factory artifacts are `.factory.img` / `.factory.hex` so that cannot happen.
 
 ### PX4 SD-card update (ARK 12S CAN)
 
@@ -276,11 +278,11 @@ obj/<board_id>-<MAJOR.MINOR[.PATCH]>.uavcan.bin
 
 `board_id` is `(hw_major << 8) | hw_minor`. This target reports hardware version **0.71**, so `board_id` is **71**. The rest of the name is the numeric ship version (no `-ark`), e.g. `71-3.0.2.uavcan.bin`.
 
-1. Copy that `.uavcan.bin` to the **root** of the PX4 SD card (or to `ufw_staging/`).
+1. Copy **only** that `.uavcan.bin` to the **root** of the PX4 SD card (or to `ufw_staging/`). Do not copy `*.factory.img`, `*.factory.hex`, or any other `*.bin`.
 2. Reboot the flight controller. PX4 moves it to `/ufw/71.bin` and begins a DroneCAN firmware update on every matching ESC.
 3. Leave the motor disarmed; the ESC must be idle for `BeginFirmwareUpdate` to be accepted.
 
-The same bytes are in `obj/AM32_ARK_G431_CAN_<ver>.bin`. The `.uavcan.bin` name is what PX4's firmware database records; the APDescriptor inside is what makes PX4 accept the file.
+The same bytes are in `obj/AM32_ARK_G431_CAN_<ver>.bin`. The `.uavcan.bin` name is what PX4's firmware database records; the APDescriptor inside is what makes PX4 accept the file. The factory full-flash image is a different artifact (`.factory.img`) and must not go on the SD card.
 
 ## EEPROM settings
 

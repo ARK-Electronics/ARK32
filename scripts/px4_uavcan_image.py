@@ -3,13 +3,19 @@
 
 PX4's UAVCAN firmware updater (src/drivers/uavcan/uavcan_servers.cpp):
 
-  * Accepts a .bin on the SD-card root (or ufw_staging/) only if the first
-    1 KiB contains an APDescriptor whose 8-byte signature is
-    {0x40,0xa2,0xe4,0xf1,0x64,0x68,0x91,0x06} and image_crc != 0.
-  * Copies it to /ufw/<board_id>.bin, where
+  * Accepts any SD-card-root (or ufw_staging/) file whose *name* contains
+    ".bin" (strstr) if the file contains an APDescriptor whose 8-byte
+    signature is {0x40,0xa2,0xe4,0xf1,0x64,0x68,0x91,0x06} and image_crc != 0.
+  * The getFileInfo "limit" argument is a no-op: it scans 512-byte chunks
+    to EOF. A 128 KiB factory image named *.bin is accepted. Do not name
+    full-flash images .bin — emit them as .factory.img.
+  * Copies a matching file to /ufw/<board_id>.bin, where
     board_id = (hardware_version.major << 8) | hardware_version.minor.
   * Flashes any node whose GetNodeInfo hw version matches and whose
     reported image_crc differs (or is 0).
+
+The app .uavcan.bin still keeps the descriptor in the first 1 KiB (FLASH1)
+so a short read finds it; that is our layout, not a PX4 limit.
 
 The filename uses the numeric ship version from Inc/version.h
 (MAJOR.MINOR[.PATCH]), not the -ark artifact suffix and not the git hash

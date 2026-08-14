@@ -309,7 +309,7 @@ factory-image-f051: $(FACTORY_F051_PRODUCT)
 		--bootloader $(BL_IMAGE_F051) \
 		--app $(FACTORY_F051_BASENAME).bin \
 		--version-h $(MAIN_INC_DIR)/version.h \
-		--out-bin $(FACTORY_F051_BASENAME).factory.bin \
+		--out-bin $(FACTORY_F051_BASENAME).factory.img \
 		--out-hex $(FACTORY_F051_BASENAME).factory.hex \
 		--out-eeprom $(FACTORY_F051_BASENAME).eeprom.bin
 
@@ -320,7 +320,7 @@ factory-image-g431-can: $(FACTORY_G431_PRODUCT)
 		$(if $(wildcard $(BL_IMAGE_G431_CAN)),--bootloader $(BL_IMAGE_G431_CAN),--allow-empty-bootloader) \
 		--app $(FACTORY_G431_BASENAME).bin \
 		--version-h $(MAIN_INC_DIR)/version.h \
-		--out-bin $(FACTORY_G431_BASENAME).factory.bin \
+		--out-bin $(FACTORY_G431_BASENAME).factory.img \
 		--out-hex $(FACTORY_G431_BASENAME).factory.hex \
 		--out-eeprom $(FACTORY_G431_BASENAME).eeprom.bin
 

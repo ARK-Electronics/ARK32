@@ -27,13 +27,16 @@ SECTIONS
     KEEP(*(.isr_vector)) /* Startup code */
     . = ALIGN(4);
     KEEP(*(.app_signature))
-    . = ALIGN(4);
+    /* Trailing ALIGN so 0x00 pad to the 8-byte APDescriptor lives in this
+       section. A leading ALIGN on the next section would be a gap: objcopy
+       -O binary fills it with 0x00, -O ihex omits it, and the AM32 CRC
+       (crc2 starts at the end of .app_signature) would fail on a .hex flash. */
+    . = ALIGN(8);
   } > FLASH1
 
-  /* PX4 SD-card update scans the first 1 KiB for APDesc00 (8-byte aligned). */
+  /* APDesc00, 8-byte aligned. PX4 scans a *.bin to EOF for this block. */
   .px4_app_descriptor :
   {
-    . = ALIGN(8);
     KEEP(*(.px4_app_descriptor))
     . = ALIGN(4);
   } > FLASH1
@@ -119,6 +122,9 @@ SECTIONS
   {
         . = ALIGN(4);
         BYTE(0x00);
+        /* Trailing ALIGN: pad after the odd BYTE stays in this section so
+           objcopy -O ihex covers the same addresses as -O binary. */
+        . = ALIGN(4);
   } > FLASH
 
   /* Bootloader image embedded for the app-side bootloader update (Src/bl_image.S).
@@ -128,7 +134,6 @@ SECTIONS
      binary does not pad tens of KiB of unused flash into the app image. */
   .bl_image :
   {
-    . = ALIGN(4);
     _bl_image_start = .;
     KEEP (*(.bl_image))
     . = ALIGN(4);

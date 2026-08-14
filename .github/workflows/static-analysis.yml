@@ -112,10 +112,10 @@ jobs:
         with:
           name: ark-factory-images
           path: |
-            obj/ARK32_ARK_4IN1_F051_*.factory.bin
+            obj/ARK32_ARK_4IN1_F051_*.factory.img
             obj/ARK32_ARK_4IN1_F051_*.factory.hex
             obj/ARK32_ARK_4IN1_F051_*.eeprom.bin
-            obj/ARK32_ARK_G431_CAN_*.factory.bin
+            obj/ARK32_ARK_G431_CAN_*.factory.img
             obj/ARK32_ARK_G431_CAN_*.factory.hex
             obj/ARK32_ARK_G431_CAN_*.eeprom.bin
             obj/*.uavcan.bin

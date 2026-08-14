@@ -26,19 +26,19 @@ Artifacts under `obj/`:
 | File | Contents |
 |------|----------|
 | `ARK32_ARK_4IN1_F051_<ver>.bin` / `.hex` | Application only (existing make target) |
-| `ARK32_ARK_4IN1_F051_<ver>.factory.bin` | **Full 32 KiB flash** — BL + app + EEPROM |
-| `ARK32_ARK_G431_CAN_<ver>.factory.bin` | **Full 128 KiB flash** — BL region + app + EEPROM |
+| `ARK32_ARK_4IN1_F051_<ver>.factory.img` | **Full 32 KiB flash** — BL + app + EEPROM |
+| `ARK32_ARK_G431_CAN_<ver>.factory.img` | **Full 128 KiB flash** — BL region + app + EEPROM |
 | `*.factory.hex` / `*.eeprom.bin` | HEX of full image / EEPROM page alone |
 
-Flash the `.factory.bin` (or `.factory.hex`) at **`0x08000000`**. No configurator step is required for stock defaults.
+Flash the `.factory.img` (or `.factory.hex`) at **`0x08000000`**. No configurator step is required for stock defaults. The extension is **`.img` on purpose**: PX4's SD-card updater globs every `*.bin` on the card root and scans the **whole file** for an APDescriptor, so a G431 factory image named `.bin` would be copied to `/ufw/71.bin` and written at the app base (off the end of flash).
 
 Example OpenOCD (ST-Link + STM32F0 for 4IN1):
 
 ```bash
 openocd -f interface/stlink.cfg -f target/stm32f0x.cfg \
   -c "init; halt; flash erase_sector 0 0 last; \
-      flash write_bank 0 obj/ARK32_ARK_4IN1_F051_3.0.3.factory.bin 0; \
-      flash verify_bank 0 obj/ARK32_ARK_4IN1_F051_3.0.3.factory.bin 0; \
+      flash write_bank 0 obj/ARK32_ARK_4IN1_F051_3.0.3.factory.img 0; \
+      flash verify_bank 0 obj/ARK32_ARK_4IN1_F051_3.0.3.factory.img 0; \
       reset run; exit"
 ```
 
@@ -133,9 +133,9 @@ make factory-image
 
 ## Field updates vs factory image
 
-- **Production / blank chip:** flash the `.factory.bin` once (includes BL + app + EEPROM for both products).
+- **Production / blank chip:** flash the `.factory.img` (or `.factory.hex`) once (includes BL + app + EEPROM for both products). Never put this file on a PX4 SD card.
 - **In-field app update:** flash the normal app `.bin` / `.hex` at the app base (F051 `0x08001000`, G431 CAN `0x08004000`). EEPROM is left alone. Both products embed the bootloader and rewrite the on-chip BL if it differs (`EMBED_BOOTLOADER`, see [Bootloaders/README.md](../Bootloaders/README.md)). G431 CAN always embeds (including HWCI), so a manual or PX4 app flash still lands the 0.71 BL.
-- **PX4 SD-card update (ARK G431 CAN):** `make ARK_G431_CAN` (or `make factory-image-g431-can`) also writes a PX4-signed copy named `<board_id>-<MAJOR.MINOR.PATCH>.uavcan.bin` under `obj/` — e.g. `71-3.0.2.uavcan.bin`. Copy that file to the **root of the flight-controller SD card** and reboot. PX4 reads the APDescriptor, stages `/ufw/71.bin`, and flashes every ESC whose GetNodeInfo hardware version is 0.71. See [README.md](../README.md#bootloader).
+- **PX4 SD-card update (ARK G431 CAN):** `make ARK_G431_CAN` (or `make factory-image-g431-can`) also writes a PX4-signed copy named `<board_id>-<MAJOR.MINOR.PATCH>.uavcan.bin` under `obj/` — e.g. `71-3.0.2.uavcan.bin`. Copy **only** that file to the **root of the flight-controller SD card** and reboot. PX4 reads the APDescriptor (it scans the whole `*.bin`, not just the first 1 KiB), stages `/ufw/71.bin`, and flashes every ESC whose GetNodeInfo hardware version is 0.71. See [README.md](../README.md#bootloader).
 
 ## Script
 
@@ -149,4 +149,4 @@ Every PR/push runs **`factory-image`** in [`.github/workflows/static-analysis.ym
 make factory-image-check   # build + scripts/check-factory-image-ark.sh
 ```
 
-The job fails if the flash layout is wrong, the EEPROM page drifts from the product defaults JSON (F051 or G431), or the G431 PX4 SD-card `.uavcan.bin` is missing / unsigned. Artifacts (`*.factory.bin` / `.hex` / `.eeprom.bin` / `*.uavcan.bin`) are uploaded as `ark-factory-images`.
+The job fails if the flash layout is wrong, the EEPROM page drifts from the product defaults JSON (F051 or G431), the G431 PX4 SD-card `.uavcan.bin` is missing / unsigned, or the app `.hex` does not cover every byte of the app `.bin`. Artifacts (`*.factory.img` / `.factory.hex` / `.eeprom.bin` / `*.uavcan.bin`) are uploaded as `ark-factory-images`.
