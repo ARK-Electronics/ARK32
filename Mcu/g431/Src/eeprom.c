@@ -33,10 +33,14 @@ void save_flash_nolib(uint8_t *data, int length, uint32_t add)
 		FLASH->KEYR = FLASH_FKEY2;
 	}
 
-	// erase page if address even divisable by 1024
+	// erase page if address is page-aligned (2 KiB). Assign PER rather
+	// than OR so a leftover PNB from the previous page is not sticky —
+	// page N then page N+1 would otherwise erase page (N | N+1).
 	if ((add % 2048) == 0) {
-		FLASH->CR |= FLASH_CR_PER;
-		FLASH->CR |= (add / 2048) << 3;
+		FLASH->SR = FLASH_SR_PROGERR | FLASH_SR_WRPERR | FLASH_SR_PGAERR | FLASH_SR_SIZERR | FLASH_SR_PGSERR | FLASH_SR_MISERR |
+			    FLASH_SR_FASTERR | FLASH_SR_OPERR | FLASH_SR_EOP;
+		FLASH->CR = FLASH_CR_PER;
+		FLASH->CR |= ((add / 2048) << FLASH_CR_PNB_Pos) & FLASH_CR_PNB;
 		FLASH->CR |= FLASH_CR_STRT;
 		while ((FLASH->SR & FLASH_SR_BSY) != 0) {
 			/*  add time-out */

@@ -261,10 +261,10 @@ ARK ESCs use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootl
 | | |
 |--|--|
 | Source / releases | [ARK-Electronics/ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) · [releases](https://github.com/ARK-Electronics/ARK32-bootloader/releases) |
-| Committed F051 image for app embed | [`Bootloaders/`](Bootloaders/) (see [Bootloaders/README.md](Bootloaders/README.md)) |
-| App-side BL update | F051 builds embed the image by default (including `HWCI_PERF=1`) and rewrite the on-chip BL if it differs (`Src/bootloader_update.c`). Success soft-resets; the next boot plays **`playBootloaderUpdatedTone`** (two rising beeps) then the normal startup tune. Strip with `EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`. |
+| Committed images for app embed | [`Bootloaders/`](Bootloaders/) (see [Bootloaders/README.md](Bootloaders/README.md)) |
+| App-side BL update | F051 release and **every G431 CAN** build embed the image and rewrite the on-chip BL if it differs (`Src/bootloader_update.c`). Success soft-resets; the next boot plays **`playBootloaderUpdatedTone`** (two rising beeps) then the normal startup tune. Strip with `EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`. F051 `HWCI_PERF=1` omits the blob (flash is tight); G431 CAN keeps it. |
 
-To put ARK32 on a **blank production ESC**, flash the full-chip factory image (`make factory-image` → `obj/*factory.bin` at `0x08000000`) so bootloader, app, and EEPROM defaults land in one step — see [factory/README.md](factory/README.md). For development or field app-only updates, flash a matching **ARK32-bootloader** with ST-LINK (if needed), then the application `.bin`/`.hex` at `0x08001000` (or use a configurator / one-wire serial). Later app flashes can also carry and apply a newer BL via the embed path above.
+To put ARK32 on a **blank production ESC**, flash the full-chip factory image (`make factory-image` → `obj/*factory.bin` at `0x08000000`) so bootloader, app, and EEPROM defaults land in one step — see [factory/README.md](factory/README.md). For development or field app-only updates, flash the application `.bin`/`.hex` at the app base (F051 `0x08001000`, G431 CAN `0x08004000`). The first boot applies a newer BL via the embed path above if the on-chip image differs.
 
 ### PX4 SD-card update (ARK 12S CAN)
 

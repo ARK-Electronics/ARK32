@@ -129,6 +129,15 @@ if len(app) > APP_REGION:
 if img[APP_OFFSET : APP_OFFSET + len(app)] != app:
     errors.append("app region does not match release .bin")
 
+# G431 CAN (and any product that embeds): the app .bin must carry the
+# committed bootloader so first boot can rewrite the on-chip BL region.
+if bl and fmap["bl_region_size"] >= 16 * 1024:
+    if app.find(bl) < 0:
+        errors.append(
+            "app .bin does not contain the committed bootloader image "
+            "(EMBED_BOOTLOADER missing or wrong BL_IMAGE)"
+        )
+
 ee = img[EEPROM_OFFSET : EEPROM_OFFSET + EEPROM_PAGE]
 if len(ee) != EEPROM_PAGE:
     errors.append("eeprom page truncated")
