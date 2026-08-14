@@ -2,8 +2,8 @@
 
 Prebuilt **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** binaries, committed so:
 
-1. **F051 (ARK 4IN1):** the app can embed one and rewrite the bootloader region at boot (see `Src/bootloader_update.c`).
-2. **G431 CAN (ARK 12S CAN):** `make factory-image-g431-can` can assemble a full-flash production image (BL + app + EEPROM) without a separate BL flash step.
+1. **F051 (ARK 4IN1):** the app embeds one and rewrites the bootloader region at boot (see `Src/bootloader_update.c`).
+2. **G431 CAN (ARK 12S CAN):** the app always embeds one (including `HWCI_PERF=1`) and rewrites the on-chip BL if it differs — so a manual or PX4 app-only flash still lands UAVCAN hw 0.71. `make factory-image-g431-can` also places the same image at `0x08000000` for blank-chip programming.
 
 [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) is ARK’s fork of [upstream AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader). For ARK hardware, always take images from **ARK32-bootloader**, not from the upstream bootloader repo alone.
 
@@ -27,23 +27,25 @@ These files are release (or branch) artifacts as flat binaries. They are stored 
 
 ### F051 app-side embed
 
-`Src/bl_image.S` pulls the F051 file in with `.incbin` and pads it to the bootloader region size with `0xFF`. The linker script places it in a dedicated `.bl_image` section and asserts that it is exactly the region size and that it does not live inside the region it will erase.
+`Src/bl_image.S` pulls the file in with `.incbin` and pads it to the bootloader region size with `0xFF`. The linker script places it in a dedicated `.bl_image` section and asserts that it is exactly the region size and that it does not live inside the region it will erase.
 
-The image is linked for **F051 release builds by default**. `HWCI_PERF=1`
-does **not** embed it (flash goes to the perf struct; the HWCI rig already has
-a bootloader on-chip). To strip it on a release build:
+**F051** embeds on release builds by default. `HWCI_PERF=1` does **not** embed it (flash goes to the perf struct; the HWCI rig already has a bootloader on-chip).
+
+**G431 CAN** always embeds (16 KiB region, including `HWCI_PERF=1`). First app boot rewrites `0x08000000..0x08003FFF` if the on-chip BL differs.
+
+To strip the embed:
 
 ```bash
 make ARK_4IN1_F051 EMBED_BOOTLOADER=0
-make ARK_4IN1_F051 NO_EMBED_BL=1
+make ARK_G431_CAN  NO_EMBED_BL=1
 ```
 
 Either kill switch disables embed (`EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`).
-`HWCI_PERF=1` also disables embed automatically.
+`HWCI_PERF=1` also disables embed automatically on F051 only.
 
 ### G431 CAN factory image
 
-`BL_IMAGE_G431_CAN` in the `Makefile` points at `AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin`. That file is **not** app-side embedded yet (no G431 `.bl_image` path); it is only consumed by:
+`BL_IMAGE_G431_CAN` in the `Makefile` points at `AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin`. The same file is app-side embedded (above) and consumed by:
 
 ```bash
 make factory-image-g431-can
@@ -94,7 +96,7 @@ App-side BL rewrite erases flash pages at `0x08000000` (reset vectors and the on
 
 2. Point `BL_IMAGE_G431_CAN` in the `Makefile` at the new path if the filename changed.
 3. Update the table above with the source commit / release tag.
-4. Rebuild factory image: `make factory-image-g431-can` (or `factory-image-check`).
+4. Rebuild the app (and factory image): `make ARK_G431_CAN` / `make factory-image-g431-can`. The `.bin` is an explicit prerequisite of the G431 CAN `.elf`.
 
 **Do not embed the generic `…_PB4` image on ARK 4IN1** if the chip has ARK4IN1 BL: first boot would rewrite PA15 nSLEEP-off back to stock.
 
@@ -111,4 +113,11 @@ cmp -n "$(wc -c < Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin)" \
   /tmp/embedded.bin Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
 ```
 
-The compare is limited to the source file's length because `.bl_image` is padded out to the full 4096-byte region with `0xFF`.
+The compare is limited to the source file's length because `.bl_image` is padded out to the full region (F051 4096, G431 CAN 16384) with `0xFF`. For G431:
+
+```sh
+arm-none-eabi-objcopy -O binary --only-section=.bl_image \
+  obj/AM32_ARK_G431_CAN_*.elf /tmp/embedded.bin
+cmp -n "$(wc -c < Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin)" \
+  /tmp/embedded.bin Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin
+```

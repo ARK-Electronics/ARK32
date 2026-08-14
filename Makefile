@@ -123,12 +123,14 @@ SRC_COMMON_BASE := $(filter-out $(SRC_OPTIONAL_BRUSHED) $(SRC_OPTIONAL_HWCI) $(S
 # with .incbin (Src/bl_image.S) rather than a generated C array, so the linked
 # bytes stay verifiable against the ARK32-bootloader release they came from
 # (see Bootloaders/README.md). .S, not .[cs]: the wildcard above skips it.
-# F051 release embeds by default. HWCI_PERF=1 does not embed (4 KiB goes to the
-# perf struct / feature headroom; the rig already has a BL on-chip). Kill switches:
+# F051 release embeds by default. HWCI_PERF=1 does not embed on F051 (4 KiB
+# goes to the perf struct; the rig already has a BL on-chip).
+# G431 CAN always embeds (128 KiB flash; needed so a manual/PX4 app flash
+# still auto-updates the on-chip BL to UAVCAN hw 0.71). Kill switches:
 #   make ARK_4IN1_F051 EMBED_BOOTLOADER=0
-#   make ARK_4IN1_F051 NO_EMBED_BL=1
+#   make ARK_G431_CAN  NO_EMBED_BL=1
 # Bumping the bootloader means dropping the new .bin (from the release .hex)
-# and editing this one line if the name changes.
+# and editing the matching BL_IMAGE_* line if the name changes.
 SRC_OPTIONAL_BL_IMAGE := $(MAIN_SRC_DIR)/bl_image.S
 # ARK 4IN1: PB4 signal + PA15 nSLEEP low in BL (ARK32-bootloader #4).
 # Do not use the generic …_PB4 blob here — first boot would rewrite the
@@ -136,8 +138,11 @@ SRC_OPTIONAL_BL_IMAGE := $(MAIN_SRC_DIR)/bl_image.S
 BL_IMAGE_F051 := Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
 # 0x08000000..ORIGIN(FLASH_VECTAB); the F051 linker script asserts the match.
 BL_REGION_SIZE_F051 := 4096
-# Default on for release; set EMBED_BOOTLOADER=0 or NO_EMBED_BL=1 to strip.
-# Also stripped automatically when HWCI_PERF=1 (see xEMBED_BL below).
+# ARK 12S CAN: 16 KiB region, app at 0x08004000 (ldscript_CAN.ld).
+BL_IMAGE_G431_CAN ?= Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin
+BL_REGION_SIZE_G431_CAN := 16384
+# Default on; set EMBED_BOOTLOADER=0 or NO_EMBED_BL=1 to strip.
+# F051 is also stripped automatically when HWCI_PERF=1 (see xEMBED_* below).
 EMBED_BOOTLOADER ?= 1
 
 # configure some directories that are relative to wherever ROOT_DIR is located
@@ -195,10 +200,12 @@ $(eval xLDSCRIPT := $$(if $$(call has_can_suffix,$$(2)),$(LDSCRIPT_CAN_$(1)),$(L
 $(eval xCFLAGS := $$(if $$(call has_can_suffix,$$(2)),$(CFLAGS_CAN_$(1))))
 $(eval xSRC := $$(if $$(call has_can_suffix,$$(2)),$(SRC_CAN_$(1))))
 
-# Embed the bootloader image on F051 release builds by default. Strip when
-# EMBED_BOOTLOADER=0, NO_EMBED_BL=1, or HWCI_PERF=1 (HWCI needs flash for the
-# perf instrumentation; field BL rewrite is a release feature).
-$(eval xEMBED_BL := $(if $(filter F051,$(1)),$(if $(or $(filter 0,$(EMBED_BOOTLOADER)),$(filter 1,$(NO_EMBED_BL)),$(filter 1,$(HWCI_PERF))),,1)))
+# Embed the bootloader image:
+#   F051     — release default; strip on kill switch or HWCI_PERF=1
+#   G431 CAN — always (including HWCI_PERF); strip only on kill switch
+$(eval xEMBED_F051 := $(if $(filter F051,$(1)),$(if $(or $(filter 0,$(EMBED_BOOTLOADER)),$(filter 1,$(NO_EMBED_BL)),$(filter 1,$(HWCI_PERF))),,1)))
+$(eval xEMBED_G431 := $(if $(and $(filter G431,$(1)),$(call has_can_suffix,$(2))),$(if $(or $(filter 0,$(EMBED_BOOTLOADER)),$(filter 1,$(NO_EMBED_BL))),,1)))
+$(eval xEMBED_BL := $(or $(xEMBED_F051),$(xEMBED_G431)))
 
 # Per-target app sources: drop brushed/hwci unless the product asks for them
 $(eval SRC_APP_$(2) := $(SRC_COMMON_BASE)$(if $(call has_brushed_suffix,$(2)), $(SRC_OPTIONAL_BRUSHED))$(if $(filter 1,$(HWCI_PERF)), $(SRC_OPTIONAL_HWCI))$(if $(xEMBED_BL), $(SRC_OPTIONAL_BL_IMAGE))$(if $(filter G431,$(1)), $(SRC_OPTIONAL_DEBUG_UART)))
@@ -217,7 +224,8 @@ $(eval xLDFLAGS_COMMON := $(if $(LDFLAGS_COMMON_$(1)),$(LDFLAGS_COMMON_$(1)),$(L
 # paths for *_CAN targets, so assigning it on the command line silently
 # drops them and the DroneCAN headers stop resolving.
 CFLAGS_$(2) = -DAM32_MCU=\"$(MCU)\" $(MCU_$(1)) -D$(2) $(CFLAGS_$(1)) $(xCFLAGS_COMMON) $(xCFLAGS) $(EXTRA_CFLAGS) \
-	$(if $(xEMBED_BL),-DEMBED_BOOTLOADER -DBL_IMAGE_FILE=\"$(BL_IMAGE_F051)\" -DBL_REGION_SIZE=$(BL_REGION_SIZE_F051))
+	$(if $(xEMBED_F051),-DEMBED_BOOTLOADER -DBL_IMAGE_FILE=\"$(BL_IMAGE_F051)\" -DBL_REGION_SIZE=$(BL_REGION_SIZE_F051)) \
+	$(if $(xEMBED_G431),-DEMBED_BOOTLOADER -DBL_IMAGE_FILE=\"$(BL_IMAGE_G431_CAN)\" -DBL_REGION_SIZE=$(BL_REGION_SIZE_G431_CAN))
 LDFLAGS_$(2) = $(xLDFLAGS_COMMON) $(LDFLAGS_$(1)) $(if $(xLDSCRIPT),-T$(xLDSCRIPT))
 
 -include $$($(2)_BASENAME).d
@@ -226,7 +234,7 @@ LDFLAGS_$(2) = $(xLDFLAGS_COMMON) $(LDFLAGS_$(1)) $(if $(xLDSCRIPT),-T$(xLDSCRIP
 # The bootloader .bin is listed explicitly: .incbin happens in the assembler, so
 # it never shows up in the -MMD depfile and swapping the image would otherwise
 # not rebuild anything.
-$$($(2)_BASENAME).elf: $(if $(NATIVE_$(1)),,arm_sdk_check) $$(SRC_APP_$(2)) $$(SRC_$(1)) $(xSRC) $(if $(xEMBED_BL),$(BL_IMAGE_F051))
+$$($(2)_BASENAME).elf: $(if $(NATIVE_$(1)),,arm_sdk_check) $$(SRC_APP_$(2)) $$(SRC_$(1)) $(xSRC) $(if $(xEMBED_F051),$(BL_IMAGE_F051)) $(if $(xEMBED_G431),$(BL_IMAGE_G431_CAN))
 	@$(ECHO) Compiling $$(notdir $$@)
 	$(QUIET)$(MKDIR) -p $(OBJ)
 	$(QUIET)$(xCC) $$(CFLAGS_$(2)) $$(LDFLAGS_$(2)) -MMD -MP -MF $$(@:.elf=.d) -o $$(@) $$(SRC_APP_$(2)) $$(SRC_$(1)) $(xSRC) $(LDLIBS_$(1))
@@ -293,11 +301,6 @@ FACTORY_F051_DEFAULTS := factory/ARK_4IN1_F051_eeprom_defaults.json
 FACTORY_G431_PRODUCT := ARK_G431_CAN
 FACTORY_G431_BASENAME := $(OBJ)/$(IDENTIFIER)_$(FACTORY_G431_PRODUCT)_$(FIRMWARE_VERSION)
 FACTORY_G431_DEFAULTS := factory/ARK_G431_CAN_eeprom_defaults.json
-# G431 CAN 16 KiB bootloader region (ARK 12S CAN ESC). Committed under
-# Bootloaders/ from ARK32-bootloader AM32_G431_BOOTLOADER_ARKG4_CAN. When
-# missing, factory-image-g431-can can still 0xFF-pad via --allow-empty-bootloader
-# if you override BL_IMAGE_G431_CAN to empty.
-BL_IMAGE_G431_CAN ?= Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin
 
 factory-image-f051: $(FACTORY_F051_PRODUCT)
 	$(QUIET)$(ECHO) "Building factory full-flash image for $(FACTORY_F051_PRODUCT)"

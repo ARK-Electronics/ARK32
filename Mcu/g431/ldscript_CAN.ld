@@ -121,6 +121,20 @@ SECTIONS
         BYTE(0x00);
   } > FLASH
 
+  /* Bootloader image embedded for the app-side bootloader update (Src/bl_image.S).
+     Empty unless the build defines EMBED_BOOTLOADER. Own section so the 16 KiB
+     blob stays attributable in the map and the size asserts have symbols.
+     Packed after code, not at the end of the FLASH region, so objcopy -O
+     binary does not pad tens of KiB of unused flash into the app image. */
+  .bl_image :
+  {
+    . = ALIGN(4);
+    _bl_image_start = .;
+    KEEP (*(.bl_image))
+    . = ALIGN(4);
+    _bl_image_end = .;
+  } > FLASH
+
   /* The file name */
   .file_name :
   {
@@ -197,3 +211,17 @@ SECTIONS
 
   .ARM.attributes 0 : { *(.ARM.attributes) }
 }
+
+/* The embedded bootloader image is written over the bootloader region, which
+   runs from the start of flash up to the app at ORIGIN(FLASH1). Size 0 is the
+   non-embedding build. A future MEMORY edit that puts the blob inside the
+   region it erases, or changes the region size, must fail the link. */
+_bl_region_start = 0x08000000;
+_bl_region_size  = ORIGIN(FLASH1) - _bl_region_start;
+
+ASSERT(_bl_image_end - _bl_image_start == 0 ||
+       _bl_image_end - _bl_image_start == _bl_region_size,
+       "embedded bootloader image must be exactly the size of the bootloader region")
+
+ASSERT(_bl_image_start >= ORIGIN(FLASH1),
+       "embedded bootloader image must not live inside the region it erases")

@@ -92,15 +92,15 @@ make ARK_4IN1_F051 HWCI_PERF=1
 Files: `Inc/hwci_perf.h`, `Src/hwci_perf.c`, three hooks in `Src/main.c`
 (`tenKhzRoutine` enter/exit, `while(1)` top), one `Makefile` flag.
 
-## Embedded bootloader (F051)
+## Embedded bootloader
 
-F051 **release** builds embed the ARK32-bootloader image by default. At boot
-the app compares the on-chip BL region to the embedded image and rewrites it
-if they differ (`Src/bootloader_update.c`).
+**F051 release** and **every G431 CAN** build (including `HWCI_PERF=1`) embed
+the ARK32-bootloader image. At boot the app compares the on-chip BL region to
+the embedded image and rewrites it if they differ (`Src/bootloader_update.c`).
 
-`HWCI_PERF=1` does **not** embed the BL (flash is reserved for the perf
-struct; the rig already has a bootloader). First-boot BL rewrite only applies
-to release images that carry `.bl_image`.
+F051 `HWCI_PERF=1` does **not** embed the BL (flash is reserved for the perf
+struct; the rig already has a bootloader). G431 CAN always embeds — a 16 KiB
+blob fits, and a bench/PX4 app flash must still be able to refresh the BL.
 
 **After a BL version bump** on a **release** image (new `.bin` in
 `Bootloaders/`, or a board still on an older BL):
@@ -111,11 +111,11 @@ to release images that carry `.bl_image`.
    or re-run the profile is fine once the on-chip BL matches.
 3. Later boots are a no-op `memcmp` (no rewrite thrash).
 
-To strip the embed on a release build:
+To strip the embed:
 
 ```
 make ARK_4IN1_F051 EMBED_BOOTLOADER=0
-# or: NO_EMBED_BL=1
+make ARK_G431_CAN  NO_EMBED_BL=1
 ```
 
 Details: [Bootloaders/README.md](../Bootloaders/README.md).
@@ -394,10 +394,11 @@ hwci/tests/                        75 offline tests (sim, DWARF layout, fail-clo
   magic, commands zero throttle, resets the MCU, and waits for the app —
   see `_ensure_app_alive` in `hwci/runner.py`. OpenOCD flash also force-starts
   the app via the vector table so a stuck BL does not block settings trials.
-* **App-side BL update** (default on F051, including `HWCI_PERF=1`): if the
-  embedded image does not match the on-chip BL, the first boot after flash may
-  rewrite the BL region, soft-reset, and chirp before the normal startup tune.
-  Re-run once matched; see [Embedded bootloader](#embedded-bootloader-f051).
+* **App-side BL update** (F051 release and every G431 CAN build, including
+  G431 `HWCI_PERF=1`): if the embedded image does not match the on-chip BL,
+  the first boot after flash may rewrite the BL region, soft-reset, and chirp
+  before the normal startup tune. Re-run once matched; see
+  [Embedded bootloader](#embedded-bootloader).
 * `HWCI_PERF` is validated for the STM32F0 (ARK 4IN1). The timestamp macro uses
   the shared `get_timer_us16()` helper, so STM32/GigaDevice/Artery targets
   compile with `HWCI_PERF=1`; NXP and WCH are `#error`-gated (no usable

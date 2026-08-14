@@ -134,7 +134,7 @@ make factory-image
 ## Field updates vs factory image
 
 - **Production / blank chip:** flash the `.factory.bin` once (includes BL + app + EEPROM for both products).
-- **In-field app update:** flash the normal app `.bin` / `.hex` at the app base (F051 `0x08001000`, G431 CAN `0x08004000`). EEPROM is left alone. F051 builds also embed the bootloader for optional app-side BL refresh (`EMBED_BOOTLOADER`, see [Bootloaders/README.md](../Bootloaders/README.md)). G431 currently uses the committed BL only for the factory full-flash image (no app-side BL rewrite path yet).
+- **In-field app update:** flash the normal app `.bin` / `.hex` at the app base (F051 `0x08001000`, G431 CAN `0x08004000`). EEPROM is left alone. Both products embed the bootloader and rewrite the on-chip BL if it differs (`EMBED_BOOTLOADER`, see [Bootloaders/README.md](../Bootloaders/README.md)). G431 CAN always embeds (including HWCI), so a manual or PX4 app flash still lands the 0.71 BL.
 - **PX4 SD-card update (ARK G431 CAN):** `make ARK_G431_CAN` (or `make factory-image-g431-can`) also writes a PX4-signed copy named `<board_id>-<MAJOR.MINOR.PATCH>.uavcan.bin` under `obj/` — e.g. `71-3.0.2.uavcan.bin`. Copy that file to the **root of the flight-controller SD card** and reboot. PX4 reads the APDescriptor, stages `/ufw/71.bin`, and flashes every ESC whose GetNodeInfo hardware version is 0.71. See [README.md](../README.md#bootloader).
 
 ## Script
