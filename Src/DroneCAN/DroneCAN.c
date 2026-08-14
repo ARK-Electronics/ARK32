@@ -92,6 +92,8 @@ const struct {
   CRCs / image_size / git_hash are filled by scripts/px4_uavcan_image.py
   *before* set_app_signature.py so the AM32 bootloader CRC stays valid.
   GetNodeInfo reads image_crc back so PX4 does not re-flash every boot.
+  volatile: those fields are 0 at compile time; without it LTO folds
+  GetNodeInfo into literal zeros and PX4 sees image_crc == 0 forever.
  */
 #	define PX4_APDESC_SIGNATURE_0 0x40
 #	define PX4_APDESC_SIGNATURE_1 0xa2
@@ -121,7 +123,7 @@ struct px4_app_descriptor {
 
 _Static_assert(sizeof(struct px4_app_descriptor) == 36, "PX4 APDescriptor must be 36 bytes");
 
-const struct px4_app_descriptor px4_app_descriptor __attribute__((used, aligned(8))) AM32_FLASH_SECTION(".px4_app_descriptor") = {
+const volatile struct px4_app_descriptor px4_app_descriptor __attribute__((used, aligned(8))) AM32_FLASH_SECTION(".px4_app_descriptor") = {
 	.signature = {PX4_APDESC_SIGNATURE_0, PX4_APDESC_SIGNATURE_1, PX4_APDESC_SIGNATURE_2, PX4_APDESC_SIGNATURE_3,
 		      PX4_APDESC_SIGNATURE_4, PX4_APDESC_SIGNATURE_5, PX4_APDESC_SIGNATURE_6, PX4_APDESC_SIGNATURE_7},
 	.image_crc = 0,
