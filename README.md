@@ -279,10 +279,21 @@ obj/<board_id>-<MAJOR.MINOR[.PATCH]>.<githash>.uavcan.bin
 `board_id` is `(hw_major << 8) | hw_minor`. This target reports hardware version **0.71**, so `board_id` is **71**. The rest of the name is the numeric ship version (no `-ark`) and the 8-digit git hash from the APDescriptor, e.g. `71-3.0.2.59efc137.uavcan.bin`.
 
 1. Copy **only** that `.uavcan.bin` to the **root** of the PX4 SD card (or to `ufw_staging/`). Do not copy `*.factory.img`, `*.factory.hex`, or any other `*.bin`.
-2. Reboot the flight controller. PX4 moves it to `/ufw/71.bin` and begins a DroneCAN firmware update on every matching ESC.
-3. Leave the motor disarmed; the ESC must be idle for `BeginFirmwareUpdate` to be accepted.
+2. In QGC **Actuators**, unassign this ESC (clear it as a motor). An assigned motor makes PX4 publish `esc.RawCommand` and that blocks the update — see below.
+3. Reboot the flight controller. PX4 copies the file to `/ufw/71.bin`. That is **staging**, not the flash.
+4. Keep the vehicle **disarmed**. Wait until the ESC is `OPERATIONAL` and GetNodeInfo shows the new `image_crc` / git hash, then re-assign the motor.
 
 The same bytes are in `obj/AM32_ARK_G431_CAN_<ver>.bin`. The `.uavcan.bin` name is what PX4's firmware database records; the APDescriptor inside is what makes PX4 accept the file. The factory full-flash image is a different artifact (`.factory.img`) and must not go on the SD card.
+
+**How PX4 actually updates this ESC**
+
+- **Staging is not flashing.** `/ufw/71.bin` only means PX4 ingested a signed image for board_id 71. The ESC does not change until it accepts `BeginFirmwareUpdate` and the bootloader writes the app.
+- **CRC match skips the node.** PX4 compares the file's APDescriptor `image_crc` to GetNodeInfo. It sends `BeginFirmwareUpdate` only if the node's CRC is 0, the reported software version is 0.0, or the CRCs differ. Same CRC → file sits in `/ufw/` and nothing is written.
+- **The bootloader does not scan the SD card.** It never starts an update on its own. It only flashes when it receives `BeginFirmwareUpdate`, or when the app accepted that request and left an RTC flag before reset.
+- **An assigned motor boots the app first.** The bootloader stays in `MAINTENANCE` until it sees a valid signal. PX4 `esc.RawCommand` on this ESC's index (the usual result of mapping it as a motor in Actuators) sets that signal and the bootloader jumps to the app. PX4's updater typically runs *after* actuators are already publishing, so the node it talks to is the app, not the bootloader. The bootloader will not "catch" a pending `/ufw/71.bin` on power-up while that motor is assigned.
+- **The app refuses the request unless idle.** `BeginFirmwareUpdate` is dropped with no reply when the motor is running and `newinput != 0` (`safe_to_write_settings()` in `Src/DroneCAN/DroneCAN.c`). PX4 times out and retries; the flash never starts. Unassign the ESC (or otherwise stop `RawCommand`) and leave the vehicle disarmed so throttle is zero.
+
+Field sequence that works: copy the `.uavcan.bin` → unassign the ESC in Actuators → reboot the FC → wait for `OPERATIONAL` + new CRC → re-assign.
 
 ## EEPROM settings
 
