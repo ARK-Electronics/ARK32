@@ -397,7 +397,9 @@ hwci/tests/                        75 offline tests (sim, DWARF layout, fail-clo
 * **App-side BL update** (F051 release and every G431 CAN build, including
   G431 `HWCI_PERF=1`): if the embedded image does not match the on-chip BL,
   the first boot after flash may rewrite the BL region, soft-reset, and chirp
-  before the normal startup tune. Re-run once matched; see
+  before the normal startup tune. `_ensure_app_alive` polls for 3 s before
+  the first `reset_run` when the ELF carries `.bl_image`, so that reset
+  cannot land mid-erase. Re-run once matched; see
   [Embedded bootloader](#embedded-bootloader).
 * `HWCI_PERF` is validated for the STM32F0 (ARK 4IN1). The timestamp macro uses
   the shared `get_timer_us16()` helper, so STM32/GigaDevice/Artery targets

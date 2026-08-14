@@ -22,6 +22,11 @@ import struct
 import sys
 from pathlib import Path
 
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from px4_uavcan_image import DESC_LEN, find_descriptor, unpack_desc
+
 # STM32F051 flash map used by ARK_4IN1_F051 (Inc/targets.h, STM32F051K6TX_FLASH.ld)
 DEFAULT_FLASH_MAP = {
     "flash_size": 32 * 1024,
@@ -318,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="obj/ARK32_<PRODUCT>_*.bin application image")
     p.add_argument("--version-h", type=Path, default=Path("Inc/version.h"))
     p.add_argument("--out-bin", type=Path, required=True,
-                   help="full flash image (.bin)")
+                   help="full flash image (.factory.img — not .bin; PX4 globs every *.bin)")
     p.add_argument("--out-hex", type=Path, default=None,
                    help="optional Intel HEX of the full image")
     p.add_argument("--out-eeprom", type=Path, default=None,
@@ -360,6 +365,22 @@ def main(argv: list[str] | None = None) -> int:
 
     app = args.app.read_bytes()
     image = build_full_image(bootloader, app, eeprom_page, fmap)
+
+    # PX4 migrateFWFromRoot globs strstr(name, ".bin") on the SD-card root and
+    # scans the whole file (its "1 KiB" limit is a no-op). A factory image
+    # named *.bin that carries a live APDescriptor is copied to /ufw/<id>.bin
+    # and flashed at the *app* base — 128 KiB off the end of G431 flash.
+    if args.out_bin.name.endswith(".bin"):
+        off = find_descriptor(image)
+        if off >= 0:
+            d = unpack_desc(image[off : off + DESC_LEN])
+            if d["image_crc"] != 0:
+                raise FactoryImageError(
+                    f"{args.out_bin}: PX4 will ingest any SD-card-root *.bin "
+                    f"with a live APDescriptor (found at 0x{off:x}, "
+                    f"board_id={d['board_id']}). Write this image as "
+                    f".factory.img (or .factory.hex), never .bin."
+                )
 
     args.out_bin.parent.mkdir(parents=True, exist_ok=True)
     args.out_bin.write_bytes(image)

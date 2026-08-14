@@ -24,20 +24,20 @@ if [[ -z "$BL" && "$PRODUCT" == "ARK_4IN1_F051" ]]; then
 fi
 
 shopt -s nullglob
-factory_bins=("$OBJ"/ARK32_"${PRODUCT}"_*.factory.bin)
+factory_imgs=("$OBJ"/ARK32_"${PRODUCT}"_*.factory.img)
 # App .bin only: exclude factory, eeprom, and local experiment names (*nsleep*).
 app_bins=()
 for f in "$OBJ"/ARK32_"${PRODUCT}"_*.bin; do
 	base="$(basename "$f")"
 	case "$base" in
-		*.factory.bin|*.eeprom.bin|*factory*|*nsleep*|*hwci*) ;;
+		*.factory.bin|*.factory.img|*.eeprom.bin|*factory*|*nsleep*|*hwci*) ;;
 		ARK32_"${PRODUCT}"_*.bin) app_bins+=("$f") ;;
 	esac
 done
 
-if [[ ${#factory_bins[@]} -ne 1 ]]; then
-	echo "error: expected exactly one ${PRODUCT} factory.bin under $OBJ, found ${#factory_bins[@]}" >&2
-	printf '  %s\n' "${factory_bins[@]:-}" >&2
+if [[ ${#factory_imgs[@]} -ne 1 ]]; then
+	echo "error: expected exactly one ${PRODUCT} factory.img under $OBJ, found ${#factory_imgs[@]}" >&2
+	printf '  %s\n' "${factory_imgs[@]:-}" >&2
 	exit 1
 fi
 if [[ ${#app_bins[@]} -ne 1 ]]; then
@@ -54,10 +54,11 @@ if [[ -n "$BL" && ! -f "$BL" ]]; then
 	exit 1
 fi
 
-FACTORY="${factory_bins[0]}"
+FACTORY="${factory_imgs[0]}"
 APP="${app_bins[0]}"
+APP_HEX="${APP%.bin}.hex"
 
-python3 - "$FACTORY" "$APP" "$DEFAULTS_JSON" "${BL:-}" <<'PY'
+python3 - "$FACTORY" "$APP" "$DEFAULTS_JSON" "${BL:-}" "$APP_HEX" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -66,6 +67,7 @@ factory_path = Path(sys.argv[1])
 app_path = Path(sys.argv[2])
 defaults_path = Path(sys.argv[3])
 bl_path = Path(sys.argv[4]) if sys.argv[4] else None
+app_hex_path = Path(sys.argv[5]) if len(sys.argv) > 5 and sys.argv[5] else None
 
 defaults = json.loads(defaults_path.read_text(encoding="utf-8"))
 s = defaults["settings"]
@@ -124,6 +126,13 @@ else:
     if any(b != 0xFF for b in img[BL_OFFSET:APP_OFFSET]):
         errors.append("empty-bootloader mode: BL region is not all 0xFF")
 
+if factory_path.name.endswith(".bin"):
+    errors.append(
+        f"{factory_path.name} ends in .bin; PX4 migrateFWFromRoot globs every "
+        "SD-card-root *.bin and would flash this full-chip image at app base. "
+        "Use .factory.img"
+    )
+
 if len(app) > APP_REGION:
     errors.append(f"app {len(app)} exceeds app region {APP_REGION}")
 if img[APP_OFFSET : APP_OFFSET + len(app)] != app:
@@ -137,6 +146,71 @@ if bl and fmap["bl_region_size"] >= 16 * 1024:
             "app .bin does not contain the committed bootloader image "
             "(EMBED_BOOTLOADER missing or wrong BL_IMAGE)"
         )
+
+# objcopy -O binary fills section-gap ALIGN padding with 0x00; -O ihex omits
+# those addresses. A .hex flash onto erased flash then reads 0xFF in the holes
+# and the AM32 app_signature CRC fails. Gate on the signature itself (set only
+# on *_CAN_* bins) — that is what makes a gap dangerous — not flash-map size.
+APP_SIGNATURE_MAGIC = bytes.fromhex("e658f068a0e5ceaf")  # LE 0x68f058e6, 0xafcee5a0
+has_am32_sig = app.find(APP_SIGNATURE_MAGIC) >= 0
+
+def parse_ihex(text: str) -> dict[int, int]:
+    mem: dict[int, int] = {}
+    ela = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line[0] != ":":
+            continue
+        rec = bytes.fromhex(line[1:])
+        n = rec[0]
+        addr = (rec[1] << 8) | rec[2]
+        rtype = rec[3]
+        data = rec[4 : 4 + n]
+        csum = rec[4 + n]
+        if ((sum(rec[: 4 + n]) + csum) & 0xFF) != 0:
+            raise ValueError(f"bad Intel HEX checksum in {line[:20]}...")
+        if rtype == 0x00:
+            base = (ela << 16) + addr
+            for i, b in enumerate(data):
+                mem[base + i] = b
+        elif rtype == 0x01:
+            break
+        elif rtype == 0x04:
+            ela = int.from_bytes(data, "big")
+    return mem
+
+if has_am32_sig and (app_hex_path is None or not app_hex_path.is_file()):
+    errors.append(f"missing app hex ({app_path.with_suffix('.hex').name})")
+elif has_am32_sig:
+    try:
+        hex_mem = parse_ihex(app_hex_path.read_text(encoding="ascii"))
+    except ValueError as exc:
+        errors.append(f"{app_hex_path.name}: {exc}")
+        hex_mem = None
+    if hex_mem is not None:
+        load_addr = 0x08000000 + APP_OFFSET
+        missing: list[int] = []
+        mismatch: list[int] = []
+        for i, b in enumerate(app):
+            a = load_addr + i
+            if a not in hex_mem:
+                missing.append(a)
+            elif hex_mem[a] != b:
+                mismatch.append(a)
+        if missing:
+            preview = ", ".join(f"0x{a:08X}" for a in missing[:8])
+            more = f" (+{len(missing) - 8} more)" if len(missing) > 8 else ""
+            errors.append(
+                f"{app_hex_path.name} omits {len(missing)} byte(s) present in "
+                f"{app_path.name} (first: {preview}{more}); "
+                "ALIGN padding is in the .bin as 0x00 but missing from the .hex"
+            )
+        if mismatch:
+            preview = ", ".join(f"0x{a:08X}" for a in mismatch[:8])
+            errors.append(
+                f"{app_hex_path.name} differs from {app_path.name} at "
+                f"{len(mismatch)} address(es) (first: {preview})"
+            )
 
 ee = img[EEPROM_OFFSET : EEPROM_OFFSET + EEPROM_PAGE]
 if len(ee) != EEPROM_PAGE:

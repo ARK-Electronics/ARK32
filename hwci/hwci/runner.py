@@ -505,8 +505,30 @@ def build_sim_sources(rig: RigConfig, profile: Profile, *,
     )
 
 
+# First-boot app-side BL rewrite holds IRQs off for ~0.5 s (16 KiB G431).
+# Poll this long before the first reset_run so we do not halt mid-erase.
+_BL_REWRITE_GRACE_S = 3.0
+
+
+def _elf_has_embedded_bl(elf_path: str) -> bool:
+    """True when the ELF carries a real .bl_image (not the empty ALIGN stub).
+
+    Fail closed: if the ELF cannot be read, assume a blob is present and
+    take the 3 s grace rather than reset_run mid-erase.
+    """
+    try:
+        from elftools.elf.elffile import ELFFile
+        with open(elf_path, "rb") as fh:
+            sec = ELFFile(fh).get_section_by_name(".bl_image")
+    except Exception:
+        return True
+    return sec is not None and sec["sh_size"] >= 1024
+
+
 def _ensure_app_alive(dbg, perf_reader: PerfReader,
-                      throttle: ThrottleSource) -> None:
+                      throttle: ThrottleSource, *,
+                      embed_bl: bool | None = None,
+                      elf: str | None = None) -> None:
     """Get the ESC out of the AM32 bootloader and into the app.
 
     The bootloader only jumps to the app when the throttle signal line idles
@@ -517,6 +539,10 @@ def _ensure_app_alive(dbg, perf_reader: PerfReader,
     throttle source (signal dropped, line driven low), reset, and wait for
     the app to publish the magic. The throttle is re-activated later by
     ``arm()``.
+
+    When the flashed ELF embeds a bootloader image, first boot may rewrite
+    the BL region with IRQs off. A reset_run in that window bricks the page.
+    Poll for ``_BL_REWRITE_GRACE_S`` before the first reset in that case.
     """
     from .perf import PerfDecodeError
 
@@ -547,6 +573,18 @@ def _ensure_app_alive(dbg, perf_reader: PerfReader,
 
     if app_alive():
         return
+
+    if embed_bl is None and elf:
+        embed_bl = _elf_has_embedded_bl(elf)
+    if embed_bl:
+        # Let a first-boot BL rewrite finish (or the app come up after its
+        # own post-rewrite reset) before we halt the core.
+        grace_deadline = time.monotonic() + _BL_REWRITE_GRACE_S
+        while time.monotonic() < grace_deadline:
+            time.sleep(0.25)
+            if app_alive():
+                return
+
     for _attempt in range(2):
         throttle.quiesce()  # drop the signal so the line is driven low
         time.sleep(0.2)     # let the output state settle
@@ -699,7 +737,7 @@ def build_live_sources(rig: RigConfig, profile: Profile, *,
                       debug_uart=debug_uart, closers=closers)
     try:
         if perf_reader is not None:
-            _ensure_app_alive(dbg, perf_reader, throttle)
+            _ensure_app_alive(dbg, perf_reader, throttle, elf=str(elf))
         if battery_cells is not None:
             check_battery(_live_voltage(stand, perf_source), battery_cells,
                          min_cell_voltage)

@@ -51,6 +51,32 @@ extern const uint8_t _bl_image_end[];
 /* Per-page program/verify attempts before aborting the whole update. */
 #	define BL_MAX_PAGE_ATTEMPTS 4u
 
+/*
+ * G431 I/D flash caches are on at reset (FLASH_ACR ICEN|DCEN). A verify
+ * memcmp after program can hit a stale D-cache line; the retry path then
+ * re-reads the same addresses and turns one transient fail into a 4-strike
+ * abort with a half-written BL page. F051 has no D-cache.
+ */
+#	if defined(MCU_G431)
+static void flash_flush_caches(void)
+{
+	if ((FLASH->ACR & FLASH_ACR_DCEN) != 0u) {
+		FLASH->ACR &= ~FLASH_ACR_DCEN;
+		FLASH->ACR |= FLASH_ACR_DCRST;
+		FLASH->ACR &= ~FLASH_ACR_DCRST;
+		FLASH->ACR |= FLASH_ACR_DCEN;
+	}
+	if ((FLASH->ACR & FLASH_ACR_ICEN) != 0u) {
+		FLASH->ACR &= ~FLASH_ACR_ICEN;
+		FLASH->ACR |= FLASH_ACR_ICRST;
+		FLASH->ACR &= ~FLASH_ACR_ICRST;
+		FLASH->ACR |= FLASH_ACR_ICEN;
+	}
+}
+#	else
+static void flash_flush_caches(void) {}
+#	endif
+
 void maybe_update_bootloader(void)
 {
 	const uint32_t len = (uint32_t)(_bl_image_end - _bl_image_start);
@@ -103,6 +129,7 @@ void maybe_update_bootloader(void)
 
 		RELOAD_WATCHDOG_COUNTER();
 		save_flash_nolib(src, (int)chunk, addr);
+		flash_flush_caches();
 
 		if (memcmp((const void *)(uintptr_t)addr, &want[off], chunk) != 0) {
 			/*
@@ -125,6 +152,7 @@ void maybe_update_bootloader(void)
 	}
 
 	/* Reset only when the full BL region matches the embedded image. */
+	flash_flush_caches();
 	if (memcmp(have, want, len) == 0) {
 		/* Next boot plays a short success chirp before the normal tune. */
 		bootSoundMarkBootloaderUpdated();
