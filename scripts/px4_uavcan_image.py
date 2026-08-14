@@ -18,15 +18,15 @@ The app .uavcan.bin still keeps the descriptor in the first 1 KiB (FLASH1)
 so a short read finds it; that is our layout, not a PX4 limit.
 
 The filename uses the numeric ship version from Inc/version.h
-(MAJOR.MINOR[.PATCH]), not the -ark artifact suffix and not the git hash
-PX4 cannode builds put in the third field:
+(MAJOR.MINOR[.PATCH], no -ark) plus the 8-hex-digit git hash already
+stored in the APDescriptor (same as PX4 cannode's third field):
 
-    <board_id>-<MAJOR.MINOR[.PATCH]>.uavcan.bin
+    <board_id>-<MAJOR.MINOR[.PATCH]>.<githash>.uavcan.bin
 
-e.g. 71-3.0.2.uavcan.bin  (tag v3.0.2-ark)
+e.g. 71-3.0.2.59efc137.uavcan.bin  (tag v3.0.2-ark, commit 59efc137)
 
 PX4 matches the file by the APDescriptor board_id, not by parsing the
-name. The ship version is for humans and for FW.db.
+name. The version and hash are for humans and for FW.db.
 
 Sign *before* Src/DroneCAN/set_app_signature.py. The AM32 bootloader CRC
 covers the whole image except its own 44-byte block; filling the PX4 CRC
@@ -398,7 +398,7 @@ def firmware_version(version_h: Path = VERSION_H) -> str:
 
 def uavcan_name(d: dict, version: str | None = None) -> str:
     ver = version if version is not None else firmware_version()
-    return f"{d['board_id']}-{ver}.uavcan.bin"
+    return f"{d['board_id']}-{ver}.{d['git_hash']:08x}.uavcan.bin"
 
 
 def git_abbrev8(cwd: str | None = None) -> int:
@@ -548,7 +548,7 @@ def selftest() -> int:
     assert d["board_id"] == 71
     assert d["image_crc"] != 0
     assert d["image_size"] == 600
-    assert uavcan_name(d, "3.0.2") == "71-3.0.2.uavcan.bin"
+    assert uavcan_name(d, "3.0.2") == "71-3.0.2.59efc137.uavcan.bin"
     assert firmware_version() == "3.0.2"
     assert find_descriptor(bytes(img), PX4_SCAN_LIMIT) == off
     # Signature at a non-8-aligned offset must not be found (PX4 uint64 scan).

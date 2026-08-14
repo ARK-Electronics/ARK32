@@ -273,10 +273,10 @@ Do **not** copy a factory image to a PX4 SD card. PX4 globs every `*.bin` on the
 `make ARK_G431_CAN` signs the application image with a PX4 APDescriptor and emits a second copy named for the SD-card workflow:
 
 ```text
-obj/<board_id>-<MAJOR.MINOR[.PATCH]>.uavcan.bin
+obj/<board_id>-<MAJOR.MINOR[.PATCH]>.<githash>.uavcan.bin
 ```
 
-`board_id` is `(hw_major << 8) | hw_minor`. This target reports hardware version **0.71**, so `board_id` is **71**. The rest of the name is the numeric ship version (no `-ark`), e.g. `71-3.0.2.uavcan.bin`.
+`board_id` is `(hw_major << 8) | hw_minor`. This target reports hardware version **0.71**, so `board_id` is **71**. The rest of the name is the numeric ship version (no `-ark`) and the 8-digit git hash from the APDescriptor, e.g. `71-3.0.2.59efc137.uavcan.bin`.
 
 1. Copy **only** that `.uavcan.bin` to the **root** of the PX4 SD card (or to `ufw_staging/`). Do not copy `*.factory.img`, `*.factory.hex`, or any other `*.bin`.
 2. Reboot the flight controller. PX4 moves it to `/ufw/71.bin` and begins a DroneCAN firmware update on every matching ESC.

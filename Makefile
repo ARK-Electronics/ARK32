@@ -50,7 +50,7 @@ VERSION_TAG := $(shell $(FGREP) "define VERSION_TAG" $(MAIN_INC_DIR)/version.h |
 
 # Artifact version: MAJOR.MINOR[.PATCH][-TAG]
 FIRMWARE_VERSION := $(VERSION_MAJOR).$(VERSION_MINOR)$(if $(VERSION_PATCH),.$(VERSION_PATCH))$(if $(VERSION_TAG),-$(VERSION_TAG))
-# PX4 SD-card .uavcan.bin uses the numeric ship version only (no -ark).
+# PX4 SD-card .uavcan.bin uses the numeric ship version (no -ark) plus git.
 UAVCAN_VERSION := $(VERSION_MAJOR).$(VERSION_MINOR)$(if $(VERSION_PATCH),.$(VERSION_PATCH))
 
 # Compiler options
