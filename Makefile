@@ -116,7 +116,8 @@ SRC_COMMON_ALL := $(foreach dir,$(SRC_DIRS_COMMON),$(wildcard $(dir)/*.[cs]))
 # (Empty #ifdef stubs still cost flash/link time on F051.)
 SRC_OPTIONAL_BRUSHED := $(MAIN_SRC_DIR)/brushed.c
 SRC_OPTIONAL_HWCI    := $(MAIN_SRC_DIR)/hwci_perf.c
-SRC_COMMON_BASE := $(filter-out $(SRC_OPTIONAL_BRUSHED) $(SRC_OPTIONAL_HWCI),$(SRC_COMMON_ALL))
+SRC_OPTIONAL_DEBUG_UART := $(MAIN_SRC_DIR)/debug_uart.c
+SRC_COMMON_BASE := $(filter-out $(SRC_OPTIONAL_BRUSHED) $(SRC_OPTIONAL_HWCI) $(SRC_OPTIONAL_DEBUG_UART),$(SRC_COMMON_ALL))
 
 # App-side bootloader update. The image is a committed bootloader .bin pulled in
 # with .incbin (Src/bl_image.S) rather than a generated C array, so the linked
@@ -200,7 +201,7 @@ $(eval xSRC := $$(if $$(call has_can_suffix,$$(2)),$(SRC_CAN_$(1))))
 $(eval xEMBED_BL := $(if $(filter F051,$(1)),$(if $(or $(filter 0,$(EMBED_BOOTLOADER)),$(filter 1,$(NO_EMBED_BL)),$(filter 1,$(HWCI_PERF))),,1)))
 
 # Per-target app sources: drop brushed/hwci unless the product asks for them
-$(eval SRC_APP_$(2) := $(SRC_COMMON_BASE)$(if $(call has_brushed_suffix,$(2)), $(SRC_OPTIONAL_BRUSHED))$(if $(filter 1,$(HWCI_PERF)), $(SRC_OPTIONAL_HWCI))$(if $(xEMBED_BL), $(SRC_OPTIONAL_BL_IMAGE)))
+$(eval SRC_APP_$(2) := $(SRC_COMMON_BASE)$(if $(call has_brushed_suffix,$(2)), $(SRC_OPTIONAL_BRUSHED))$(if $(filter 1,$(HWCI_PERF)), $(SRC_OPTIONAL_HWCI))$(if $(xEMBED_BL), $(SRC_OPTIONAL_BL_IMAGE))$(if $(filter G431,$(1)), $(SRC_OPTIONAL_DEBUG_UART)))
 
 # allow an MCU type to override the common compiler/linker flags (used by SITL
 # for a native build) and to have no linker script
