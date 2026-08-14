@@ -30,6 +30,14 @@ SECTIONS
     . = ALIGN(4);
   } > FLASH1
 
+  /* PX4 SD-card update scans the first 1 KiB for APDesc00 (8-byte aligned). */
+  .px4_app_descriptor :
+  {
+    . = ALIGN(8);
+    KEEP(*(.px4_app_descriptor))
+    . = ALIGN(4);
+  } > FLASH1
+
   .fill_flash1 :
   {
         FILL(0x00);

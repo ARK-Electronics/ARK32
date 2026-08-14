@@ -135,6 +135,7 @@ make factory-image
 
 - **Production / blank chip:** flash the `.factory.bin` once (includes BL + app + EEPROM for both products).
 - **In-field app update:** flash the normal app `.bin` / `.hex` at the app base (F051 `0x08001000`, G431 CAN `0x08004000`). EEPROM is left alone. F051 builds also embed the bootloader for optional app-side BL refresh (`EMBED_BOOTLOADER`, see [Bootloaders/README.md](../Bootloaders/README.md)). G431 currently uses the committed BL only for the factory full-flash image (no app-side BL rewrite path yet).
+- **PX4 SD-card update (ARK G431 CAN):** `make ARK_G431_CAN` (or `make factory-image-g431-can`) also writes a PX4-signed copy named `<board_id>-<MAJOR.MINOR.PATCH>.uavcan.bin` under `obj/` — e.g. `71-3.0.2.uavcan.bin`. Copy that file to the **root of the flight-controller SD card** and reboot. PX4 reads the APDescriptor, stages `/ufw/71.bin`, and flashes every ESC whose GetNodeInfo hardware version is 0.71. See [README.md](../README.md#bootloader).
 
 ## Script
 
@@ -148,4 +149,4 @@ Every PR/push runs **`factory-image`** in [`.github/workflows/static-analysis.ym
 make factory-image-check   # build + scripts/check-factory-image-ark.sh
 ```
 
-The job fails if the flash layout is wrong or the EEPROM page drifts from the product defaults JSON (F051 or G431). Artifacts (`*.factory.bin` / `.hex` / `.eeprom.bin`) are uploaded as `ark-factory-images`.
+The job fails if the flash layout is wrong, the EEPROM page drifts from the product defaults JSON (F051 or G431), or the G431 PX4 SD-card `.uavcan.bin` is missing / unsigned. Artifacts (`*.factory.bin` / `.hex` / `.eeprom.bin` / `*.uavcan.bin`) are uploaded as `ark-factory-images`.

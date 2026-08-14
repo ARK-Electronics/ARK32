@@ -58,6 +58,11 @@
 #	define FILE_NAME "ARK_G431_CAN"
 #	define DRONECAN_SUPPORT 1
 #	define DRONECAN_NODE_NAME "com.ark_12s.esc"
+/* UAVCAN hw version: PX4 board_id = (major << 8) | minor.
+ * 0.71 → 71. Away from stock AM32 2.3 (515), ARK cannode 0.80-0.93,
+ * and ArduPilot/AP_Periph's reserved 1000-19999 block. */
+#	define DRONECAN_HW_VERSION_MAJOR 0
+#	define DRONECAN_HW_VERSION_MINOR 71
 #	define DEAD_TIME 80 /* 500 ns @ 160 MHz TIM1 (CKD=1) */
 
 #	define HARDWARE_GROUP_G4_E

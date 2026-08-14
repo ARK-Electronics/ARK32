@@ -50,6 +50,8 @@ VERSION_TAG := $(shell $(FGREP) "define VERSION_TAG" $(MAIN_INC_DIR)/version.h |
 
 # Artifact version: MAJOR.MINOR[.PATCH][-TAG]
 FIRMWARE_VERSION := $(VERSION_MAJOR).$(VERSION_MINOR)$(if $(VERSION_PATCH),.$(VERSION_PATCH))$(if $(VERSION_TAG),-$(VERSION_TAG))
+# PX4 SD-card .uavcan.bin uses the numeric ship version only (no -ark).
+UAVCAN_VERSION := $(VERSION_MAJOR).$(VERSION_MINOR)$(if $(VERSION_PATCH),.$(VERSION_PATCH))
 
 # Compiler options
 #
@@ -181,8 +183,10 @@ $$($(2)_BASENAME).bin: $$($(2)_BASENAME).elf
 	echo building BIN $$@
 	@$(ECHO) Generating $$(notdir $$@)
 	$(QUIET)$(xOBJCOPY) -O binary $$(<) $$@
+	$(QUIET)python3 scripts/px4_uavcan_image.py sign $$@ $$(<)
 	$(QUIET)python3 Src/DroneCAN/set_app_signature.py $$@ $$(<)
 	$(QUIET)$(xOBJCOPY) $$(<) -O ihex $$(@:.bin=.hex)
+	$(QUIET)python3 scripts/px4_uavcan_image.py --version $(UAVCAN_VERSION) emit $$@
 	$(QUIET)$(CP) -f $$(<) $(OBJ)$(DSEP)debug.elf > $(NUL)
 
 # check for CAN support
@@ -333,6 +337,8 @@ factory-image-check: factory-image
 		bash scripts/check-factory-image-ark.sh
 	$(QUIET)$(ECHO) "--- erase-defaults check ---"
 	$(QUIET)python3 scripts/check-erase-defaults.py $(FACTORY_G431_PRODUCT)
+	$(QUIET)$(ECHO) "--- PX4 SD-card UAVCAN image ---"
+	$(QUIET)python3 scripts/px4_uavcan_image.py --version $(UAVCAN_VERSION) check $(FACTORY_G431_BASENAME).bin
 
 # Code formatting (clang-format ≈ PX4 astyle/Linux look; see .clang-format).
 # Same target names as PX4:
