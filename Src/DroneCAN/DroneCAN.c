@@ -932,8 +932,17 @@ static void set_input(uint16_t input)
 	last_can_input = unfiltered_input;
 	inputSet = 1;
 
-	// we must set dshot for bi_direction to work
-	dshot = eepromBuffer.bi_direction;
+	/*
+	 * RawCommand is already mapped onto the AM32 11-bit range.
+	 * Bidirectional CAN needs the DShot mapper in setInput(). Never
+	 * clear a detected wire protocol: AUTO keeps computeDshotDMA()
+	 * running so DShot can resume after the 250 ms RawCommand failsafe.
+	 * `dshot = bi_direction` used to force dshot=0 whenever reverse
+	 * was off and permanently stole the wire path.
+	 */
+	if (eepromBuffer.bi_direction) {
+		dshot = 1;
+	}
 
 	transfercomplete();
 	setInput();
