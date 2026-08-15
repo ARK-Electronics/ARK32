@@ -31,19 +31,6 @@ uint32_t average_packet_length;
 uint16_t dshot_frametime_high = 50000;
 uint16_t dshot_frametime_low = 0;
 
-void computeMSInput()
-{
-	int lastnumber = dma_buffer[0];
-	for (int j = 1; j < 2; j++) {
-		if (((dma_buffer[j] - lastnumber) < 1500) && ((dma_buffer[j] - lastnumber) > 0)) { // blank space
-
-			newinput = map((dma_buffer[j] - lastnumber), 243, 1200, 0, 2000);
-			break;
-		}
-		lastnumber = dma_buffer[j];
-	}
-}
-
 void computeServoInput()
 {
 	if (((dma_buffer[1] - dma_buffer[0]) > 800) && ((dma_buffer[1] - dma_buffer[0]) < 2200)) {
