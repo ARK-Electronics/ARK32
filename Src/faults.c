@@ -142,16 +142,10 @@ void faultUpdateBemfTimeoutPolicy(void)
 		bemf_timeout_happened = 0;
 	}
 
-	if (crawler_mode) {
-		if (adjusted_input < 400) {
-			bemf_timeout_happened = 0;
-		}
+	if (adjusted_input < 150) { // startup duty cycle should be low enough to not burn motor
+		bemf_timeout = 100;
 	} else {
-		if (adjusted_input < 150) { // startup duty cycle should be low enough to not burn motor
-			bemf_timeout = 100;
-		} else {
-			bemf_timeout = 10;
-		}
+		bemf_timeout = 10;
 	}
 #endif
 }
