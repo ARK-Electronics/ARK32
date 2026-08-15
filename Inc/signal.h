@@ -19,8 +19,5 @@ extern uint16_t servo_low_threshold;  // anything below this point considered 0
 extern uint16_t servo_high_threshold; // anything above this point considered 2000 (max)
 extern uint16_t servo_neutral;
 extern uint8_t servo_dead_band;
-extern volatile char inputSet;
-extern char dshot;
-extern volatile char servoPwm;
 
 void detectInput();
