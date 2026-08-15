@@ -276,32 +276,6 @@ void playBrushedStartupTune()
 	__enable_irq();
 }
 
-void playDuskingTune()
-{
-	setCaptureCompare();
-	SET_AUTO_RELOAD_PWM(TIM1_AUTORELOAD);
-	comStep(2);	       // activate a pwm channel
-	SET_PRESCALER_PWM(60); // frequency of beep
-	delayMillis(200);      // duration of beep
-	SET_PRESCALER_PWM(55); // next beep is higher frequency
-	delayMillis(150);
-	SET_PRESCALER_PWM(50); // higher again..
-	delayMillis(150);
-	SET_PRESCALER_PWM(45); // frequency of beep
-	delayMillis(100);      // duration of beep
-	SET_PRESCALER_PWM(50); // next beep is higher frequency
-	delayMillis(100);
-	SET_PRESCALER_PWM(55); // higher again..
-	delayMillis(100);
-	SET_PRESCALER_PWM(25); // higher again..
-	delayMillis(200);
-	SET_PRESCALER_PWM(55); // higher again..
-	delayMillis(150);
-	allOff();	      // turn all channels low again
-	SET_PRESCALER_PWM(0); // set prescaler back to 0.
-	SET_AUTO_RELOAD_PWM(TIMER1_MAX_ARR);
-}
-
 // dshot beacon 4 / deferred arm beep: same morse "R" as playInputTune but
 // one arpeggio step lower so the beacon is distinguishable by pitch
 void playInputTune2()
