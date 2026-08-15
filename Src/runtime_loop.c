@@ -203,7 +203,7 @@ void runtimeProcessDesyncCheck(void)
 				// counter reading zero. See faultNoteEarlyDesync.
 				faultNoteEarlyDesync();
 			}
-			if ((!eepromBuffer.bi_direction && (input > 47)) || commutation_interval > 1000) {
+			if ((!eepromBuffer.bi_direction && (input > DSHOT_CMD_MAX)) || commutation_interval > 1000) {
 				running = 0;
 			}
 			/* Always fall back to poll-ZC path after a desync event. */
@@ -813,8 +813,8 @@ void runtimeMotorModeTick(void)
 		}
 #else
 
-		if (input > 48 && escIsArmed()) {
-			if (input > 48 && input < 137) { // sine wave stepper
+		if (input > DSHOT_MIN_THROTTLE && escIsArmed()) {
+			if (input > DSHOT_MIN_THROTTLE && input < 137) { // sine wave stepper
 
 				if (do_once_sinemode) {
 					// disable commutation interrupt in case set

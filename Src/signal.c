@@ -91,8 +91,9 @@ void computeServoInput()
 						map((dma_buffer[1] - dma_buffer[0]), servo_neutral + 1, servo_high_threshold, 1001, 2000);
 				}
 			} else {
-				servorawinput = map((dma_buffer[1] - dma_buffer[0]), servo_low_threshold, servo_high_threshold, 47, 2047);
-				if (servorawinput <= 48) {
+				servorawinput = map((dma_buffer[1] - dma_buffer[0]), servo_low_threshold, servo_high_threshold,
+						    DSHOT_CMD_MAX, DSHOT_MAX_THROTTLE);
+				if (servorawinput <= DSHOT_MIN_THROTTLE) {
 					servorawinput = 0;
 				}
 			}

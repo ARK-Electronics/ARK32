@@ -44,9 +44,43 @@ TYPE_NAMES = {
     'dshot600': TYPE_DSHOT600,
 }
 
-# DShot commands (value field 1..47 at zero throttle)
-DSHOT_CMD_EDT_ENABLE = 13
-DSHOT_CMD_EDT_DISABLE = 14
+# DShot commands (value field 0..47 at zero throttle). Names match
+# Inc/dshot.h / Betaflight dshot_command.h / PX4 drv_dshot.h.
+DSHOT_CMD_MOTOR_STOP = 0
+DSHOT_CMD_BEACON1 = 1
+DSHOT_CMD_BEACON2 = 2
+DSHOT_CMD_BEACON3 = 3
+DSHOT_CMD_BEACON4 = 4
+DSHOT_CMD_BEACON5 = 5
+DSHOT_CMD_ESC_INFO = 6
+DSHOT_CMD_SPIN_DIRECTION_1 = 7
+DSHOT_CMD_SPIN_DIRECTION_2 = 8
+DSHOT_CMD_3D_MODE_OFF = 9
+DSHOT_CMD_3D_MODE_ON = 10
+DSHOT_CMD_SETTINGS_REQUEST = 11
+DSHOT_CMD_SAVE_SETTINGS = 12
+DSHOT_CMD_EXTENDED_TELEMETRY_ENABLE = 13
+DSHOT_CMD_EXTENDED_TELEMETRY_DISABLE = 14
+DSHOT_CMD_SPIN_DIRECTION_NORMAL = 20
+DSHOT_CMD_SPIN_DIRECTION_REVERSED = 21
+DSHOT_CMD_ENTER_PROGRAMMING_MODE = 36
+DSHOT_CMD_EXIT_PROGRAMMING_MODE = 37
+DSHOT_CMD_MAX = 47
+DSHOT_MIN_THROTTLE = 48
+DSHOT_MAX_THROTTLE = 2047
+DSHOT_3D_FORWARD_MIN_THROTTLE = 1048
+DSHOT_CMD_REPEATS = 6
+
+# Short aliases used by existing SITL / MSP callers
+DSHOT_CMD_EDT_ENABLE = DSHOT_CMD_EXTENDED_TELEMETRY_ENABLE
+DSHOT_CMD_EDT_DISABLE = DSHOT_CMD_EXTENDED_TELEMETRY_DISABLE
+
+# EDT type field (matches PX4 DSHOT_EDT_*)
+DSHOT_EDT_ERPM = 0x00
+DSHOT_EDT_TEMPERATURE = 0x02
+DSHOT_EDT_VOLTAGE = 0x04
+DSHOT_EDT_CURRENT = 0x06
+DSHOT_EDT_STATE_EVENT = 0x0E
 
 
 def dshot_crc(value12, bidir=False):
@@ -90,13 +124,13 @@ def decode_reply(frame16, edt_expected=False):
     if edt_expected and (val & 0x100) == 0 and val != 0:
         etype = val >> 8
         data = val & 0xFF
-        if etype == 0x2:
+        if etype == DSHOT_EDT_TEMPERATURE:
             return ('temp', data)
-        if etype == 0x4:
+        if etype == DSHOT_EDT_VOLTAGE:
             return ('volt', data * 0.25)
-        if etype == 0x6:
-            # AM32 encodes centiamps/50, ie 0.5A units
-            return ('current', data * 0.5)
+        if etype == DSHOT_EDT_CURRENT:
+            # AM32 sends actual_current (cA) / 100 → 1 A per step
+            return ('current', data)
         return ('edt', val)
     period_us = (val & 0x1FF) << (val >> 9)
     return ('erpm', period_us)

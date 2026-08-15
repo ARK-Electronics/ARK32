@@ -490,7 +490,7 @@ int main(void)
 		runtimeUpdateVariablePwm(&last_tim1_arr);
 		faultPollSignalTimeout();
 #ifdef USE_CUSTOM_LED
-		if ((input >= 47) && (input < 1947)) {
+		if ((input >= DSHOT_CMD_MAX) && (input < 1947)) {
 			if (ledcounter > (2000 >> forward)) {
 				GPIOB->BSRR = LL_GPIO_PIN_3;
 			} else {
@@ -503,7 +503,7 @@ int main(void)
 		if (input > 1947) {
 			GPIOB->BSRR = LL_GPIO_PIN_3;
 		}
-		if (input < 47) {
+		if (input < DSHOT_CMD_MAX) {
 			GPIOB->BRR = LL_GPIO_PIN_3;
 		}
 #endif

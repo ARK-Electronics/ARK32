@@ -6,6 +6,7 @@
 
 #include "motor_runtime.h"
 #include "common.h"
+#include "dshot.h"
 #include "signal.h"
 #include "eeprom.h"
 #include "faults.h"
@@ -279,7 +280,7 @@ void escSineHandoffToOpenLoop(void)
 void escNoteStallOrDesync(uint8_t stop_if_low_throttle)
 {
 	old_routine = 1;
-	if (stop_if_low_throttle && input < 48) {
+	if (stop_if_low_throttle && input < DSHOT_MIN_THROTTLE) {
 		running = 0;
 		commutation_interval = 5000;
 		escCommitState(armed ? ESC_ARMED_IDLE : ESC_DISARMED);
