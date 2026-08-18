@@ -218,12 +218,6 @@ Other DShot commands (direction, bi-dir, EDT, programming mode, etc.) do **not**
 | Motor spinning / throttle up | Deferred tone flags wait until throttle is at idle; beeps are not mixed into normal drive. |
 | No throttle signal after boot | ESC may stay in bootloader or keep waiting for input — you may only hear the **startup** tune, not the arm tune, until a valid zero throttle is seen. |
 
-### Defined but unused
-
-| Function | Status |
-|----------|--------|
-| **`playDuskingTune`** | Implemented in `sounds.c` (ascending then peaking melody) but **not called** from current application code. Kept for compatibility / possible future use. |
-
 ### Source map
 
 | File | Role |

@@ -15,7 +15,6 @@ void playInputTune(void);
 void playBrushedStartupTune(void);
 void playInputTune2(void);
 void playBeaconTune3(void);
-void playDuskingTune(void);
 void playDefaultTone(void);
 void playChangedTone(void);
 void playSignalLostTone(void);

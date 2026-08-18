@@ -129,7 +129,6 @@ volatile uint8_t desync_episode_bucket = 0;
 volatile uint16_t desync_restart_holdoff_ms = 0;
 char maximum_throttle_change_ramp = 1;
 
-char crawler_mode = 0; // no longer used //
 uint16_t velocity_count = 0;
 uint16_t velocity_count_threshold = 75;
 
