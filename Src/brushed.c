@@ -14,6 +14,7 @@
 #	include "peripherals.h"
 #	include "functions.h"
 #	include "eeprom.h"
+#	include "dshot.h"
 #	include "signal.h"
 #	include "targets.h"
 
@@ -21,7 +22,7 @@ void runBrushedLoop(void)
 {
 	uint16_t brushed_duty_cycle = 0;
 
-	if (brushed_direction_set == 0 && adjusted_input > 48) {
+	if (brushed_direction_set == 0 && adjusted_input > DSHOT_MIN_THROTTLE) {
 		if (forward) {
 			allOff();
 			delayMicros(10);
@@ -34,7 +35,7 @@ void runBrushedLoop(void)
 		brushed_direction_set = 1;
 	}
 
-	brushed_duty_cycle = map(adjusted_input, 48, 2047, 0, (TIMER1_MAX_ARR - (TIMER1_MAX_ARR / 20)));
+	brushed_duty_cycle = map(adjusted_input, DSHOT_MIN_THROTTLE, DSHOT_MAX_THROTTLE, 0, (TIMER1_MAX_ARR - (TIMER1_MAX_ARR / 20)));
 
 	if (degrees_celsius > eepromBuffer.limits.temperature) {
 		duty_cycle_maximum =

@@ -98,7 +98,8 @@ void setInput()
 					}
 					if (prop_brake_active == 0) {
 						return_to_center = 0;
-						adjusted_input = map(newinput, 1000 + (servo_dead_band << 1), 2000, 47, 2047);
+						adjusted_input = map(newinput, 1000 + (servo_dead_band << 1), 2000, DSHOT_CMD_MAX,
+								     DSHOT_MAX_THROTTLE);
 					}
 				}
 				if (newinput < (1000 - (servo_dead_band << 1))) {
@@ -113,7 +114,8 @@ void setInput()
 					}
 					if (prop_brake_active == 0) {
 						return_to_center = 0;
-						adjusted_input = map(newinput, 0, 1000 - (servo_dead_band << 1), 2047, 47);
+						adjusted_input =
+							map(newinput, 0, 1000 - (servo_dead_band << 1), DSHOT_MAX_THROTTLE, DSHOT_CMD_MAX);
 					}
 				}
 				if (newinput >= (1000 - (servo_dead_band << 1)) && newinput <= (1000 + (servo_dead_band << 1))) {
@@ -138,7 +140,8 @@ void setInput()
 							newinput = 1000;
 						}
 					}
-					adjusted_input = map(newinput, 1000 + (servo_dead_band << 1), 2000, 47, 2047);
+					adjusted_input =
+						map(newinput, 1000 + (servo_dead_band << 1), 2000, DSHOT_CMD_MAX, DSHOT_MAX_THROTTLE);
 				}
 				if (newinput < (1000 - (servo_dead_band << 1))) {
 					if (forward == (1 - eepromBuffer.dir_reversed)) {
@@ -154,7 +157,7 @@ void setInput()
 							newinput = 1000;
 						}
 					}
-					adjusted_input = map(newinput, 0, 1000 - (servo_dead_band << 1), 2047, 47);
+					adjusted_input = map(newinput, 0, 1000 - (servo_dead_band << 1), DSHOT_MAX_THROTTLE, DSHOT_CMD_MAX);
 				}
 
 				if (newinput >= (1000 - (servo_dead_band << 1)) && newinput <= (1000 + (servo_dead_band << 1))) {
@@ -165,7 +168,7 @@ void setInput()
 		}
 		if (dshot) {
 			if (eepromBuffer.rc_car_reverse) {
-				if (newinput > 1047) {
+				if (newinput > DSHOT_3D_REVERSE_MAX) {
 					if (forward == eepromBuffer.dir_reversed) {
 						adjusted_input = 0;
 						prop_brake_active = 1;
@@ -177,10 +180,11 @@ void setInput()
 					}
 					if (prop_brake_active == 0) {
 						return_to_center = 0;
-						adjusted_input = ((newinput - 1048) * 2 + 47) - reversing_dead_band;
+						adjusted_input = ((newinput - DSHOT_3D_FORWARD_MIN_THROTTLE) * 2 + DSHOT_CMD_MAX) -
+								 reversing_dead_band;
 					}
 				}
-				if (newinput <= 1047 && newinput > 47) {
+				if (newinput <= DSHOT_3D_REVERSE_MAX && newinput > DSHOT_CMD_MAX) {
 					if (forward == (1 - eepromBuffer.dir_reversed)) {
 						adjusted_input = 0;
 						prop_brake_active = 1;
@@ -192,10 +196,11 @@ void setInput()
 					}
 					if (prop_brake_active == 0) {
 						return_to_center = 0;
-						adjusted_input = ((newinput - 48) * 2 + 47) - reversing_dead_band;
+						adjusted_input =
+							((newinput - DSHOT_MIN_THROTTLE) * 2 + DSHOT_CMD_MAX) - reversing_dead_band;
 					}
 				}
-				if (newinput < 48) {
+				if (newinput < DSHOT_MIN_THROTTLE) {
 					adjusted_input = 0;
 					if (prop_brake_active) {
 						prop_brake_active = 0;
@@ -203,7 +208,7 @@ void setInput()
 					}
 				}
 			} else {
-				if (newinput > 1047) {
+				if (newinput > DSHOT_3D_REVERSE_MAX) {
 					if (forward == eepromBuffer.dir_reversed) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
@@ -217,9 +222,10 @@ void setInput()
 							newinput = 0;
 						}
 					}
-					adjusted_input = ((newinput - 1048) * 2 + 47) - reversing_dead_band;
+					adjusted_input =
+						((newinput - DSHOT_3D_FORWARD_MIN_THROTTLE) * 2 + DSHOT_CMD_MAX) - reversing_dead_band;
 				}
-				if (newinput <= 1047 && newinput > 47) {
+				if (newinput <= DSHOT_3D_REVERSE_MAX && newinput > DSHOT_CMD_MAX) {
 					if (forward == (1 - eepromBuffer.dir_reversed)) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
@@ -233,9 +239,9 @@ void setInput()
 							newinput = 0;
 						}
 					}
-					adjusted_input = ((newinput - 48) * 2 + 47) - reversing_dead_band;
+					adjusted_input = ((newinput - DSHOT_MIN_THROTTLE) * 2 + DSHOT_CMD_MAX) - reversing_dead_band;
 				}
-				if (newinput < 48) {
+				if (newinput < DSHOT_MIN_THROTTLE) {
 					adjusted_input = 0;
 					brushed_direction_set = 0;
 				}
@@ -249,45 +255,46 @@ void setInput()
 		/* drive cut and latched; skip normal throttle map */
 	} else {
 #	ifdef FIXED_DUTY_MODE
-		input = FIXED_DUTY_MODE_POWER * 20 + 47;
+		input = FIXED_DUTY_MODE_POWER * 20 + DSHOT_CMD_MAX;
 #	else
 		if (eepromBuffer.use_sine_start) {
 			if (adjusted_input < 30) { // dead band ?
 				input = 0;
 			}
 			if (adjusted_input > 30 && adjusted_input < (eepromBuffer.sine_mode_changeover_thottle_level * 20)) {
-				input = map(adjusted_input, 30, (eepromBuffer.sine_mode_changeover_thottle_level * 20), 47, 160);
+				input = map(adjusted_input, 30, (eepromBuffer.sine_mode_changeover_thottle_level * 20), DSHOT_CMD_MAX, 160);
 			}
 			if (adjusted_input >= (eepromBuffer.sine_mode_changeover_thottle_level * 20)) {
-				input = map(adjusted_input, (eepromBuffer.sine_mode_changeover_thottle_level * 20), 2047, 160, 2047);
+				input = map(adjusted_input, (eepromBuffer.sine_mode_changeover_thottle_level * 20), DSHOT_MAX_THROTTLE, 160,
+					    DSHOT_MAX_THROTTLE);
 			}
 		} else {
 			if (use_speed_control_loop) {
 				if (drive_by_rpm) {
-					target_e_com_time =
-						60000000 /
-						map(adjusted_input, 47, 2047, MINIMUM_RPM_SPEED_CONTROL, MAXIMUM_RPM_SPEED_CONTROL) /
-						(eepromBuffer.motor_poles / 2);
-					if (adjusted_input < 47) { // dead band ?
+					target_e_com_time = 60000000 /
+							    map(adjusted_input, DSHOT_CMD_MAX, DSHOT_MAX_THROTTLE,
+								MINIMUM_RPM_SPEED_CONTROL, MAXIMUM_RPM_SPEED_CONTROL) /
+							    (eepromBuffer.motor_poles / 2);
+					if (adjusted_input < DSHOT_CMD_MAX) { // dead band ?
 						input = 0;
 						speedPid.error = 0;
 						input_override = 0;
 					} else {
 						input = (uint16_t)(input_override / 10000); // speed control pid override
-						if (input > 2047) {
-							input = 2047;
+						if (input > DSHOT_MAX_THROTTLE) {
+							input = DSHOT_MAX_THROTTLE;
 						}
-						if (input < 48) {
-							input = 48;
+						if (input < DSHOT_MIN_THROTTLE) {
+							input = DSHOT_MIN_THROTTLE;
 						}
 					}
 				} else {
 					input = (uint16_t)(input_override / 10000); // speed control pid override
-					if (input > 2047) {
-						input = 2047;
+					if (input > DSHOT_MAX_THROTTLE) {
+						input = DSHOT_MAX_THROTTLE;
 					}
-					if (input < 48) {
-						input = 48;
+					if (input < DSHOT_MIN_THROTTLE) {
+						input = DSHOT_MIN_THROTTLE;
 					}
 				}
 			} else {
@@ -299,7 +306,7 @@ void setInput()
 #endif
 #ifndef BRUSHED_MODE
 	if (escMaySixStepThrottle()) {
-		if (input >= 47 + (80 * eepromBuffer.use_sine_start)) {
+		if (input >= DSHOT_CMD_MAX + (80 * eepromBuffer.use_sine_start)) {
 			// Re-entry into six-step happens HERE, at input-frame rate -
 			// not in runtimeMotorModeTick. The episode-rail coast (holdoff
 			// or latched fault) must gate this branch or the mode tick's
@@ -319,20 +326,21 @@ void setInput()
 				last_duty_cycle = min_startup_duty;
 			}
 
-			// straight line from (in_min, out_min) to (2047, 2000) using a
+			// straight line from (in_min, out_min) to (DSHOT_MAX_THROTTLE, 2000) using a
 			// startup computed Q16 slope, avoids calling map() at input rate
 			if (eepromBuffer.use_sine_start) {
 				duty_cycle_setpoint =
-					input >= 2047  ? 2000
-					: input <= 137 ? minimum_duty_cycle + 40
-						       : minimum_duty_cycle + 40 +
-								 (uint16_t)(((uint32_t)(input - 137) * sine_throttle_duty_slope_q16) >> 16);
+					input >= DSHOT_MAX_THROTTLE ? 2000
+					: input <= 137		    ? minimum_duty_cycle + 40
+								    : minimum_duty_cycle + 40 +
+									      (uint16_t)(((uint32_t)(input - 137) * sine_throttle_duty_slope_q16) >> 16);
 			} else {
 				duty_cycle_setpoint =
-					input >= 2047 ? 2000
-					: input <= 47
+					input >= DSHOT_MAX_THROTTLE ? 2000
+					: input <= DSHOT_CMD_MAX
 						? minimum_duty_cycle
-						: minimum_duty_cycle + (uint16_t)(((uint32_t)(input - 47) * throttle_duty_slope_q16) >> 16);
+						: minimum_duty_cycle +
+							  (uint16_t)(((uint32_t)(input - DSHOT_CMD_MAX) * throttle_duty_slope_q16) >> 16);
 			}
 
 			if (!eepromBuffer.rc_car_reverse) {
@@ -340,7 +348,7 @@ void setInput()
 			}
 		}
 
-		if (input < 47 + (80 * eepromBuffer.use_sine_start)) {
+		if (input < DSHOT_CMD_MAX + (80 * eepromBuffer.use_sine_start)) {
 			if (play_tone_flag != 0) {
 				switch (play_tone_flag) {
 					case 1:
@@ -382,10 +390,13 @@ void setInput()
 					if (dshot == 0)
 						prop_brake_duty_cycle = (getAbsDif(1000, newinput) + 1000);
 					if (dshot) {
-						if (newinput <= 1047 && newinput > 47)
-							prop_brake_duty_cycle = ((newinput - 48) * 2 + 47) - reversing_dead_band;
-						if (newinput > 1047)
-							prop_brake_duty_cycle = ((newinput - 1048) * 2 + 47) - reversing_dead_band;
+						if (newinput <= DSHOT_3D_REVERSE_MAX && newinput > DSHOT_CMD_MAX)
+							prop_brake_duty_cycle =
+								((newinput - DSHOT_MIN_THROTTLE) * 2 + DSHOT_CMD_MAX) - reversing_dead_band;
+						if (newinput > DSHOT_3D_REVERSE_MAX)
+							prop_brake_duty_cycle =
+								((newinput - DSHOT_3D_FORWARD_MIN_THROTTLE) * 2 + DSHOT_CMD_MAX) -
+								reversing_dead_band;
 					}
 					if (prop_brake_duty_cycle >= (1999)) {
 						fullBrake();
@@ -443,7 +454,7 @@ void setInput()
 			}
 		}
 		if (!prop_brake_active) {
-			if (input >= 47 && (zero_crosses < (uint32_t)(30 >> eepromBuffer.stall_protection))) {
+			if (input >= DSHOT_CMD_MAX && (zero_crosses < (uint32_t)(30 >> eepromBuffer.stall_protection))) {
 				if (duty_cycle_setpoint < min_startup_duty) {
 					duty_cycle_setpoint = min_startup_duty;
 				}
@@ -461,7 +472,7 @@ void setInput()
 				}
 			}
 
-			if (stall_protection_adjust > 0 && input > 47) {
+			if (stall_protection_adjust > 0 && input > DSHOT_CMD_MAX) {
 				duty_cycle_setpoint = duty_cycle_setpoint + (uint16_t)(stall_protection_adjust / 10000);
 			}
 		}
@@ -670,8 +681,8 @@ RAM_FUNC void tenKhzRoutine()
 			}
 			if (use_speed_control_loop && escIsDriving()) {
 				input_override += doPidCalculations(&speedPid, e_com_time, target_e_com_time);
-				if (input_override > 2047 * 10000) {
-					input_override = 2047 * 10000;
+				if (input_override > DSHOT_MAX_THROTTLE * 10000) {
+					input_override = DSHOT_MAX_THROTTLE * 10000;
 				}
 				if (input_override < 0) {
 					input_override = 0;
@@ -728,7 +739,7 @@ RAM_FUNC void tenKhzRoutine()
 		}
 
 		/* Inside !escInSineStart(): escIsDriving() ≡ running. */
-		if (escIsDriving() && input > 47) {
+		if (escIsDriving() && input > DSHOT_CMD_MAX) {
 			if (eepromBuffer.variable_pwm) {}
 			adjusted_duty_cycle = (((uint32_t)duty_cycle * pwm_to_arr_scale_q16) >> 16) + 1;
 

@@ -103,7 +103,7 @@ void computeDshotDMA()
 			checkCRC = (~checkCRC) & 0xF;
 		}
 
-		int tocheck = frame >> 5; // upper 11 bits: throttle value or command
+		int tocheck = frame >> DSHOT_VALUE_SHIFT; // upper 11 bits: throttle value or command
 
 		if (calcCRC == checkCRC) {
 			signaltimeout = 0;
@@ -113,29 +113,30 @@ void computeDshotDMA()
 			hwci_perf.dshot_telem_mode = (uint8_t)dshot_telemetry;
 			hwci_perf.dshot_edt_mode = dshot_extended_telemetry;
 #endif
-			if (frame & 0x10) { // telemetry request bit
+			if (frame & DSHOT_TELEMETRY_BIT) {
 				send_telemetry = 1;
 			}
-			if (programming_mode > 0) {
-				if (programming_mode == 1) { // begin programming mode
-					position = tocheck;  // eepromBuffer position
-					programming_mode = 2;
+			if (programming_mode > DSHOT_PROG_IDLE) {
+				if (programming_mode == DSHOT_PROG_WAIT_ADDRESS) {
+					position = tocheck; /* eepromBuffer index */
+					programming_mode = DSHOT_PROG_WAIT_VALUE;
 					return;
 				}
-				if (programming_mode == 2) {
-					new_byte = tocheck; // new value of setting
-					programming_mode = 3;
+				if (programming_mode == DSHOT_PROG_WAIT_VALUE) {
+					new_byte = tocheck;
+					programming_mode = DSHOT_PROG_WAIT_COMMIT;
 					return;
 				}
-				if (programming_mode == 3) {
-					if (tocheck == 37) { // commit new values to eeprom. must use save settings to make permanent.
+				if (programming_mode == DSHOT_PROG_WAIT_COMMIT) {
+					/* RAM only; DSHOT_CMD_SAVE_SETTINGS makes it permanent. */
+					if (tocheck == DSHOT_CMD_EXIT_PROGRAMMING_MODE) {
 						eepromBuffer.buffer[position] = new_byte;
-						programming_mode = 0;
+						programming_mode = DSHOT_PROG_IDLE;
 					}
 				}
-				return; // don't process dshot signal when in programming mode
+				return; /* ignore throttle / other commands while programming */
 			}
-			if (tocheck > 47) {
+			if (tocheck > DSHOT_CMD_MAX) {
 				if (EDT_ARMED) {
 					newinput = tocheck;
 					dshotcommand = 0;
@@ -144,11 +145,11 @@ void computeDshotDMA()
 				}
 			}
 
-			if ((tocheck <= 47) && (tocheck > 0)) {
+			if ((tocheck <= DSHOT_CMD_MAX) && (tocheck > DSHOT_CMD_MOTOR_STOP)) {
 				newinput = 0;
-				dshotcommand = tocheck; //  todo
+				dshotcommand = tocheck;
 			}
-			if (tocheck == 0) {
+			if (tocheck == DSHOT_CMD_MOTOR_STOP) {
 				if (EDT_ARM_ENABLE == 1) {
 					EDT_ARMED = 0;
 				}
@@ -163,59 +164,55 @@ void computeDshotDMA()
 				command_count = 0;
 			}
 
-			if ((dshotcommand > 0) && (running == 0) && armed) {
+			if ((dshotcommand > DSHOT_CMD_MOTOR_STOP) && (running == 0) && armed) {
 				if (dshotcommand != last_command) {
 					last_command = dshotcommand;
 					command_count = 0;
 				}
-				if (dshotcommand <= 5) {   // beacons
-					command_count = 6; // go on right away
+				if (dshotcommand <= DSHOT_CMD_BEACON5) {
+					command_count = DSHOT_CMD_REPEATS; /* beacons fire immediately */
 				}
 				command_count++;
-				if (command_count >= 6) {
+				if (command_count >= DSHOT_CMD_REPEATS) {
 					command_count = 0;
-					switch (dshotcommand) { // todo
-
-						case 1:
+					switch (dshotcommand) {
+						case DSHOT_CMD_BEACON1:
 							play_tone_flag = 1;
 							break;
-						case 2:
+						case DSHOT_CMD_BEACON2:
 							play_tone_flag = 2;
 							break;
-						case 3:
+						case DSHOT_CMD_BEACON3:
 							play_tone_flag = 3;
 							break;
-						case 4:
+						case DSHOT_CMD_BEACON4:
 							play_tone_flag = 4;
 							break;
-						case 5:
+						case DSHOT_CMD_BEACON5:
 							play_tone_flag = 5;
 							break;
-						case 6:
+						case DSHOT_CMD_ESC_INFO:
 							send_esc_info_flag = 1;
 							break;
-						case 7:
+						case DSHOT_CMD_SPIN_DIRECTION_1:
 							eepromBuffer.dir_reversed = 0;
 							forward = 1 - eepromBuffer.dir_reversed;
-							//	play_tone_flag = 1;
 							break;
-						case 8:
+						case DSHOT_CMD_SPIN_DIRECTION_2:
 							eepromBuffer.dir_reversed = 1;
 							forward = 1 - eepromBuffer.dir_reversed;
-							//	play_tone_flag = 2;
 							break;
-						case 9:
+						case DSHOT_CMD_3D_MODE_OFF:
 							eepromBuffer.bi_direction = 0;
 							break;
-						case 10:
+						case DSHOT_CMD_3D_MODE_ON:
 							eepromBuffer.bi_direction = 1;
 							break;
-						case 12:
+						case DSHOT_CMD_SAVE_SETTINGS:
 							saveEEpromSettings();
 							play_tone_flag = 1 + eepromBuffer.dir_reversed;
-							//	NVIC_SystemReset();
 							break;
-						case 13:
+						case DSHOT_CMD_EXTENDED_TELEMETRY_ENABLE:
 							dshot_extended_telemetry = 1;
 							send_EDT_init = 1;
 							if (EDT_ARM_ENABLE == 1) {
@@ -225,22 +222,21 @@ void computeDshotDMA()
 							hwci_perf.dshot_edt_mode = 1;
 #endif
 							break;
-						case 14:
+						case DSHOT_CMD_EXTENDED_TELEMETRY_DISABLE:
 							dshot_extended_telemetry = 0;
 							send_EDT_deinit = 1;
 #ifdef HWCI_PERF
 							hwci_perf.dshot_edt_mode = 0;
 #endif
 							break;
-						case 20:
+						case DSHOT_CMD_SPIN_DIRECTION_NORMAL:
 							forward = 1 - eepromBuffer.dir_reversed;
 							break;
-						case 21:
+						case DSHOT_CMD_SPIN_DIRECTION_REVERSED:
 							forward = eepromBuffer.dir_reversed;
 							break;
-						case 36:
-							programming_mode = 1;
-							//          armed = 0;           // disarm when entering programming mode
+						case DSHOT_CMD_ENTER_PROGRAMMING_MODE:
+							programming_mode = DSHOT_PROG_WAIT_ADDRESS;
 							break;
 					}
 					last_dshot_command = dshotcommand;
@@ -252,7 +248,7 @@ void computeDshotDMA()
 #ifdef HWCI_PERF
 			hwci_perf.dshot_rx_bad++;
 #endif
-			programming_mode = 0;
+			programming_mode = DSHOT_PROG_IDLE;
 		}
 	}
 }
@@ -276,23 +272,23 @@ void make_dshot_package(uint16_t com_time)
 			telem_scheduler.temp_count++;
 
 			if (telem_scheduler.current_count >= CURRENT_EDT_RATE_DIVISOR) {
-				extended_frame_to_send = 0b0110 << 8 | (uint8_t)(actual_current / 100);
+				extended_frame_to_send = DSHOT_EDT_PACK(DSHOT_EDT_CURRENT, actual_current / 100);
 				telem_scheduler.current_count = 0;
 			} else if (telem_scheduler.voltage_count >= VOLTAGE_EDT_RATE_DIVISOR) {
-				extended_frame_to_send = 0b0100 << 8 | (uint8_t)(battery_voltage / 25);
+				extended_frame_to_send = DSHOT_EDT_PACK(DSHOT_EDT_VOLTAGE, battery_voltage / 25);
 				telem_scheduler.voltage_count = 0;
 			} else if (telem_scheduler.temp_count >= TEMP_EDT_RATE_DIVISOR) {
-				extended_frame_to_send = 0b0010 << 8 | (uint8_t)degrees_celsius;
+				extended_frame_to_send = DSHOT_EDT_PACK(DSHOT_EDT_TEMPERATURE, degrees_celsius);
 				telem_scheduler.temp_count = 0;
 			}
 		}
 	}
 	if (send_EDT_init) {
-		extended_frame_to_send = 0b111000000000;
+		extended_frame_to_send = DSHOT_EDT_PACK(DSHOT_EDT_STATE_EVENT, 0x00);
 		send_EDT_init = 0;
 	}
 	if (send_EDT_deinit) {
-		extended_frame_to_send = 0b111011111111;
+		extended_frame_to_send = DSHOT_EDT_PACK(DSHOT_EDT_STATE_EVENT, 0xFF);
 		send_EDT_deinit = 0;
 	}
 
