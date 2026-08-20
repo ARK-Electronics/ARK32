@@ -28,6 +28,9 @@
 #		define GD_WAKE_US 1000u
 #	endif
 #	define GD_FAULT_RST_US 50u
+/* Main-loop polls to ignore nFAULT after ENABLE/nSLEEP rises. Covers the
+ * same-loop DroneCAN read after wake, and the first PWM edges. */
+#	define GD_NFAULT_GRACE_POLLS 8u
 
 #	if defined(USE_DRV_ENABLE)
 #		define GD_PORT DRV_ENABLE_PORT
@@ -38,6 +41,7 @@
 #	endif
 
 volatile uint8_t gate_driver_awake;
+static uint8_t gd_nfault_grace;
 
 void gateDriverInit(void)
 {
@@ -50,6 +54,7 @@ void gateDriverInit(void)
 	LL_GPIO_Init(GD_PORT, &s);
 	GD_PORT->BRR = GD_PIN;
 	gate_driver_awake = 0;
+	gd_nfault_grace = 0;
 }
 
 void gateDriverWakeBlocking(void)
@@ -72,6 +77,19 @@ void gateDriverWakeBlocking(void)
 	GD_PORT->BSRR = GD_PIN;
 	delayMicros(GD_WAKE_US);
 	gate_driver_awake = 1;
+	gd_nfault_grace = GD_NFAULT_GRACE_POLLS;
+}
+
+uint8_t gateDriverNfaultPinTrusted(void)
+{
+	return (uint8_t)(gate_driver_awake && gd_nfault_grace == 0u);
+}
+
+void gateDriverNfaultGraceTick(void)
+{
+	if (gd_nfault_grace) {
+		gd_nfault_grace--;
+	}
 }
 
 void gateDriverSleep(void)
@@ -86,6 +104,7 @@ void gateDriverSleep(void)
 #	endif
 	GD_PORT->BRR = GD_PIN;
 	gate_driver_awake = 0;
+	gd_nfault_grace = 0;
 }
 
 void gateDriverFaultResetPulse(void)
