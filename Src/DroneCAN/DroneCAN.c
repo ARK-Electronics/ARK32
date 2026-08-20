@@ -602,8 +602,7 @@ static uint8_t DroneCAN_nodeHealth(void)
 	/*
 	 * WARNING only for established hard trips (faultErrorCount: stall +
 	 * established jump desync) or active post-desync holdoff. Acquisition
-	 * roughness at low startup duty must stay OK — those no longer increment
-	 * desync_happened (see runtimeProcessDesyncCheck).
+	 * roughness and commanded-stop coast (PX4 disarm) must stay OK.
 	 */
 	if (faultErrorCount() > 0 || faultDesyncRestartHoldoffActive()) {
 		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_WARNING;
@@ -1007,7 +1006,15 @@ static void handle_ArmingStatus(CanardInstance *ins, CanardRxTransfer *transfer)
 		return;
 	}
 
+	const uint8_t was_armed = dronecan_armed;
 	dronecan_armed = (cmd.status == UAVCAN_EQUIPMENT_SAFETY_ARMINGSTATUS_STATUS_FULLY_ARMED);
+	/* ESC `armed` stays 1 after the first zero-throttle arm, so the
+	 * escToArmedIdle 0->1 reset never runs again. Each FC arm is a new
+	 * drive session — clear error_count so NodeStatus is OK until a real
+	 * in-session stall/desync. */
+	if (dronecan_armed && !was_armed) {
+		faultErrorCountReset();
+	}
 	if (!dronecan_armed && eepromBuffer.can.require_arming && canstats.last_raw_command_us != 0) {
 		set_input(0);
 	}
