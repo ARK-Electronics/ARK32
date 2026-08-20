@@ -82,15 +82,16 @@
 	 * lock at max_ramp 5/10/20/40, clean at 1). 20 (2%%/ms) matches the
 	 * factory image so an eeprom version bump does not re-widen the ramp. */
 #	define TARGET_DEFAULT_MAX_RAMP 20
-/* Ramp-regime CEILINGS (eeprom max_ramp can only lower below these, so
-	 * they bound the fastest reachable slew). Generic fallbacks 16/6 are
-	 * racing values; ARK vehicles are 5-10"+ PX4 craft where 8%%/ms full-
-	 * stick authority (0->100%% in 12.5 ms) is already far above controller
-	 * dynamics. Startup stays at the generic 2 - it governs spool-up
-	 * reliability. AM32_SITL_CAN copies the same ceilings so the plant
-	 * under test matches the production board. */
-#	define RAMP_SPEED_LOW_RPM 3
-#	define RAMP_SPEED_HIGH_RPM 8
+/*
+	 * Ramp-regime ceilings stay the generic AM32 6/16 (startup 2). eeprom
+	 * max_ramp can only lower them, so the factory 2%%/ms image still
+	 * flattens every regime to 2 - the production 5-10"+ vehicle preset.
+	 * Raising the slider toward 16%%/ms restores the graded 2/6/16
+	 * schedule so a high-kV 5-7" can match AM32 punch on this firmware.
+	 * Do not raise it on large props: the 900KV+10" snap 20->55%% bench
+	 * still desyncs at 4%%/ms. Heavy-prop vs sport is that config, not a
+	 * second binary (see ARK_4IN1_RAMP_F051 note below).
+	 */
 /* Closed-loop when commutation_interval < this (0.5 us ticks). Default
 	 * F051 fallback is 2000; noprop ~1k RPM has CI~2700 so the ESC stayed
 	 * open-loop (rough low-speed sound). Bench sweep on 900KV noprop:
