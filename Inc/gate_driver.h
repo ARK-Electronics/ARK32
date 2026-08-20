@@ -23,6 +23,10 @@ void gateDriverWakeBlocking(void);
 void gateDriverSleep(void);
 void gateDriverFaultResetPulse(void);
 void gateDriverPoll(void);
+/* 1 when ENABLE/nSLEEP is high and nFAULT is past the post-wake settle.
+ * Pin is asserted in sleep (VCP UVLO) and can glitch on the first PWM. */
+uint8_t gateDriverNfaultPinTrusted(void);
+void gateDriverNfaultGraceTick(void);
 
 static inline uint8_t gateDriverIsAwake(void)
 {
@@ -49,6 +53,11 @@ static inline uint8_t gateDriverIsAwake(void)
 {
 	return 1;
 }
+static inline uint8_t gateDriverNfaultPinTrusted(void)
+{
+	return 1;
+}
+static inline void gateDriverNfaultGraceTick(void) {}
 static inline void gateDriverEnsure(void) {}
 
 #endif

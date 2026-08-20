@@ -173,8 +173,16 @@ void faultErrorCountReset(void)
 uint8_t faultGateDriverFaultActive(void)
 {
 #if FAULT_HAS_DRV_NFAULT
-	const uint8_t pin_ok = (NFAULT_PORT->IDR & NFAULT_PIN) != 0u;
-	return (uint8_t)(!pin_ok || drv_nfault_latched);
+	if (drv_nfault_latched) {
+		return 1;
+	}
+	/* ENABLE/nSLEEP low asserts nFAULT (VCP UVLO). That is sleep, not a
+	 * trip — treating it as one made every arm/beep/idle publish a CAN
+	 * ERROR LogMessage and NodeStatus CRITICAL while the motor was fine. */
+	if (!gateDriverNfaultPinTrusted()) {
+		return 0;
+	}
+	return (uint8_t)((NFAULT_PORT->IDR & NFAULT_PIN) == 0u);
 #else
 	return 0;
 #endif
@@ -199,6 +207,11 @@ void faultPollGateDriver(void)
 			drv_enable_retry_div = 0;
 #	endif
 		}
+		return;
+	}
+
+	gateDriverNfaultGraceTick();
+	if (!gateDriverNfaultPinTrusted()) {
 		return;
 	}
 

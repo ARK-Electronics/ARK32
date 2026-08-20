@@ -217,7 +217,9 @@ void faultErrorCountReset(void);
  */
 void faultPollGateDriver(void);
 
-/* 1 while nFAULT is asserted or a gate-driver latch is still held. */
+/* 1 while a real gate-driver trip is latched, or nFAULT is low while the
+ * driver is awake and past post-wake settle. Sleep (ENABLE/nSLEEP low) does
+ * not count — the pin is asserted by VCP UVLO then. */
 uint8_t faultGateDriverFaultActive(void);
 
 #endif /* FAULTS_H_ */
