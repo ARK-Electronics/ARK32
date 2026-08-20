@@ -141,6 +141,14 @@ static void escForceState(esc_state_t next)
 
 void escReconcileFromFlags(void)
 {
+	/* A stopped motor is a new run next time. The established-run latch
+	 * must not survive PX4 disarm / zero throttle: ESC `armed` stays 1
+	 * across FC arm/disarm, so leftover established made the next
+	 * idle-start jump look like an in-flight desync (error_count/WARN). */
+	if (!running && !stepper_sine) {
+		fault_run_established = 0;
+	}
+
 	/* Latched faults win over drive mode. */
 	if (bemf_timeout_happened == ESC_STUCK_LATCH || faultGateDriverFaultActive()) {
 		escForceState(ESC_FAULT_STUCK);

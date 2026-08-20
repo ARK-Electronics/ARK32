@@ -134,9 +134,10 @@ uint8_t faultDesyncRestartHoldoffActive(void);
 extern volatile uint32_t fault_stall_trips;
 
 /*
- * Set once the loop has genuinely established (zero_crosses > 100) at any
- * point THIS ARM CYCLE; cleared with the other counters in
- * faultErrorCountReset().
+ * Set once the loop has genuinely established (zero_crosses > 100) while
+ * the motor is driving; cleared when running stops and with the other
+ * counters in faultErrorCountReset(). Not the ESC `armed` flag — that
+ * stays 1 across PX4 arm/disarm.
  *
  * The error-count rails cannot gate on the instantaneous zero_crosses:
  * that counter is reset in ten places, including by the desync and stall
@@ -183,9 +184,9 @@ extern volatile uint8_t fault_acq_resist_events;
  *   - desync_happened   : the jump-desync check in runtimeProcessDesyncCheck
  *   - fault_stall_trips : the INTERVAL_TIMER stall rail
  *
- * Both are zeroed on arm (0->1) via faultErrorCountReset() so a clean re-arm
- * reports error_count 0; the flight controller then sees only faults that
- * occurred after this arm. Do not clear only one addend - lifetimes must match.
+ * Both are zeroed on ESC armed 0->1 and on FC ArmingStatus 0->1 via
+ * faultErrorCountReset() so a clean re-arm reports error_count 0. Do not
+ * clear only one addend - lifetimes must match.
  *
  * Deliberately NOT additional addends, because each already funnels into the
  * stall rail and would double-count one physical failure:
@@ -199,7 +200,8 @@ extern volatile uint8_t fault_acq_resist_events;
  */
 uint32_t faultErrorCount(void);
 
-/* Zero both error_count addends. Call only on the armed 0->1 edge. */
+/* Zero both error_count addends and the established-run latch. Call on
+ * ESC armed 0->1 and on FC ArmingStatus 0->1. */
 void faultErrorCountReset(void);
 
 /*

@@ -231,6 +231,7 @@ void runtimeProcessDesyncCheck(void)
 		if (desynced) {
 			slow_avg_revs = 0;
 			const uint32_t zc_at_desync = zero_crosses;
+			const uint8_t commanded_stop = (input <= DSHOT_CMD_MAX);
 			// Freeze the throttle ceiling briefly: k_erpm is about to
 			// collapse because the ESTIMATE died, not because the rotor
 			// did, and re-deriving the ceiling from the collapsed
@@ -266,7 +267,12 @@ void runtimeProcessDesyncCheck(void)
 			// desyncs comes back through here with a rebuilt count and
 			// would otherwise be misfiled as an acquisition kick and never
 			// reported. A start that never got going never sets the latch.
-			if (fault_run_established) {
+			//
+			// Commanded stop (input < 48, PX4 disarm / zero throttle): BEMF
+			// dies while running is still 1, so interval jumps look like a
+			// desync. The stall rail already skips those; counting them
+			// here left error_count/WARN set on every arm/disarm.
+			if (fault_run_established && !commanded_stop) {
 				desync_happened++;
 			}
 			// ESCALATION is deliberately NOT on the latch: it must ask "is
@@ -276,7 +282,9 @@ void runtimeProcessDesyncCheck(void)
 			// fills the bucket in a few events and latches the ESC during
 			// the recovery it should be riding out. Live regime test only.
 			if (zc_at_desync > 100) {
-				faultDesyncEpisodeCharge(DESYNC_EPISODE_JUMP);
+				if (!commanded_stop) {
+					faultDesyncEpisodeCharge(DESYNC_EPISODE_JUMP);
+				}
 				if ((!eepromBuffer.bi_direction && (input > DSHOT_CMD_MAX)) || commutation_interval > 1000) {
 					running = 0;
 				}
@@ -286,7 +294,7 @@ void runtimeProcessDesyncCheck(void)
 				 * live reseed overflows the 99.8% flash gate. */
 				average_interval = 5000;
 #endif
-			} else {
+			} else if (!commanded_stop) {
 				faultNoteEarlyDesync();
 			}
 			/* Always fall back to poll-ZC path after a desync event. */
