@@ -403,24 +403,24 @@ void faultUpdateBemfTimeoutPolicy(void)
 	}
 
 #	if defined(MCU_G431)
-		/*
+	/*
 		 * ARK 12S CAN (G4): free-run high-KV crawl lives above DShot~150 while
 		 * BEMF is still weak. F051 gets clean edges from COMP hysteresis there;
 		 * until G4 hysteresis settles, keep the soft stall budget (100) out to
 		 * input 400 so restart thrash does not latch stuck_rotor in 10 kicks.
 		 * Established high-throttle stuck detection still uses 10.
 		 */
-		if (adjusted_input < 400) {
-			bemf_timeout = 100;
-		} else {
-			bemf_timeout = 10;
-		}
+	if (adjusted_input < 400) {
+		bemf_timeout = 100;
+	} else {
+		bemf_timeout = 10;
+	}
 #	else
-		if (adjusted_input < 150) { // startup duty cycle should be low enough to not burn motor
-			bemf_timeout = 100;
-		} else {
-			bemf_timeout = 10;
-		}
+	if (adjusted_input < 150) { // startup duty cycle should be low enough to not burn motor
+		bemf_timeout = 100;
+	} else {
+		bemf_timeout = 10;
+	}
 #	endif
 #endif
 }
