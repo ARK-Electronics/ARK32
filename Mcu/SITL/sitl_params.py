@@ -57,7 +57,7 @@ PARAMS = [
     (24, 'PWM_FREQUENCY', 8, 48, 24, 'PWM carrier, kHz'),
     (25, 'STARTUP_POWER', 50, 150, 100, 'startup duty, percent'),
     (26, 'MOTOR_KV', 0, 255, 55, 'motor Kv, stored as (kv-20)/40'),
-    (27, 'MOTOR_POLES', 2, 64, 14, 'magnet poles (not pole pairs)'),
+    (27, 'MOTOR_POLES', 2, 128, 14, 'magnet poles (not pole pairs)'),
     (28, 'BRAKE_ON_STOP', 0, 1, 0, 'brake when throttle is zero'),
     (29, 'STALL_PROTECTION', 0, 1, 0, 'restart on stall'),
     (30, 'BEEP_VOLUME', 0, 11, 5, 'startup and beacon tone volume'),

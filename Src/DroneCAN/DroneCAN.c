@@ -161,7 +161,7 @@ static const struct parameter {
 	{"REQUIRE_ARMING", T_BOOL, 0, 1, 1, &eepromBuffer.can.require_arming},
 	{"REQUIRE_ZERO_THROTTLE", T_BOOL, 0, 1, 1, &eepromBuffer.can.require_zero_throttle},
 	{"MOTOR_KV", T_UINT16, 20, 10220, 2000, &motor_kv},
-	{"MOTOR_POLES", T_UINT8, 2, 64, 14, &eepromBuffer.motor_poles},
+	{"MOTOR_POLES", T_UINT8, MOTOR_POLES_MIN, MOTOR_POLES_MAX, 14, &eepromBuffer.motor_poles},
 
 	// motor_kv, low_cell_volt_cutoff, STARTUP_TUNE, CURRENT_LIMIT value need to adjust to dronecan gui tool
 	// motor_kv 1k/V

@@ -211,7 +211,7 @@ class MainWindow(QWidget):
         cg.addWidget(self.node_spin, 4, 1)
 
         self.poles_spin = QSpinBox()
-        self.poles_spin.setRange(2, 64)
+        self.poles_spin.setRange(2, 128)
         self.poles_spin.setValue(14)
         cg.addWidget(QLabel('Motor poles'), 5, 0)
         cg.addWidget(self.poles_spin, 5, 1)
