@@ -17,8 +17,8 @@
 #include <assert.h>
 
 /* Ship version embedded after FILE_NAME in the .file_name region so the
- * configurator can show major.minor.patch[-tag]. EEPROM still only has the
- * two upstream major/minor bytes. */
+ * configurator can show major.minor.patch. EEPROM still only has the two
+ * upstream major/minor bytes. */
 #define AM32_VER_STR_HELPER(x) #x
 #define AM32_VER_STR(x) AM32_VER_STR_HELPER(x)
 #if defined(VERSION_PATCH) && defined(VERSION_TAG)
@@ -121,7 +121,7 @@ uint16_t low_cell_volt_cutoff = 330; // 3.3volts per cell
  * section empty and the firmware unidentifiable.
  *
  * Layout (32-byte region below EEPROM): `FILE_NAME\0VERSION\0…`
- * VERSION is the full ship string (e.g. 3.0.2-ark). Older tools only decode
+ * VERSION is the full ship string (e.g. 3.0.3). Older tools only decode
  * up to the first NUL and still see the board identity for asset matching.
  */
 const char filename[32] __attribute__((used)) AM32_FLASH_SECTION(".file_name") = FILE_NAME "\0" FIRMWARE_VERSION_EMBED;
