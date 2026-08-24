@@ -233,6 +233,14 @@ def test_steady_duty_desync_leaves_ramp_fixed(sitl_factory, state_stream):
     the configured ramp. This is the episode that crashed the vehicle. The
     bucket must still charge - removing the learned halve must not weaken
     the always-on escalation path.
+
+    Do not condition on desync_happened: after #87 a mode-1 blackout is
+    bridged by blind steps and, once it outlasts BEMF_STALL_TICKS, hands
+    off through the stall rail. That path charges desync_episode_bucket
+    and does not increment desync_happened (see the slew-case test and
+    the error_count comment in faults.h). The inject must also outlast
+    that budget: 60 * ci_us has been 12.6 ms on the unloaded plant, and
+    12.6 ms is a clean ride-through with no episode at all.
     '''
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     sim = state_stream(sitl)
@@ -253,18 +261,51 @@ def test_steady_duty_desync_leaves_ramp_fixed(sitl_factory, state_stream):
         assert steady['running'], (steady, sitl.log_tail())
         base = _ramp(steady)
 
-        ci_us = max(steady['commutation_interval'] // 2, 100)
-        _zc_fault(ctl, mode=1, duration_us=60 * ci_us)
         first = None
-        probe_end = time.time() + 3.0
-        while time.time() < probe_end:
-            s = _zc_stats(ctl)
-            _assert_ramp_fixed(base, s, 'steady-duty desync', sitl)
-            if s['desync_happened'] > steady['desync_happened']:
-                first = s
+        saw_desync = False
+        for _ in range(6):
+            s0 = _zc_stats(ctl)
+            if not (s0['running'] and not s0['old_routine']
+                    and s0['zero_crosses'] > 100):
+                try:
+                    s0 = _spool_established(sitl, sim, ctl, tx, value=900,
+                                            budget=8.0)
+                except AssertionError:
+                    continue
+            ci_us = max(s0['commutation_interval'] // 2, 100)
+            # Longer blackouts: after #87 a dropout shorter than
+            # BEMF_STALL_TICKS (22.5 ms) is ridden out with blind steps
+            # and charges nothing. Floor at 80 ms like
+            # test_ceiling_hold_engages_on_desync.
+            fault_us = max(80 * ci_us, 80_000)
+            bucket0 = int(s0['desync_episode_bucket'])
+            d0 = int(s0['desync_happened'])
+            _zc_fault(ctl, mode=1, duration_us=fault_us)
+            probe_end = time.time() + 3.0
+            while time.time() < probe_end:
+                s = _zc_stats(ctl)
+                _assert_ramp_fixed(base, s, 'steady-duty desync', sitl)
+                if s['desync_happened'] > d0:
+                    saw_desync = True
+                if s['desync_episode_bucket'] > bucket0:
+                    first = s
+                    break
+            if first is not None:
                 break
+            # Recover for another attempt; keep the stick at 900 so duty
+            # is still steady when the next inject lands.
+            _zc_fault(ctl, mode=0, duration_us=0)
+            tx.value = 900
+            try:
+                _spool_established(sitl, sim, ctl, tx, value=900, budget=8.0)
+            except AssertionError:
+                continue
+
         assert first is not None, (
-            'fault injection never produced a desync\n' + sitl.log_tail())
+            'fault injection never charged desync_episode_bucket, so this '
+            'test proved nothing - a re-introduced halve would not have '
+            'been given a chance to fire (saw_desync=%s)\n%s'
+            % (saw_desync, sitl.log_tail()))
         assert first['desync_episode_bucket'] > steady[
             'desync_episode_bucket'], (
             'episode bucket did not charge on an established-run desync - '
