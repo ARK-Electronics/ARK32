@@ -15,7 +15,7 @@ on:
   push:
     branches: ["ark-release"]
     tags:
-      # Matches v3.0, v3.0.1, v3.0.1-ark, v3.0-ark-rc1, etc. (glob, not full regex).
+      # Matches v3.0, v3.0.1, v3.0.3, v3.0.3-rc1, etc. (glob, not full regex).
       - "v[0-9]*.[0-9]*"
   pull_request:
     branches: ["ark-release"]
@@ -67,7 +67,7 @@ jobs:
             case "$base" in
               ARK32_*_*.hex)
                 # Reject empty target/version segments (ARK32__.hex, ARK32_x_.hex).
-                # MAJOR.MINOR[.PATCH][-tag], e.g. 3.0-ark, 3.0.1-ark
+                # MAJOR.MINOR[.PATCH][-optional-tag], e.g. 3.0.3, 3.0.3-rc1
                 if [[ ! "$base" =~ ^ARK32_[A-Za-z0-9][A-Za-z0-9_]*_[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9._-]+)?\.hex$ ]]; then
                   echo "error: hex name does not match ARK32_<target>_<MAJOR.MINOR[.PATCH][-tag]>.hex: $base" >&2
                   bad=1
