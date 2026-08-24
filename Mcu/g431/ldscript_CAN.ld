@@ -140,19 +140,15 @@ SECTIONS
     _bl_image_end = .;
   } > FLASH
 
-  /* The file name */
+  /* The file name. motor_runtime.c places a 32-byte object here
+     (FILE_NAME\0VERSION\0 plus zero fill). Do not append BYTE/fill:
+     that overflowed the 32-byte region by 2 after the version embed. */
   .file_name :
   {
-    FILL(0x00);
     . = ALIGN(4);
     KEEP (*(.file_name))
-    BYTE(0x00)
+    . = ALIGN(4);
   } >FILE_NAME
-
-  .filename_fill :
-  {
-        BYTE(0x00);
-  } > FILE_NAME
 
   /* Used by the startup to initialize data */
   _sidata = LOADADDR(.data);

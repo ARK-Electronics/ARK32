@@ -146,9 +146,9 @@ jobs:
         with:
           name: ark-g431-can
           path: |
-            obj/AM32_ARK_G431_CAN_*.elf
-            obj/AM32_ARK_G431_CAN_*.bin
-            obj/AM32_ARK_G431_CAN_*.hex
+            obj/ARK32_ARK_G431_CAN_*.elf
+            obj/ARK32_ARK_G431_CAN_*.bin
+            obj/ARK32_ARK_G431_CAN_*.hex
             obj/*.uavcan.bin
           if-no-files-found: ignore
           retention-days: 14
