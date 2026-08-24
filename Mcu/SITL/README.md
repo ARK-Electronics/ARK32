@@ -11,7 +11,7 @@ commutation, DroneCAN protocol, parameters) without ESC hardware.
 make AM32_SITL_CAN
 ```
 
-produces `obj/AM32_AM32_SITL_CAN_<version>.elf`, a normal Linux
+produces `obj/ARK32_AM32_SITL_CAN_<version>.elf`, a normal Linux
 executable.
 
 ### Sanitizers and valgrind
@@ -42,7 +42,7 @@ the sim thread; the wrapper sets it.
 ## Running
 
 ```
-obj/AM32_AM32_SITL_CAN_*.elf --node-id 10 --verbose
+obj/ARK32_AM32_SITL_CAN_*.elf --node-id 10 --verbose
 ```
 
 Options:
@@ -187,7 +187,7 @@ python3 Mcu/SITL/make_gui_env.py
   bad-CRC injection), e.g.:
 
 ```
-obj/AM32_AM32_SITL_CAN_*.elf --can-uri none --input-type 1
+obj/ARK32_AM32_SITL_CAN_*.elf --can-uri none --input-type 1
 python3 Mcu/SITL/dshot_test.py --type dshot600 --bidir --edt --throttle 800
 ```
 
@@ -260,7 +260,7 @@ interrupts are delivered by parking the firmware thread with SIGUSR1,
 which gdb must pass through silently. `Mcu/SITL/gdbinit` sets that up:
 
 ```
-gdb -x Mcu/SITL/gdbinit --args obj/AM32_AM32_SITL_CAN_*.elf --can-uri none --input-type 1
+gdb -x Mcu/SITL/gdbinit --args obj/ARK32_AM32_SITL_CAN_*.elf --can-uri none --input-type 1
 (gdb) break tenKhzRoutine
 (gdb) run
 ```

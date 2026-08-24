@@ -27,7 +27,7 @@ jobs:
         run: |
           mkdir sitl_test_run && cd sitl_test_run
           ../sitl-venv/bin/python ../Mcu/SITL/run_ci_tests.py \
-            --sitl ../obj/AM32_AM32_SITL_CAN_*.elf \
+            --sitl ../obj/ARK32_AM32_SITL_CAN_*.elf \
             --junitxml=sitl-results.xml
 
       - name: Upload SITL log on failure
@@ -69,7 +69,7 @@ jobs:
           mkdir gui_test_run && cd gui_test_run
           python3 ../Mcu/SITL/gui_ci_test.py \
             --gui-python ../Mcu/SITL/venv/bin/python3 \
-            --sitl ../obj/AM32_AM32_SITL_CAN_*.elf
+            --sitl ../obj/ARK32_AM32_SITL_CAN_*.elf
 
       - name: Upload SITL log on failure
         if: failure()
@@ -105,7 +105,7 @@ jobs:
           # range (49152-65535), which Hyper-V/WinNAT reserves in blocks on
           # the hosted runners - bind() there fails with EACCES ("Permission
           # denied"). Anything below 49152 is outside the reservable range.
-          ./obj/AM32_AM32_SITL_CAN_*.elf --can-uri none --input-type 1 \
+          ./obj/ARK32_AM32_SITL_CAN_*.elf --can-uri none --input-type 1 \
             --input-port 17733 --state-port 17734 >boot.log 2>&1 &
           sleep 3
           kill %1 || true
@@ -123,7 +123,7 @@ jobs:
         run: |
           cd $(cygpath -u "$GITHUB_WORKSPACE")
           mkdir -p sitl-windows
-          cp obj/AM32_AM32_SITL_CAN_*.elf sitl-windows/AM32_SITL_CAN.exe
+          cp obj/ARK32_AM32_SITL_CAN_*.elf sitl-windows/AM32_SITL_CAN.exe
           cp /bin/cygwin1.dll sitl-windows/
 
       - name: Upload Windows SITL binary

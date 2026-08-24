@@ -51,7 +51,7 @@ jobs:
         run: |
           make AM32_SITL_CAN SITL_CROSS=win
           mkdir -p sitl-windows
-          cp obj/AM32_AM32_SITL_CAN_*.elf sitl-windows/AM32_SITL_CAN.exe
+          cp obj/ARK32_AM32_SITL_CAN_*.elf sitl-windows/AM32_SITL_CAN.exe
 
       - uses: actions/upload-artifact@v4
         with:

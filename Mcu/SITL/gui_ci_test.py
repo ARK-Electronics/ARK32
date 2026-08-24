@@ -146,7 +146,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--gui-python', required=True)
     # don't hardcode the firmware version in the default binary path
-    pat = os.path.join(HERE, '..', '..', 'obj', 'AM32_AM32_SITL_CAN_*.elf')
+    pat = os.path.join(HERE, '..', '..', 'obj', 'ARK32_AM32_SITL_CAN_*.elf')
     hits = sorted(glob.glob(pat))
     ap.add_argument('--sitl', default=os.path.normpath(hits[0]) if hits else None)
     args = ap.parse_args()

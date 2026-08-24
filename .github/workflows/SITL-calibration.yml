@@ -57,7 +57,7 @@ jobs:
         run: |
           mkdir calibration_run && cd calibration_run
           python3 ../Mcu/SITL/run_calibration_tests.py \
-            --sitl ../obj/AM32_AM32_SITL_CAN_*.elf \
+            --sitl ../obj/ARK32_AM32_SITL_CAN_*.elf \
             --dataset ${{ matrix.dataset }} \
             --artifacts ../calibration_artifacts
 

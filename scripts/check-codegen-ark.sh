@@ -43,7 +43,7 @@ fi
 
 ELF="${1:-}"
 if [ -z "$ELF" ]; then
-  ELF=$(ls -1 obj/AM32_ARK_4IN1_F051_*.elf 2>/dev/null | head -1 || true)
+  ELF=$(ls -1 obj/ARK32_ARK_4IN1_F051_*.elf 2>/dev/null | head -1 || true)
 fi
 if [ -z "$ELF" ] || [ ! -f "$ELF" ]; then
   echo "error: no ARK F051 elf — build ARK_4IN1_F051 first" >&2

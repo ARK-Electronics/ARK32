@@ -32,9 +32,9 @@ RAM_CAPACITY="${RAM_CAPACITY:-8000}"
 FLASH_MAX_PCT="${FLASH_MAX_PCT:-99.8}"
 RAM_MAX_PCT="${RAM_MAX_PCT:-90}"
 
-ELF=$(ls -1 obj/AM32_ARK_4IN1_F051_*.elf 2>/dev/null | head -1 || true)
+ELF=$(ls -1 obj/ARK32_ARK_4IN1_F051_*.elf 2>/dev/null | head -1 || true)
 if [ -z "$ELF" ] || [ ! -f "$ELF" ]; then
-  echo "error: no obj/AM32_ARK_4IN1_F051_*.elf — build ARK_4IN1_F051 HWCI_PERF=1 first" >&2
+  echo "error: no obj/ARK32_ARK_4IN1_F051_*.elf — build ARK_4IN1_F051 HWCI_PERF=1 first" >&2
   exit 2
 fi
 

@@ -23,7 +23,7 @@ Designed for CI:
   for human review
 
 usage:
-  run_calibration_tests.py --sitl ../obj/AM32_AM32_SITL_CAN_*.elf
+  run_calibration_tests.py --sitl ../obj/ARK32_AM32_SITL_CAN_*.elf
   run_calibration_tests.py --dataset ark_900kv_noprop --skip-chirp
 '''
 
@@ -409,7 +409,7 @@ def main():
     sitl_bin = os.path.abspath(ARGS.sitl) if ARGS.sitl else None
     if not sitl_bin:
         import glob
-        cands = glob.glob(os.path.join(REPO, 'obj/AM32_AM32_SITL_CAN_*.elf'))
+        cands = glob.glob(os.path.join(REPO, 'obj/ARK32_AM32_SITL_CAN_*.elf'))
         if not cands:
             raise SystemExit('no SITL binary, pass --sitl')
         sitl_bin = cands[0]

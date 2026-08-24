@@ -26,7 +26,7 @@ def pytest_addoption(parser):
         '--sitl',
         action='store',
         default=None,
-        help='path to AM32 SITL binary (default: newest obj/AM32_AM32_SITL_CAN_*.elf)',
+        help='path to AM32 SITL binary (default: newest obj/ARK32_AM32_SITL_CAN_*.elf)',
     )
 
 

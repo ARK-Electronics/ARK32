@@ -22,10 +22,10 @@ Artifacts under `obj/`:
 
 | File | Contents |
 |------|----------|
-| `AM32_ARK_4IN1_F051_<ver>.bin` / `.hex` | Application only (existing make target) |
-| `AM32_ARK_4IN1_F051_<ver>.factory.bin` | **Full 32 KiB flash** — BL + app + EEPROM |
-| `AM32_ARK_4IN1_F051_<ver>.factory.hex` | Same image as Intel HEX |
-| `AM32_ARK_4IN1_F051_<ver>.eeprom.bin` | 1 KiB EEPROM page alone (debug / SWD poke) |
+| `ARK32_ARK_4IN1_F051_<ver>.bin` / `.hex` | Application only (existing make target) |
+| `ARK32_ARK_4IN1_F051_<ver>.factory.bin` | **Full 32 KiB flash** — BL + app + EEPROM |
+| `ARK32_ARK_4IN1_F051_<ver>.factory.hex` | Same image as Intel HEX |
+| `ARK32_ARK_4IN1_F051_<ver>.eeprom.bin` | 1 KiB EEPROM page alone (debug / SWD poke) |
 
 Flash the `.factory.bin` (or `.factory.hex`) at **`0x08000000`** with ST-Link / OpenOCD / production fixture. No configurator step is required for stock defaults.
 
@@ -34,8 +34,8 @@ Example OpenOCD (ST-Link + STM32F0):
 ```bash
 openocd -f interface/stlink.cfg -f target/stm32f0x.cfg \
   -c "init; halt; flash erase_sector 0 0 last; \
-      flash write_bank 0 obj/AM32_ARK_4IN1_F051_3.0.2-ark.factory.bin 0; \
-      flash verify_bank 0 obj/AM32_ARK_4IN1_F051_3.0.2-ark.factory.bin 0; \
+      flash write_bank 0 obj/ARK32_ARK_4IN1_F051_3.0.2-ark.factory.bin 0; \
+      flash verify_bank 0 obj/ARK32_ARK_4IN1_F051_3.0.2-ark.factory.bin 0; \
       reset run; exit"
 ```
 
