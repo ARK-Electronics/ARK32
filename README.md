@@ -16,21 +16,45 @@ For stock AM32 releases, configurators, Discord, and community support, prefer *
 
 ## What ARK32 adds
 
-### Commutation: BLHeli-style blind stepping, poll mode is startup-only
+### Commutation: how the motor is timed
 
-Upstream runs two commutation modes and switches between them at runtime: an interrupt-driven closed loop on the comparator zero-cross (ZC), and a slower polled ("old routine") mode that it falls back to whenever the average commutation interval gets long. On ARK targets that fallback was the failure mode — a single missed crossing under load dropped the loop back to poll mode, which is slower, so the average got worse, so it stayed there. Motors could sit in an OL↔CL oscillation instead of spooling.
+The ESC times the motor two ways:
 
-ARK32 replaces the runtime mode switch with per-step extrapolation, the way BLHeli handles a missed crossing:
+1. **Poll** (open loop). The 20 kHz loop reads BEMF and steps when it sees a crossing. This is slower. It is how the motor starts, and how it recovers if timing is lost.
+2. **Interrupt** (closed loop). A comparator interrupt fires on each zero-cross. This is faster. It is used once the motor is spinning.
 
-- **Missed-ZC deadline.** After each commutation, `COM_TIMER` is re-armed as a deadline for the *next* crossing — expected arrival plus 50% grace. An accepted crossing cancels it by re-arming the timer for the normal commutation schedule.
-- **Blind step.** If the deadline fires first, the ESC commutates blind and takes the full elapsed time as the (late) interval measurement. The inflated sample pulls the running average toward *slower* timing — the safe direction for a decelerating rotor — and the next real crossing resyncs immediately. Blind steps do not count as zero crosses.
-- **Bounded.** 8 consecutive blind steps means position is genuinely unknown: commutation stops and the existing `INTERVAL_TIMER` stall rail restarts the motor through the normal startup ramp.
-- **No CL→OL exit at runtime.** Poll mode's enter thresholds are unchanged, but they now only apply during startup. Once the loop is on interrupts it stays there or restarts — it never degrades into polling.
-- **Interrupt-ZC trust rail.** A closed loop can hold a *stable false lock*, tracking switching artifact edges below usable BEMF: crossings keep arriving on time, so neither the blind-step deadline nor the average-jump desync check can see anything wrong. If a closed loop's per-electrical-rev average stays above `polling_mode_changeover + 500` for 4 consecutive revs, it is treated as a desync and restarted through startup. The 4-rev gate keeps a lagging average during spool-up from tripping it.
+Upstream AM32 switches back to poll whenever the average step time looks long. On ARK ESCs that was a trap: one missed crossing made the average look slower, poll stayed in control, and the motor bounced between the two modes instead of spooling.
 
-Net effect: a missed crossing costs one extrapolated step instead of a mode change. In SITL, `racer_5inch` spools to ~13.7k rpm and holds, where the previous behavior bounced between open and closed loop around ~3k. Low-throttle crawl and throttle-chop behavior are unchanged.
+ARK32 still uses poll to start and to recover. It does **not** drop to poll just because one crossing was missed.
 
-Source: [`Src/bemf_zc.c`](Src/bemf_zc.c) (deadline, blind step, resync), [`Src/commutation.c`](Src/commutation.c) (mode entry), [`Src/runtime_loop.c`](Src/runtime_loop.c) (desync / trust rail).
+**Startup.** The motor starts in poll. When the step time is short enough (`polling_mode_changeover`), it switches to interrupts. For the first 100 crossings, a still-slow average puts it back in poll. That stops a noisy first kick from jumping into interrupt mode with no real BEMF.
+
+**Missed crossings (interrupt mode).** After each step the ESC sets a deadline for the next crossing: expected time plus 50%. If the crossing arrives, the deadline is cancelled. If the deadline fires first, the ESC steps anyway (a **blind step**) and uses that late time as the interval. Timing moves slower — the safe direction if the rotor is slowing. The next real crossing locks on again. Blind steps do not count as zero-crosses.
+
+**How long it will run blind.** Time spent without a real crossing is added up (`zc_blind_ticks`). A real crossing clears it. If that time reaches the same stall budget as upstream (`BEMF_STALL_TICKS`), the ESC no longer knows rotor position: it stops and restarts through poll. While the budget is used up, throttle is reduced smoothly. A few misses only cut a little power. A 50% miss rate can keep flying; only a long stretch with no real crossings exhausts the budget.
+
+**When it does go back to poll after startup**
+
+- **Desync** (the average step time jumps). Always return to poll and re-acquire.
+- **Sustained slow closed loop.** If interrupt mode stays slower than `polling_mode_changeover + 500` for 4 electrical revs (2 at high duty), hand back to poll with no desync count. A throttle chop that slows through this band then behaves like upstream. A false lock on a stopped rotor finds no real crossings in poll, and the stall restart takes over.
+
+A missed crossing costs one extra step, not a mode change. Poll is the slow-speed and recovery path, not the reaction to every miss.
+
+Source: [`Src/bemf_zc.c`](Src/bemf_zc.c) (deadline, blind step, stall handoff), [`Src/commutation.c`](Src/commutation.c) (poll ↔ interrupt), [`Src/runtime_loop.c`](Src/runtime_loop.c) (desync and slow-average handback), [`Src/control_loop.c`](Src/control_loop.c) (throttle fade while blind), [`Src/faults.c`](Src/faults.c) (stall restart).
+
+### Throttle and protection
+
+The ramp you set is the ramp that runs. It is scaled by pack voltage so the same setting means the same volts per millisecond on a 4S or an 8S pack. The firmware does **not** secretly slow the ramp after a desync (that made one motor lag the others).
+
+A BEMF-headroom ceiling also caps duty from measured rpm. A snap throttle on a heavy prop cannot command more slip than the motor can follow.
+
+Repeat desyncs or stalls charge a bucket. The first one restarts immediately. Later ones wait longer, then the ESC latches as stuck. Zero throttle clears the bucket.
+
+Source: [`Src/runtime_loop.c`](Src/runtime_loop.c) (governor), [`Src/faults.c`](Src/faults.c) (episode rail).
+
+### Gate driver sleep
+
+On the ARK 4IN1 the DRV8328 is put to sleep (`nSLEEP`) when the ESC is not driving, braking, or beeping. See [`Src/gate_driver.c`](Src/gate_driver.c).
 
 ### Global refactor
 Large control-path split out of a monolithic `main.c` into focused modules (runtime, settings, motor control helpers, and related MCU/F051 work). The goal is safer changes, clearer ownership of hot paths, and room for instrumentation without growing one file forever.
@@ -42,13 +66,12 @@ Native Linux build of the firmware against a simulated motor / bridge / battery,
 - CI: `.github/workflows/SITL.yml`
 
 ```bash
-make arm_sdk_install   # once, for cross toolchain (SITL itself is host gcc)
-make AM32_SITL_CAN
+make AM32_SITL_CAN    # host gcc; no Arm toolchain needed
 obj/ARK32_AM32_SITL_CAN_*.elf --node-id 10 --verbose
 ```
 
 ### HITL / Hardware-CI
-In-the-loop bench automation for the **ARK 4IN1** (and related F051 work): build/flash, drive the motor (Flight Stand and/or PX4 BDShot setups), read on-device performance counters over SWD, and produce metrics / pass-fail reports.
+In-the-loop bench automation for the **ARK 4IN1**: build/flash, drive the motor (Flight Stand and/or PX4 BDShot setups), read on-device performance counters over SWD, and produce metrics / pass-fail reports.
 
 - Harness: [hwci/README.md](hwci/README.md)
 - Bench setups: [hwci/docs/BENCH_SETUPS.md](hwci/docs/BENCH_SETUPS.md)
@@ -89,7 +112,7 @@ make factory-image
 make factory-image-check   # same + layout/defaults gate (CI)
 ```
 
-Firmware objects land under `obj/`. MCU families supported by the build system include F051, F031, G071, E230, F415, F421, L431, G431, V203, G031, A153, and SITL — exact product names live in `Inc/targets.h`.
+Firmware objects land under `obj/`. This fork’s product targets are **`ARK_4IN1_F051`** (ship firmware) and **`AM32_SITL_CAN`** (host sim). See [`Inc/targets.h`](Inc/targets.h). MCU HAL trees for other AM32 families are still in `Mcu/`, but they are not buildable products here.
 
 ### Production release image (ARK 4IN1)
 
@@ -107,7 +130,7 @@ That links the release app, then runs [`scripts/build_factory_image.py`](scripts
 | Application @ `0x08001000` | `make ARK_4IN1_F051` |
 | EEPROM @ `0x08007C00` | [`factory/ARK_4IN1_F051_eeprom_defaults.json`](factory/ARK_4IN1_F051_eeprom_defaults.json) |
 
-Ship/program `obj/ARK32_ARK_4IN1_F051_*.factory.bin` (or `.factory.hex`). Defaults (PWM-by-RPM, 1020 kV, 2 %/ms ramp, 15° fixed advance, PWM min/max 1020/1980 µs) are documented in [`factory/README.md`](factory/README.md).
+Ship/program `obj/ARK32_ARK_4IN1_F051_*.factory.bin` (or `.factory.hex`). Defaults (variable PWM, 1020 kV, 2 %/ms ramp, 15° fixed advance, PWM min/max 1020/1980 µs) are documented in [`factory/README.md`](factory/README.md).
 
 Optional static analysis / size / format helpers:
 
@@ -147,8 +170,7 @@ Pitch below is **relative** (higher PWM timer prescaler → lower pitch). Exact 
 
 | When you hear it | Pattern (pitch) | Function | Meaning |
 |------------------|-----------------|----------|---------|
-| Power-up (brushless) | Morse **“ARK”** (·– / ·–· / –·–) rising C6 → E6 → G6 (or custom melody) | `playStartupTune` | Firmware booted and is ready for input |
-| Power-up (brushed build) | 4 rising beeps | `playBrushedStartupTune` | Brushed-mode startup |
+| Power-up | Morse **“ARK”** (·– / ·–· / –·–) rising C6 → E6 → G6 (or custom melody) | `playStartupTune` | Firmware booted and is ready for input |
 | Signal lost (after soft-reset) | Single short low blip on C5 (~70 ms) | `playSignalLostTone` | RC/input timeout; distinct from the ARK boot tune |
 | Arm / throttle zero accepted | Morse **“R”** (·–·) on G6 | `playInputTune` | ESC armed / input lock-in (“roger”) |
 | Arm + cell LVC enabled | That “R” **once per cell** | `playInputTune` × N | Detected pack cell count (`Vbat / 3.70`) |
@@ -165,13 +187,10 @@ Pitch below is **relative** (higher PWM timer prescaler → lower pitch). Exact 
 
 | Function | When | Pattern |
 |----------|------|---------|
-| **`playStartupTune`** | Normal brushless boot (after init; also CRSF path) | If the previous run soft-reset from an RC **signal timeout**, plays **`playSignalLostTone`** instead (see below). Else if the previous run finished an app-side **bootloader update**, plays **`playBootloaderUpdatedTone`** then continues. Else if EEPROM custom tune byte 0 is programmed (not `0xFF`): plays **BlueJay-compatible** melody from `eepromBuffer.tune[]` via `playBlueJayTune`. Otherwise default: the **ARK signature tune** — “ARK” in morse code (·– / ·–· / –·–), one letter per step up a C major arpeggio (C6 → E6 → G6), ~1.4 s total. |
-| **`playSignalLostTone`** | Soft-reset after armed (~0.5 s) or disarmed (~2 s) input timeout (`faultPollSignalTimeout` → `NVIC_SystemReset`) | **One short low blip** on C5 (≈ 523 Hz, ~70 ms). Marked via a `.noinit` cookie before reset so cold boot still plays the full ARK tune. Linker `.noinit` is provided for **F051** and **G431** (gcc + Keil G431 scatter). |
+| **`playStartupTune`** | Normal boot after init | If the previous run soft-reset from an RC **signal timeout**, plays **`playSignalLostTone`** instead (see below). Else if the previous run finished an app-side **bootloader update**, plays **`playBootloaderUpdatedTone`** then continues. Else if EEPROM custom tune byte 0 is programmed (not `0xFF`): plays **BlueJay-compatible** melody from `eepromBuffer.tune[]` via `playBlueJayTune`. Otherwise default: the **ARK signature tune** — “ARK” in morse code (·– / ·–· / –·–), one letter per step up a C major arpeggio (C6 → E6 → G6), ~1.4 s total. |
+| **`playSignalLostTone`** | Soft-reset after armed (~0.5 s) or disarmed (~2 s) input timeout (`faultPollSignalTimeout` → `NVIC_SystemReset`) | **One short low blip** on C5 (≈ 523 Hz, ~70 ms). Marked via a `.noinit` cookie before reset so cold boot still plays the full ARK tune. The F051 linker provides `.noinit`. |
 | **`playBootloaderUpdatedTone`** | Next boot after a successful app-side bootloader rewrite (`maybe_update_bootloader` → `bootSoundMarkBootloaderUpdated` → reset) | **Two rising beeps** E6 → G6 (~90 ms + ~140 ms). Then the normal ARK/BlueJay startup continues. Cookie in `.noinit` so cold power-on never false-triggers. |
-| **`playBrushedStartupTune`** | `BRUSHED_MODE` builds only | **Four rising beeps** (~300 ms), phases 1–4 (prescalers 40 → 30 → 25 → 20). |
 | **`playBlueJayTune`** | Custom startup only | Notes/rests encoded in EEPROM tune blob (configurator “custom startup music”). Inter-note pause can scale with tune header byte 3. |
-
-Some AT32 F415 targets defer startup audio through `play_tone_flag` instead of calling the tune immediately at boot.
 
 ### Armed / input recognition
 
@@ -181,7 +200,7 @@ Played from the 20 kHz control path when the ESC transitions to armed-idle after
 |----------|------|---------|
 | **`playInputTune`** | Armed with **low-voltage cutoff mode 1** (cell-based) **off**, or as each cell beep | **Morse “R”** (·–·, “roger — signal received”) on G6 (≈ 1568 Hz), ~320 ms (same busy-wait budget as the old tune). |
 | **Cell-count beeps** | Armed **and** `low_voltage_cut_off == 1` | `cell_count = battery_voltage / 370` (≈ 3.70 V/cell), then **`playInputTune` once per cell** with ~100 ms gaps. Count the “R”s to read pack cell count. |
-| **`playInputTune2`** | DShot beacon 4; also used as deferred arm beep on some AT415 builds | Same **morse “R”** one arpeggio step lower (E6, ≈ 1319 Hz) so the beacon is distinguishable from the arm tune. |
+| **`playInputTune2`** | DShot beacon 4 | Same **morse “R”** one arpeggio step lower (E6, ≈ 1319 Hz) so the beacon is distinguishable from the arm tune. |
 
 ### Servo PWM stick calibration
 
@@ -204,7 +223,7 @@ DShot commands run only when **armed**, **motor not running**, and the command i
 | **5** | 5 | `playDefaultTone` — same as beacon 1 | Beacon 5 |
 | **12** | `1 + dir_reversed` | Rising if direction normal, falling if reversed | **Save settings** confirmation |
 
-Other DShot commands (direction, bi-dir, EDT, programming mode, etc.) do **not** play a dedicated melody unless noted above. Direction set (7/8) currently has confirmation beeps commented out in source.
+Other DShot commands (direction, bi-dir, EDT, programming mode, etc.) do **not** play a dedicated melody unless noted above. Direction set (7/8) has no confirmation beep.
 
 ### Beacon sweep detail
 
@@ -249,18 +268,20 @@ Every user-facing EEPROM field is documented in [`doc/eeprom-settings.md`](doc/e
 
 ## Configuration tools & stock firmware
 
+For ARK hardware use **[ARK32 Configurator](https://github.com/ARK-Electronics/ark32-configurator)**. Settings text is the same as [`doc/eeprom-settings.md`](doc/eeprom-settings.md).
+
 These are **upstream / community** tools; they are not ARK-specific:
 
 - [AM32 Configurator](https://am32.ca) (web) and [downloads](https://am32.ca/downloads)  
 - [esc-configurator.com](https://esc-configurator.com/)  
 - Upstream bootloaders (non-ARK): [am32-firmware/AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)  
-- Target list: [`Inc/targets.h`](Inc/targets.h) (this tree) or [upstream targets.h](https://github.com/am32-firmware/AM32/blob/main/Inc/targets.h)
+- Upstream target list: [am32-firmware/AM32 `Inc/targets.h`](https://github.com/am32-firmware/AM32/blob/main/Inc/targets.h)
 
 ---
 
-## Hardware (typical for ARK32)
+## Hardware
 
-ARK work centers on **STM32F051** 4-in-1 ESCs and related F051 targets, while the tree still builds the broader AM32 MCU set above. Upstream also documents STSPIN32F0, G071, GD32E230, AT32F415/F421, and others — see their hardware notes and compatibility charts.
+ARK32 ships the **ARK 4IN1** (four STM32F051 channels, DRV8328). SITL is a host build of the same firmware for tests. Other AM32 boards are not product targets in this tree — use [upstream AM32](https://github.com/am32-firmware/AM32) for those.
 
 ---
 
