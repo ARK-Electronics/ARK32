@@ -89,7 +89,10 @@ typedef union EEprom_u {
 			 * board that never wrote this page is coerced in
 			 * settings.c. */
 			uint8_t temp_derate_band; // 184
-			uint8_t reserved[7];	  // 185-191
+			/* CAN FD data-phase bitrate in Mbps: 0 = auto-match
+			 * the host (1/2/4/5), 1/2/4/5 = pinned. Byte 185. */
+			uint8_t fd_mbps;     // 185
+			uint8_t reserved[6]; // 186-191
 		} can;
 	};
 	uint8_t buffer[192];

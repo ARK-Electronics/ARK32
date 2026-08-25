@@ -32,6 +32,31 @@
 // dronecan_dsdlc compiler
 #	include "dsdl_generated/dronecan_msgs.h"
 
+#	if CANARD_ENABLE_CANFD
+static bool dronecan_tx_canfd;
+
+static void dc_note_rx_frame(const CanardCANFrame *f)
+{
+	dronecan_tx_canfd = f->canfd;
+}
+
+#		define DC_BROADCAST(...) canardBroadcast(__VA_ARGS__, dronecan_tx_canfd)
+#		define DC_RESPOND(...) canardRequestOrRespond(__VA_ARGS__, dronecan_tx_canfd)
+#	else
+static void dc_note_rx_frame(const CanardCANFrame *f)
+{
+	(void)f;
+}
+#		define DC_BROADCAST canardBroadcast
+#		define DC_RESPOND canardRequestOrRespond
+#	endif
+
+#	if CANARD_ENABLE_TAO_OPTION
+#		define DC_ENCODE(fn, pkt, buf) fn((pkt), (buf), !dronecan_tx_canfd)
+#	else
+#		define DC_ENCODE(fn, pkt, buf) fn((pkt), (buf))
+#	endif
+
 #	ifndef PREFERRED_NODE_ID
 #		define PREFERRED_NODE_ID 0
 #	endif
@@ -307,6 +332,11 @@ static const struct parameter {
 #	ifdef CAN_TERM_PIN
 	{"CAN_TERM_ENABLE", T_BOOL, 0, 1, 0, &eepromBuffer.can.term_enable},
 #	endif
+#	ifdef MCU_G431
+	/* 0 = auto-match host CAN FD data bitrate (1/2/4/5 Mbps). 1/2/4/5 pins
+	 * the data phase. Product max is 5 Mbps. */
+	{"CAN_FD_MBPS", T_UINT8, 0, 5, 0, &eepromBuffer.can.fd_mbps},
+#	endif
 	{"STARTUP_TUNE", T_STRING, 0, 4, 0, &eepromBuffer.tune},
 };
 
@@ -529,11 +559,11 @@ static void can_log(uint8_t level, const char *fmt, ...)
 	va_end(ap);
 	pkt.text.len = (uint8_t)MIN(n, sizeof(pkt.text.data));
 
-	uint32_t len = uavcan_protocol_debug_LogMessage_encode(&pkt, buffer);
+	uint32_t len = DC_ENCODE(uavcan_protocol_debug_LogMessage_encode, &pkt, buffer);
 	static uint8_t logmsg_transfer_id;
 
-	canardBroadcast(&canard, UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_SIGNATURE, UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_ID, &logmsg_transfer_id,
-			CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
+	DC_BROADCAST(&canard, UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_SIGNATURE, UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_ID, &logmsg_transfer_id,
+		     CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
 }
 
 /* printf-style LogMessage at INFO (param/save notices, etc.). */
@@ -806,10 +836,10 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 	}
 
 	uint8_t buffer[UAVCAN_PROTOCOL_PARAM_GETSET_RESPONSE_MAX_SIZE];
-	uint16_t total_size = uavcan_protocol_param_GetSetResponse_encode(&pkt, buffer);
+	uint16_t total_size = DC_ENCODE(uavcan_protocol_param_GetSetResponse_encode, &pkt, buffer);
 
-	canardRequestOrRespond(ins, transfer->source_node_id, UAVCAN_PROTOCOL_PARAM_GETSET_SIGNATURE, UAVCAN_PROTOCOL_PARAM_GETSET_ID,
-			       &transfer->transfer_id, transfer->priority, CanardResponse, &buffer[0], total_size);
+	DC_RESPOND(ins, transfer->source_node_id, UAVCAN_PROTOCOL_PARAM_GETSET_SIGNATURE, UAVCAN_PROTOCOL_PARAM_GETSET_ID,
+		   &transfer->transfer_id, transfer->priority, CanardResponse, &buffer[0], total_size);
 }
 
 /*
@@ -852,11 +882,10 @@ static void handle_param_ExecuteOpcode(CanardInstance *ins, CanardRxTransfer *tr
 	}
 
 	uint8_t buffer[UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_RESPONSE_MAX_SIZE];
-	uint16_t total_size = uavcan_protocol_param_ExecuteOpcodeResponse_encode(&pkt, buffer);
+	uint16_t total_size = DC_ENCODE(uavcan_protocol_param_ExecuteOpcodeResponse_encode, &pkt, buffer);
 
-	canardRequestOrRespond(ins, transfer->source_node_id, UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_SIGNATURE,
-			       UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_ID, &transfer->transfer_id, transfer->priority, CanardResponse,
-			       &buffer[0], total_size);
+	DC_RESPOND(ins, transfer->source_node_id, UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_SIGNATURE, UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_ID,
+		   &transfer->transfer_id, transfer->priority, CanardResponse, &buffer[0], total_size);
 }
 
 /*
@@ -904,10 +933,10 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
 #	endif
 	pkt.name.len = strnlen((char *)pkt.name.data, sizeof(pkt.name.data));
 
-	uint16_t total_size = uavcan_protocol_GetNodeInfoResponse_encode(&pkt, buffer);
+	uint16_t total_size = DC_ENCODE(uavcan_protocol_GetNodeInfoResponse_encode, &pkt, buffer);
 
-	canardRequestOrRespond(ins, transfer->source_node_id, UAVCAN_PROTOCOL_GETNODEINFO_SIGNATURE, UAVCAN_PROTOCOL_GETNODEINFO_ID,
-			       &transfer->transfer_id, transfer->priority, CanardResponse, &buffer[0], total_size);
+	DC_RESPOND(ins, transfer->source_node_id, UAVCAN_PROTOCOL_GETNODEINFO_SIGNATURE, UAVCAN_PROTOCOL_GETNODEINFO_ID,
+		   &transfer->transfer_id, transfer->priority, CanardResponse, &buffer[0], total_size);
 }
 
 extern void transfercomplete();
@@ -1048,11 +1077,11 @@ static void handle_begin_firmware_update(CanardInstance *ins, CanardRxTransfer *
 		memset(&reply, 0, sizeof(reply));
 		reply.error = UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_RESPONSE_ERROR_OK;
 
-		uint32_t total_size = uavcan_protocol_file_BeginFirmwareUpdateResponse_encode(&reply, buffer);
+		uint32_t total_size = DC_ENCODE(uavcan_protocol_file_BeginFirmwareUpdateResponse_encode, &reply, buffer);
 
-		canardRequestOrRespond(ins, transfer->source_node_id, UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_SIGNATURE,
-				       UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_ID, &transfer->transfer_id, transfer->priority,
-				       CanardResponse, &buffer[0], total_size);
+		DC_RESPOND(ins, transfer->source_node_id, UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_SIGNATURE,
+			   UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_ID, &transfer->transfer_id, transfer->priority, CanardResponse,
+			   &buffer[0], total_size);
 
 		while (canardPeekTxQueue(&canard) != NULL) {
 			DroneCAN_processTxQueue();
@@ -1169,8 +1198,8 @@ static void request_DNA()
 	memmove(&allocation_request[1], &my_unique_id[DNA.node_id_allocation_unique_id_offset], uid_size);
 
 	// Broadcasting the request
-	canardBroadcast(&canard, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID,
-			&node_id_allocation_transfer_id, CANARD_TRANSFER_PRIORITY_LOW, &allocation_request[0], (uint16_t)(uid_size + 1));
+	DC_BROADCAST(&canard, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID,
+		     &node_id_allocation_transfer_id, CANARD_TRANSFER_PRIORITY_LOW, &allocation_request[0], (uint16_t)(uid_size + 1));
 
 	// Preparing for timeout; if response is received, this value will be updated from the callback.
 	DNA.node_id_allocation_unique_id_offset = 0;
@@ -1308,15 +1337,15 @@ static void send_NodeStatus(void)
 	node_status.vendor_specific_status_code = canstats.num_commands;
 	canstats.num_commands = 0;
 
-	uint32_t len = uavcan_protocol_NodeStatus_encode(&node_status, buffer);
+	uint32_t len = DC_ENCODE(uavcan_protocol_NodeStatus_encode, &node_status, buffer);
 
 	// we need a static variable for the transfer ID. This is
 	// incremeneted on each transfer, allowing for detection of packet
 	// loss
 	static uint8_t transfer_id;
 
-	canardBroadcast(&canard, UAVCAN_PROTOCOL_NODESTATUS_SIGNATURE, UAVCAN_PROTOCOL_NODESTATUS_ID, &transfer_id,
-			CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
+	DC_BROADCAST(&canard, UAVCAN_PROTOCOL_NODESTATUS_SIGNATURE, UAVCAN_PROTOCOL_NODESTATUS_ID, &transfer_id,
+		     CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
 }
 
 /*
@@ -1371,15 +1400,15 @@ static void send_ESCStatus(void)
 	}
 	pkt.esc_index = eepromBuffer.can.esc_index;
 
-	uint32_t len = uavcan_equipment_esc_Status_encode(&pkt, buffer);
+	uint32_t len = DC_ENCODE(uavcan_equipment_esc_Status_encode, &pkt, buffer);
 
 	// we need a static variable for the transfer ID. This is
 	// incremeneted on each transfer, allowing for detection of packet
 	// loss
 	static uint8_t transfer_id;
 
-	canardBroadcast(&canard, UAVCAN_EQUIPMENT_ESC_STATUS_SIGNATURE, UAVCAN_EQUIPMENT_ESC_STATUS_ID, &transfer_id,
-			CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
+	DC_BROADCAST(&canard, UAVCAN_EQUIPMENT_ESC_STATUS_SIGNATURE, UAVCAN_EQUIPMENT_ESC_STATUS_ID, &transfer_id,
+		     CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
 }
 
 /*
@@ -1419,12 +1448,12 @@ static void send_FlexDebug(void)
 	pkt.id = DRONECAN_PROTOCOL_FLEXDEBUG_AM32_RESERVE_START + 0;
 	pkt.u8.len = sizeof(debug1);
 	memcpy(pkt.u8.data, (const uint8_t *)&debug1, sizeof(debug1));
-	uint32_t len = dronecan_protocol_FlexDebug_encode(&pkt, buffer);
+	uint32_t len = DC_ENCODE(dronecan_protocol_FlexDebug_encode, &pkt, buffer);
 
 	static uint8_t transfer_id;
 
-	canardBroadcast(&canard, DRONECAN_PROTOCOL_FLEXDEBUG_SIGNATURE, DRONECAN_PROTOCOL_FLEXDEBUG_ID, &transfer_id,
-			CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
+	DC_BROADCAST(&canard, DRONECAN_PROTOCOL_FLEXDEBUG_SIGNATURE, DRONECAN_PROTOCOL_FLEXDEBUG_ID, &transfer_id,
+		     CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
 }
 
 /*
@@ -1435,6 +1464,7 @@ void DroneCAN_receiveFrame(void)
 	CanardCANFrame rx_frame = {0};
 	while (sys_can_receive(&rx_frame) > 0) {
 		canstats.num_receive++;
+		dc_note_rx_frame(&rx_frame);
 		int ecode = canardHandleRxFrame(&canard, &rx_frame, micros64());
 		if (ecode != CANARD_OK && ecode != -CANARD_ERROR_RX_NOT_WANTED) {
 			canstats.rx_ecode = ecode;
@@ -1446,6 +1476,7 @@ void DroneCAN_receiveFrame(void)
 void DroneCAN_handleFrame(const CanardCANFrame *rx_frame)
 {
 	canstats.num_receive++;
+	dc_note_rx_frame(rx_frame);
 	int ecode = canardHandleRxFrame(&canard, rx_frame, micros64());
 	if (ecode != CANARD_OK && ecode != -CANARD_ERROR_RX_NOT_WANTED) {
 		canstats.rx_ecode = ecode;
@@ -1517,6 +1548,7 @@ static void DroneCAN_Startup(void)
 void DroneCAN_update()
 {
 	sys_can_disable_IRQ();
+	sys_can_service();
 
 	static uint64_t next_1hz_service_at;
 	static uint64_t next_telem_service_at;

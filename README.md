@@ -256,11 +256,12 @@ Other DShot commands (direction, bi-dir, EDT, programming mode, etc.) do **not**
 
 ## Bootloader
 
-ARK ESCs use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** (fork of upstream [AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)). Use ARK release images for ARK hardware — not the stock upstream bootloader alone when you need ARK-specific fixes (e.g. bidirectional DShot idle detection).
+ARK ESCs use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** (fork of upstream [AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)). The **ARK 12S CAN** bootloader is built from in-tree [`bootloader/`](bootloader/) (`make bootloader-g431-can`). F051 still uses committed ARK32-bootloader images.
 
 | | |
 |--|--|
-| Source / releases | [ARK-Electronics/ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) · [releases](https://github.com/ARK-Electronics/ARK32-bootloader/releases) |
+| G431 CAN (ARK 12S) source | [`bootloader/`](bootloader/) — `make bootloader-g431-can` |
+| Other images / releases | [ARK-Electronics/ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) · [releases](https://github.com/ARK-Electronics/ARK32-bootloader/releases) |
 | Committed images for app embed | [`Bootloaders/`](Bootloaders/) (see [Bootloaders/README.md](Bootloaders/README.md)) |
 | App-side BL update | F051 release and **every G431 CAN** build embed the image and rewrite the on-chip BL if it differs (`Src/bootloader_update.c`). Success soft-resets; the next boot plays **`playBootloaderUpdatedTone`** (two rising beeps) then the normal startup tune. Strip with `EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`. F051 `HWCI_PERF=1` omits the blob (flash is tight); G431 CAN keeps it. |
 

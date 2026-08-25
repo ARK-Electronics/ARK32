@@ -13,7 +13,7 @@ These files are release (or branch) artifacts as flat binaries. They are stored 
 |---|---|---|---|
 | `AM32_F051_BOOTLOADER_ARK4IN1_V18.bin` | STM32F051, ARK 4IN1 (default embed) | PB4; **PA15 nSLEEP low** | [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) `master` (`cdce0a2`, #4); product `AM32_F051_BOOTLOADER_ARK4IN1` |
 | `AM32_F051_BOOTLOADER_PB4_V18.bin` | STM32F051 generic PB4 (reference only) | PB4 | [ARK32-bootloader v18.0.0](https://github.com/ARK-Electronics/ARK32-bootloader/releases/tag/v18.0.0) (`0d667c5`), asset `AM32_F051_BOOTLOADER_PB4_V18.hex` |
-| `AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin` | STM32G431/G491, ARK 12S CAN ESC (`ARK_G431_CAN`) | PB4 (also FDCAN TX PB9 / RX PA11); **DRV ENABLE (PC9) held low** | [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) `feat/ark-g431-can-dual-protocol` (`060c417`: UAVCAN hw **0.71** / board_id 71 so PX4 SD-card recovery matches the app), target `AM32_G431_BOOTLOADER_ARKG4_CAN` |
+| `AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin` | STM32G431/G491, ARK 12S CAN ESC (`ARK_G431_CAN`) | PB4 (also FDCAN TX PB9 / RX PA11); **DRV ENABLE (PC9) held low** | **In-tree** [`bootloader/`](../bootloader/) (`make bootloader-g431-can`). From ARK32-bootloader `feat/ark-g431-can-dual-protocol` (`060c417`, UAVCAN hw **0.71**) plus CAN FD. |
 
 | Resource | URL |
 |---|---|
@@ -86,17 +86,16 @@ App-side BL rewrite erases flash pages at `0x08000000` (reset vectors and the on
 
 ### G431 CAN
 
-1. Build from [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader):
+Source of truth is [`bootloader/`](../bootloader/), not a separate checkout:
 
-   ```sh
-   make AM32_G431_BOOTLOADER_ARKG4_CAN
-   cp obj/AM32_G431_BOOTLOADER_ARKG4_CAN_V*.bin \
-     /path/to/ARK32/Bootloaders/
-   ```
+```sh
+make bootloader-g431-can
+# installs Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin
+make ARK_G431_CAN
+make factory-image-g431-can
+```
 
-2. Point `BL_IMAGE_G431_CAN` in the `Makefile` at the new path if the filename changed.
-3. Update the table above with the source commit / release tag.
-4. Rebuild the app (and factory image): `make ARK_G431_CAN` / `make factory-image-g431-can`. The `.bin` is an explicit prerequisite of the G431 CAN `.elf`.
+`make ARK_G431_CAN` rebuilds the image when `bootloader/` sources change. Point `BL_IMAGE_G431_CAN` in the `Makefile` at the new path only if the filename changed.
 
 **Do not embed the generic `…_PB4` image on ARK 4IN1** if the chip has ARK4IN1 BL: first boot would rewrite PA15 nSLEEP-off back to stock.
 

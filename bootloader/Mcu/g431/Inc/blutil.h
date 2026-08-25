@@ -1,0 +1,309 @@
+/*
+  MCU specific utility functions for the bootloader
+ */
+/*
+  based on https://github.com/AlkaMotors/AM32_Bootloader_F051/blob/main/Core/
+ */
+#pragma once
+
+#include <stm32g4xx_ll_rcc.h>
+
+/*
+  64k ram
+ */
+#define RAM_BASE 0x20000000
+#define RAM_SIZE 32*1024
+
+/*
+  we have up to 512k of flash, but only use 64k for now
+ */
+#ifndef BOARD_FLASH_SIZE
+#define BOARD_FLASH_SIZE 64
+#endif
+
+#define GPIO_PIN(n) (1U<<(n))
+
+#define GPIO_PULL_NONE LL_GPIO_PULL_NO
+#define GPIO_PULL_UP   LL_GPIO_PULL_UP
+#define GPIO_PULL_DOWN LL_GPIO_PULL_DOWN
+
+#define GPIO_OUTPUT_PUSH_PULL LL_GPIO_OUTPUT_PUSHPULL
+
+#ifdef PORT_LETTER
+static inline void gpio_mode_set_input(uint32_t pin, uint32_t pull_up_down)
+{
+  LL_GPIO_SetPinMode(input_port, pin, LL_GPIO_MODE_INPUT);
+  LL_GPIO_SetPinPull(input_port, pin, pull_up_down);
+}
+
+static inline void gpio_mode_set_output(uint32_t pin, uint32_t output_mode)
+{
+  LL_GPIO_SetPinMode(input_port, pin, LL_GPIO_MODE_OUTPUT);
+  LL_GPIO_SetPinOutputType(input_port, pin, output_mode);
+}
+
+static inline void gpio_set(uint32_t pin)
+{
+  LL_GPIO_SetOutputPin(input_port, pin);
+}
+
+static inline void gpio_clear(uint32_t pin)
+{
+  LL_GPIO_ResetOutputPin(input_port, pin);
+}
+
+static inline bool gpio_read(uint32_t pin)
+{
+  return LL_GPIO_IsInputPinSet(input_port, pin);
+}
+#endif // PORT_LETTER
+
+#define BL_TIMER TIM2
+
+/*
+  initialise timer for 1us per tick
+ */
+static inline void bl_timer_init(void)
+{
+  LL_TIM_InitTypeDef TIM_InitStruct = {0};
+
+  /* Peripheral clock enable */
+  LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_TIM2);
+
+  TIM_InitStruct.Prescaler = (160-1); // HSI PLL clock is 160Mz, want 1MHz timer
+  TIM_InitStruct.CounterMode = LL_TIM_COUNTERMODE_UP;
+  TIM_InitStruct.Autoreload = 0xFFFFFFFF;
+  TIM_InitStruct.ClockDivision = LL_TIM_CLOCKDIVISION_DIV1;
+  LL_TIM_Init(BL_TIMER, &TIM_InitStruct);
+  LL_TIM_DisableARRPreload(BL_TIMER);
+  LL_TIM_SetClockSource(BL_TIMER, LL_TIM_CLOCKSOURCE_INTERNAL);
+  LL_TIM_SetTriggerOutput(BL_TIMER, LL_TIM_TRGO_RESET);
+  LL_TIM_DisableMasterSlaveMode(BL_TIMER);
+
+  LL_TIM_SetCounterMode(BL_TIMER, LL_TIM_COUNTERMODE_UP);
+  LL_TIM_EnableCounter(BL_TIMER);
+}
+
+/*
+  disable timer ready for app start
+ */
+static inline void bl_timer_disable(void)
+{
+  LL_TIM_DeInit(BL_TIMER);
+}
+
+static inline uint16_t bl_timer_us(void)
+{
+  return LL_TIM_GetCounter(BL_TIMER);
+}
+
+/*
+  initialise clocks
+ */
+static inline void bl_clock_config(void)
+{
+  LL_FLASH_SetLatency(LL_FLASH_LATENCY_4);
+  while (LL_FLASH_GetLatency()!= LL_FLASH_LATENCY_4) ;
+  LL_PWR_SetRegulVoltageScaling(LL_PWR_REGU_VOLTAGE_SCALE1);
+  while (LL_PWR_IsActiveFlag_VOS() != 0) ;
+
+#ifdef USE_HSE
+  // setup to use HSE
+#if defined(USE_HSE_BYPASS) && (USE_HSE_BYPASS == 0)
+  LL_RCC_HSE_DisableBypass(); // Use crystal mode
+#else
+  LL_RCC_HSE_EnableBypass(); // Default: Use external oscillator
+#endif
+  LL_RCC_HSE_Enable();
+  while (LL_RCC_HSE_IsReady() != 1) ;
+  #define PLL_SRC LL_RCC_PLLSOURCE_HSE
+#if HSE_VALUE == 8000000
+  #define PLLM_DIV LL_RCC_PLLM_DIV_1
+#elif HSE_VALUE == 16000000
+  #define PLLM_DIV LL_RCC_PLLM_DIV_2
+#elif HSE_VALUE == 24000000
+  #define PLLM_DIV LL_RCC_PLLM_DIV_3
+#else
+  #error "Unsupported HSE_VALUE"
+#endif
+#else // default to HSI (16MHz)
+  LL_RCC_HSI_Enable();
+  while (LL_RCC_HSI_IsReady() != 1) ;
+  #define PLLM_DIV LL_RCC_PLLM_DIV_2
+  #define PLL_SRC LL_RCC_PLLSOURCE_HSI
+#endif
+
+  LL_RCC_SetAHBPrescaler(LL_RCC_SYSCLK_DIV_1);
+  LL_RCC_SetAPB1Prescaler(LL_RCC_APB1_DIV_1);
+  LL_RCC_SetAPB2Prescaler(LL_RCC_APB2_DIV_1);
+
+  LL_RCC_PLL_ConfigDomain_SYS(PLL_SRC, PLLM_DIV, 40, LL_RCC_PLLR_DIV_2);
+  LL_RCC_PLL_EnableDomain_SYS();
+
+#if DRONECAN_SUPPORT
+  LL_RCC_SetFDCANClockSource(LL_RCC_FDCAN_CLKSOURCE_PLL);
+  LL_RCC_PLL_EnableDomain_48M();
+  MODIFY_REG(RCC->PLLCFGR, RCC_PLLCFGR_PLLQ, LL_RCC_PLLQ_DIV_4);
+
+  // also enable the backup domain registers in TAMP for communication
+  // between bootloader and main firmware
+  LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_PWR);
+  PWR->CR1 |= PWR_CR1_DBP;
+  LL_RCC_SetRTCClockSource(LL_RCC_RTC_CLKSOURCE_NONE);
+  RCC->BDCR |= RCC_BDCR_RTCEN;
+#endif
+
+  LL_RCC_PLL_Enable();
+  while (LL_RCC_PLL_IsReady() != 1) ;
+
+  LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_PLL);
+  while (LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_PLL) ;
+}
+
+#ifdef PORT_LETTER
+static inline void bl_gpio_init(void)
+{
+  LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOA);
+  LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOB);
+
+  GPIO_InitStruct.Pin = input_pin;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+
+  LL_GPIO_Init(input_port, &GPIO_InitStruct);
+}
+
+/*
+  Hold the smart gate-driver run pin low (DRV8350 ENABLE, etc.) for the
+  whole bootloader so the charge pump / gate rails stay in sleep.
+ */
+static inline void bl_gate_driver_off(void)
+{
+#ifdef GATE_DRIVER_OFF_PORT
+  LL_GPIO_InitTypeDef s = {0};
+  /* Port may be C (ENABLE) while bl_gpio_init only clocks A/B. */
+  if (GATE_DRIVER_OFF_PORT == GPIOA) {
+    LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOA);
+  } else if (GATE_DRIVER_OFF_PORT == GPIOB) {
+    LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOB);
+  } else if (GATE_DRIVER_OFF_PORT == GPIOC) {
+    LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOC);
+  }
+  s.Pin = GATE_DRIVER_OFF_PIN;
+  s.Mode = LL_GPIO_MODE_OUTPUT;
+  s.Speed = LL_GPIO_SPEED_FREQ_LOW;
+  s.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+  s.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(GATE_DRIVER_OFF_PORT, &s);
+  LL_GPIO_ResetOutputPin(GATE_DRIVER_OFF_PORT, GATE_DRIVER_OFF_PIN);
+#endif
+}
+
+/*
+  RGB LED support, driven by per-board RED/GREEN/BLUE_PORT/_PIN from
+  Inc/targets.h (active low, open drain). Pins are LL_GPIO_PIN_x masks.
+ */
+#ifdef USE_RGB_LED
+static inline void bl_led_port_clock(GPIO_TypeDef *port)
+{
+#ifdef GPIOA
+  if (port == GPIOA) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOA); return; }
+#endif
+#ifdef GPIOB
+  if (port == GPIOB) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOB); return; }
+#endif
+#ifdef GPIOC
+  if (port == GPIOC) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOC); return; }
+#endif
+#ifdef GPIOD
+  if (port == GPIOD) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOD); return; }
+#endif
+#ifdef GPIOF
+  if (port == GPIOF) { LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOF); return; }
+#endif
+}
+
+static inline void bl_led_init(void)
+{
+  bl_led_port_clock(RED_PORT);
+  bl_led_port_clock(GREEN_PORT);
+  bl_led_port_clock(BLUE_PORT);
+  LL_GPIO_SetPinMode(RED_PORT, RED_PIN, LL_GPIO_MODE_OUTPUT);
+  LL_GPIO_SetPinOutputType(RED_PORT, RED_PIN, LL_GPIO_OUTPUT_OPENDRAIN);
+  LL_GPIO_SetPinMode(GREEN_PORT, GREEN_PIN, LL_GPIO_MODE_OUTPUT);
+  LL_GPIO_SetPinOutputType(GREEN_PORT, GREEN_PIN, LL_GPIO_OUTPUT_OPENDRAIN);
+  LL_GPIO_SetPinMode(BLUE_PORT, BLUE_PIN, LL_GPIO_MODE_OUTPUT);
+  LL_GPIO_SetPinOutputType(BLUE_PORT, BLUE_PIN, LL_GPIO_OUTPUT_OPENDRAIN);
+  // LEDs off (open drain high = hi-Z = off)
+  LL_GPIO_SetOutputPin(RED_PORT, RED_PIN);
+  LL_GPIO_SetOutputPin(GREEN_PORT, GREEN_PIN);
+  LL_GPIO_SetOutputPin(BLUE_PORT, BLUE_PIN);
+}
+
+static inline void bl_led_on(void)
+{
+  LL_GPIO_ResetOutputPin(RED_PORT, RED_PIN);
+  LL_GPIO_ResetOutputPin(GREEN_PORT, GREEN_PIN);
+  LL_GPIO_ResetOutputPin(BLUE_PORT, BLUE_PIN);
+}
+
+static inline void bl_led_off(void)
+{
+  LL_GPIO_SetOutputPin(RED_PORT, RED_PIN);
+  LL_GPIO_SetOutputPin(GREEN_PORT, GREEN_PIN);
+  LL_GPIO_SetOutputPin(BLUE_PORT, BLUE_PIN);
+}
+
+static inline void bl_led_red_on(void)
+{
+  LL_GPIO_ResetOutputPin(RED_PORT, RED_PIN);
+  LL_GPIO_SetOutputPin(GREEN_PORT, GREEN_PIN);
+  LL_GPIO_SetOutputPin(BLUE_PORT, BLUE_PIN);
+}
+#endif // USE_RGB_LED
+
+/*
+  return true if the MCU booted under a software reset
+ */
+static inline bool bl_was_software_reset(void)
+{
+  return (RCC->CSR & RCC_CSR_SFTRSTF) != 0;
+}
+
+void Error_Handler()
+{
+  while (1) {}
+}
+
+/*
+  jump from the bootloader to the application code
+ */
+static inline void jump_to_application(void)
+{
+  __disable_irq();
+  bl_timer_disable();
+  const uint32_t app_address = MCU_FLASH_START + FIRMWARE_RELATIVE_START;
+  const uint32_t *app_data = (const uint32_t *)app_address;
+  const uint32_t stack_top = app_data[0];
+  const uint32_t JumpAddress = app_data[1];
+
+  // setup vector table
+  SCB->VTOR = app_address;
+
+  // setup sp, msp and jump
+  asm volatile(
+    "mov sp, %0	\n"
+    "msr msp, %0	\n"
+    "bx	%1	\n"
+    : : "r"(stack_top), "r"(JumpAddress) :);
+}
+
+/*
+  nothing to do in SystemInit()
+ */
+void SystemInit()
+{
+}
+#endif // PORT_LETTER

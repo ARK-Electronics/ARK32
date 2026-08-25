@@ -44,6 +44,12 @@ void sys_can_getUniqueID(uint8_t id[16]);
 void sys_can_init(void);
 
 /*
+  periodic FDCAN housekeeping (CAN FD data-rate auto-match). No-op on
+  classic-CAN backends.
+ */
+void sys_can_service(void);
+
+/*
   called from CAN IRQ indicating we may have a free TX slot
  */
 extern void DroneCAN_processTxQueue();

@@ -339,6 +339,8 @@ void sys_can_disable_IRQ(void)
 	sitl_nvic_disable_irq(SITL_IRQ_CAN);
 }
 
+void sys_can_service(void) {}
+
 void sys_can_enable_IRQ(void)
 {
 	sitl_nvic_enable_irq(SITL_IRQ_CAN);

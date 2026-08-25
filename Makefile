@@ -139,8 +139,21 @@ BL_IMAGE_F051 := Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
 # 0x08000000..ORIGIN(FLASH_VECTAB); the F051 linker script asserts the match.
 BL_REGION_SIZE_F051 := 4096
 # ARK 12S CAN: 16 KiB region, app at 0x08004000 (ldscript_CAN.ld).
+# Built from in-tree bootloader/ (make bootloader-g431-can).
 BL_IMAGE_G431_CAN ?= Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin
 BL_REGION_SIZE_G431_CAN := 16384
+BOOTLOADER_G431_SRCS := \
+	$(wildcard bootloader/Makefile) \
+	$(wildcard bootloader/Inc/*.[ch]) \
+	$(wildcard bootloader/bootloader/*.[cs]) \
+	$(wildcard bootloader/bootloader/*.ld) \
+	$(wildcard bootloader/bootloader/DroneCAN/*.[ch]) \
+	$(wildcard bootloader/bootloader/DroneCAN/libcanard/*.[ch]) \
+	$(wildcard bootloader/bootloader/DroneCAN/dsdl_generated/src/*.c) \
+	$(wildcard bootloader/bootloader/DroneCAN/dsdl_generated/include/*.h) \
+	$(wildcard bootloader/Mcu/g431/Inc/*.h) \
+	$(wildcard bootloader/Mcu/g431/Src/*.c) \
+	$(wildcard bootloader/Mcu/g431/Startup/*.s)
 # Default on; set EMBED_BOOTLOADER=0 or NO_EMBED_BL=1 to strip.
 # F051 is also stripped automatically when HWCI_PERF=1 (see xEMBED_* below).
 EMBED_BOOTLOADER ?= 1
@@ -255,6 +268,14 @@ include $(ROOT)/make/tools_install.mk
 .PHONY: arm_sdk_check
 arm_sdk_check:
 	$(QUIET)bash scripts/check-arm-sdk.sh "$(ARM_SDK_PREFIX)" "$(XPACK_GCC_VER)"
+
+# In-tree G431 CAN bootloader. Rebuilds Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin
+# from bootloader/ so app embed / factory images pick up CAN FD and pinout changes.
+.PHONY: bootloader-g431-can
+bootloader-g431-can: $(BL_IMAGE_G431_CAN)
+
+$(BL_IMAGE_G431_CAN): $(BOOTLOADER_G431_SRCS)
+	$(QUIET)$(MAKE) -C bootloader install
 
 # useful target to list all of the board targets so you can see what
 # make target to use for your board
