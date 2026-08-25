@@ -77,7 +77,7 @@ In-the-loop bench automation for the **ARK 4IN1**: build/flash, drive the motor 
 - Bench setups: [hwci/docs/BENCH_SETUPS.md](hwci/docs/BENCH_SETUPS.md)
 - CI: `.github/workflows/hwci.yml`
 
-### Bootloader
+### Bootloader fixes
 Field bootloaders and app-side BL update use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** (see [Bootloader](#bootloader) below and [Bootloaders/README.md](Bootloaders/README.md)).
 
 ---
