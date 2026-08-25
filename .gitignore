@@ -3,8 +3,6 @@ downloads/
 tools/
 .vscode
 *.bin
-# Prebuilt bootloader images are deliberately tracked (see Bootloaders/README.md)
-!Bootloaders/*.bin
 *.elf
 *.d
 *.hex

@@ -8,7 +8,8 @@ ECHO = echo
 
 # common variables
 # Release / build artifact prefix: ARK32_<FILE_NAME>_<version>.{hex,bin,elf}
-# (not upstream AM32_). Bootloader blobs under Bootloaders/ keep their AM32_* names.
+# (not upstream AM32_). Fetched bootloader images keep the ARK32-bootloader
+# product name (currently AM32_F051_BOOTLOADER_ARK4IN1_V18.bin).
 IDENTIFIER := ARK32
 
 # Folders
@@ -116,26 +117,33 @@ SRC_OPTIONAL_BRUSHED := $(MAIN_SRC_DIR)/brushed.c
 SRC_OPTIONAL_HWCI    := $(MAIN_SRC_DIR)/hwci_perf.c
 SRC_COMMON_BASE := $(filter-out $(SRC_OPTIONAL_BRUSHED) $(SRC_OPTIONAL_HWCI),$(SRC_COMMON_ALL))
 
-# App-side bootloader update. The image is a committed bootloader .bin pulled in
-# with .incbin (Src/bl_image.S) rather than a generated C array, so the linked
-# bytes stay verifiable against the ARK32-bootloader release they came from
-# (see Bootloaders/README.md). .S, not .[cs]: the wildcard above skips it.
+# App-side bootloader update. The image is pulled in with .incbin
+# (Src/bl_image.S). It is not committed here: `make` fetches it from
+# ARK-Electronics/ARK32-bootloader (see Bootloaders/README.md).
 # F051 embeds by default (including HWCI_PERF=1); LTO leaves enough flash for
 # both the 4 KiB image and the perf struct. Kill switches for size A/Bs:
 #   make ARK_4IN1_F051 EMBED_BOOTLOADER=0
 #   make ARK_4IN1_F051 NO_EMBED_BL=1
 #   make ARK_4IN1_F051 HWCI_PERF=1 NO_EMBED_BL=1
-# Bumping the bootloader means dropping the new .bin (from the release .hex)
-# and editing this one line if the name changes.
 SRC_OPTIONAL_BL_IMAGE := $(MAIN_SRC_DIR)/bl_image.S
-# ARK 4IN1: PB4 signal + PA15 nSLEEP low in BL (ARK32-bootloader #4).
-# Do not use the generic …_PB4 blob here — first boot would rewrite the
+# ARK 4IN1: PB4 signal + PA15 nSLEEP low (ARK32-bootloader board target).
+# Do not substitute the generic PB4 image — first boot would rewrite the
 # nSLEEP-off BL back to stock if they differ.
+BOOTLOADER_REPO ?= https://github.com/ARK-Electronics/ARK32-bootloader.git
+BOOTLOADER_REF ?= cdce0a210f2fa5561ebc3a8c2b2c89943ff7d28b
 BL_IMAGE_F051 := Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
 # 0x08000000..ORIGIN(FLASH_VECTAB); the F051 linker script asserts the match.
 BL_REGION_SIZE_F051 := 4096
 # Default on; set EMBED_BOOTLOADER=0 or NO_EMBED_BL=1 to strip the image.
 EMBED_BOOTLOADER ?= 1
+
+# Fetch the ARK 4IN1 bootloader into Bootloaders/ if it is not already there.
+.PHONY: bootloader-image
+bootloader-image: $(BL_IMAGE_F051)
+$(BL_IMAGE_F051):
+	$(QUIET)ARM_SDK_PREFIX="$(ARM_SDK_PREFIX)" BOOTLOADER_REPO="$(BOOTLOADER_REPO)" \
+		BOOTLOADER_REF="$(BOOTLOADER_REF)" \
+		bash scripts/fetch-ark32-bootloader.sh "$(BL_IMAGE_F051)"
 
 # configure some directories that are relative to wherever ROOT_DIR is located
 OBJ := obj
@@ -282,7 +290,7 @@ size-check-ark:
 FACTORY_PRODUCT := ARK_4IN1_F051
 FACTORY_APP_BASENAME := $(OBJ)/$(IDENTIFIER)_$(FACTORY_PRODUCT)_$(FIRMWARE_VERSION)
 FACTORY_DEFAULTS := factory/ARK_4IN1_F051_eeprom_defaults.json
-factory-image: $(FACTORY_PRODUCT)
+factory-image: $(FACTORY_PRODUCT) $(BL_IMAGE_F051)
 	$(QUIET)$(ECHO) "Building factory full-flash image for $(FACTORY_PRODUCT)"
 	$(QUIET)python3 scripts/build_factory_image.py \
 		--defaults $(FACTORY_DEFAULTS) \

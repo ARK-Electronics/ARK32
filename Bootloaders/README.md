@@ -1,73 +1,46 @@
 # Bootloader images
 
-Prebuilt **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** binaries, committed so the app can embed one and rewrite the bootloader region at boot (see `Src/bootloader_update.c`).
+This directory does **not** store binaries in git. Get them from the two ARK32 repos:
 
-[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) is ARK’s fork of [upstream AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader). For ARK hardware (ARK 4IN1 and related), always take images from **ARK32-bootloader releases**, not from the upstream bootloader repo alone.
+| What | Where |
+|------|--------|
+| Bootloader source and releases | [ARK-Electronics/ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) · [releases](https://github.com/ARK-Electronics/ARK32-bootloader/releases) |
+| Firmware source and releases | [ARK-Electronics/ARK32](https://github.com/ARK-Electronics/ARK32) · [releases](https://github.com/ARK-Electronics/ARK32/releases) |
 
-These files are release artifacts converted from the published Intel HEX to a flat binary and checked in. They are stored as `.bin` rather than a C array so the bytes stay comparable against a release asset (a hex dump in a header cannot).
+For ARK hardware use those repos — not [upstream AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader) alone. The ARK 4IN1 bootloader holds DRV8328 `nSLEEP` (PA15) low and has bidirectional DShot idle detection.
 
-| File | Target | Signal pin | Source |
-|---|---|---|---|
-| `AM32_F051_BOOTLOADER_ARK4IN1_V18.bin` | STM32F051, ARK 4IN1 (default embed) | PB4; **PA15 nSLEEP low** | [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) `master` (`cdce0a2`, #4); product `AM32_F051_BOOTLOADER_ARK4IN1` |
-| `AM32_F051_BOOTLOADER_PB4_V18.bin` | STM32F051 generic PB4 (reference only) | PB4 | [ARK32-bootloader v18.0.0](https://github.com/ARK-Electronics/ARK32-bootloader/releases/tag/v18.0.0) (`0d667c5`), asset `AM32_F051_BOOTLOADER_PB4_V18.hex` |
+`make ARK_4IN1_F051` (embed on) and `make factory-image` call [`scripts/fetch-ark32-bootloader.sh`](../scripts/fetch-ark32-bootloader.sh) if the local image is missing. That clones ARK32-bootloader at the pin in the Makefile (`BOOTLOADER_REF`) and builds the ARK 4IN1 product (`AM32_F051_BOOTLOADER_ARK4IN1`). The file lands here and is gitignored.
 
-| Resource | URL |
-|---|---|
-| Repository | https://github.com/ARK-Electronics/ARK32-bootloader |
-| Releases | https://github.com/ARK-Electronics/ARK32-bootloader/releases |
-| Upstream (non-ARK) | https://github.com/am32-firmware/AM32-bootloader |
+```bash
+make bootloader-image
+# -> Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
+```
 
-`.gitignore` ignores `*.bin` repo-wide; this directory is un-ignored explicitly.
+You can also copy a `.bin` you already built:
+
+```bash
+# in ARK32-bootloader
+make AM32_F051_BOOTLOADER_ARK4IN1
+cp obj/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin \
+  /path/to/ARK32/Bootloaders/
+```
+
+**Do not use the generic PB4 image on ARK 4IN1.** It does not hold `nSLEEP` low; first app boot would rewrite a real ARK4IN1 bootloader back to stock.
 
 ## How the image is used
 
-`Src/bl_image.S` pulls the file in with `.incbin` and pads it to the bootloader region size with `0xFF`. The linker script places it in a dedicated `.bl_image` section and asserts that it is exactly the region size and that it does not live inside the region it will erase.
-
-The image is linked for **all F051 targets by default**, including `HWCI_PERF=1`
-(LTO leaves enough flash for the image and the perf struct). To strip it for a
-size emergency or pure perf A/B:
+`Src/bl_image.S` pulls the file in with `.incbin` and pads it to the bootloader region with `0xFF`. F051 builds embed it by default, including `HWCI_PERF=1`. To strip it:
 
 ```bash
 make ARK_4IN1_F051 EMBED_BOOTLOADER=0
 make ARK_4IN1_F051 HWCI_PERF=1 NO_EMBED_BL=1
 ```
 
-Either kill switch disables embed (`EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`).
+At boot the app compares the on-chip bootloader to the embedded image and rewrites it if they differ (`Src/bootloader_update.c`). Success soft-resets; the next boot plays `playBootloaderUpdatedTone` then the normal startup tune.
 
-## Risk / recovery
+Power loss after page 0 is erased and before vectors are rewritten bricks the chip until you reflash the bootloader over SWD. Keep a known-good image from [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) for recovery.
 
-App-side BL rewrite erases flash pages at `0x08000000` (reset vectors and the one-wire bootloader). Power loss after page 0 is erased and before vectors are rewritten leaves the chip without a valid reset vector — it will not reach the app or the previous bootloader.
-
-- **In-field recovery:** SWD (or another pre-existing ROM/system boot path) is required to reflash the bootloader region. Keep a known-good `AM32_F051_BOOTLOADER_*.bin` (or the release `.hex`) and OpenOCD/probe procedure for production and bench recovery.
-- **Software path:** On program/verify failure the update aborts without `NVIC_SystemReset`, re-enables IRQs, and continues into the already-running app so the board can still be reached if vectors survived. Sticky flash faults cannot hang forever with IRQs off (bounded per-page retries + IWDG armed for the update).
-- **Success cue:** After a verified rewrite the app soft-resets; the next boot plays a short rising two-beep chirp (`playBootloaderUpdatedTone`) before the normal ARK/BlueJay startup tune so a field flash can be confirmed by ear.
-- **Power-loss mid-update** is still a brick until SWD reflash — that is inherent to rewriting the boot region in place.
-
-## Updating
-
-1. Build or download the ARK 4IN1 product from [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) (`make AM32_F051_BOOTLOADER_ARK4IN1`), or convert a release `.hex` with the pinned toolchain.
-2. Install the flat binary:
-
-   ```sh
-   cp obj/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin \
-     Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
-   # or from a release hex:
-   # arm-none-eabi-objcopy -I ihex -O binary \
-   #   AM32_F051_BOOTLOADER_ARK4IN1_V18.hex \
-   #   Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
-   ```
-
-3. Point `BL_IMAGE_F051` in the `Makefile` at the new path if the filename changed (default is already the ARK4IN1 blob).
-4. Update the table above with the release tag / source commit.
-5. Rebuild — the `.bin` is an explicit prerequisite of the `.elf`, so the change is picked up.
-
-**Do not embed the generic `…_PB4` image on ARK 4IN1** if the chip has ARK4IN1 BL: first boot would rewrite PA15 nSLEEP-off back to stock.
-
-Keep the previous file until the new one has been flown; reverting is a one-line `Makefile` change (or restoring the previous `.bin`).
-
-## Verifying a build embedded the right image
-
-The blob lands at the `.bl_image` symbols, so it can be pulled straight back out of the ELF and compared:
+## Verify an embed
 
 ```sh
 arm-none-eabi-objcopy -O binary --only-section=.bl_image \
@@ -76,4 +49,4 @@ cmp -n "$(wc -c < Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin)" \
   /tmp/embedded.bin Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
 ```
 
-The compare is limited to the source file's length because `.bl_image` is padded out to the full 4096-byte region with `0xFF`.
+The compare is limited to the source file length because `.bl_image` is padded to 4096 bytes with `0xFF`.

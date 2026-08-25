@@ -93,7 +93,7 @@ F051 builds **embed the ARK32-bootloader image by default**, including
 BL region to the embedded image and rewrites it if they differ
 (`Src/bootloader_update.c`).
 
-**After a BL version bump** (new `.bin` in `Bootloaders/`, or a board still on
+**After a BL version bump** (new image fetched from [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader), or a board still on
 an older BL):
 
 1. First app boot may erase/program `0x08000000`, soft-reset, and play the

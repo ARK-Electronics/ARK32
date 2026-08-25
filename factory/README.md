@@ -43,7 +43,7 @@ openocd -f interface/stlink.cfg -f target/stm32f0x.cfg \
 
 | Region | Address | Size | Source |
 |--------|---------|------|--------|
-| Bootloader | `0x08000000` | 4 KiB | `Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin` (0xFF padded; PB4 signal + PA15 nSLEEP low) |
+| Bootloader | `0x08000000` | 4 KiB | [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) ARK 4IN1 image (fetched at build; 0xFF padded; PB4 signal + PA15 nSLEEP low) |
 | Application | `0x08001000` | 27 KiB | `make ARK_4IN1_F051` app `.bin` (0xFF padded) |
 | EEPROM | `0x08007C00` | 1 KiB | Defaults from [`ARK_4IN1_F051_eeprom_defaults.json`](ARK_4IN1_F051_eeprom_defaults.json) |
 

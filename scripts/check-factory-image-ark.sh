@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 OBJ="${OBJ:-obj}"
-# Must match Makefile BL_IMAGE_F051 (ARK 4IN1 nSLEEP-off BL, not generic PB4).
+# Must match Makefile BL_IMAGE_F051 (ARK32-bootloader ARK 4IN1 nSLEEP-off BL).
 BL="${BL_IMAGE_F051:-Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin}"
 DEFAULTS_JSON="${FACTORY_DEFAULTS:-factory/ARK_4IN1_F051_eeprom_defaults.json}"
 

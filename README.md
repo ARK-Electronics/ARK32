@@ -126,7 +126,7 @@ That links the release app, then runs [`scripts/build_factory_image.py`](scripts
 
 | Region | Source |
 |--------|--------|
-| Bootloader @ `0x08000000` | [`Bootloaders/`](Bootloaders/) ARK32-bootloader image |
+| Bootloader @ `0x08000000` | [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) ARK 4IN1 image (fetched at build; see [Bootloaders/README.md](Bootloaders/README.md)) |
 | Application @ `0x08001000` | `make ARK_4IN1_F051` |
 | EEPROM @ `0x08007C00` | [`factory/ARK_4IN1_F051_eeprom_defaults.json`](factory/ARK_4IN1_F051_eeprom_defaults.json) |
 
@@ -252,15 +252,15 @@ Other DShot commands (direction, bi-dir, EDT, programming mode, etc.) do **not**
 
 ## Bootloader
 
-ARK ESCs use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** (fork of upstream [AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)). Use ARK release images for ARK hardware — not the stock upstream bootloader alone when you need ARK-specific fixes (e.g. bidirectional DShot idle detection).
+ARK ESCs use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** (fork of upstream [AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)). Use ARK images for ARK hardware — not the stock upstream bootloader alone (e.g. bidirectional DShot idle detection, DRV8328 `nSLEEP`).
 
 | | |
 |--|--|
-| Source / releases | [ARK-Electronics/ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) · [releases](https://github.com/ARK-Electronics/ARK32-bootloader/releases) |
-| Committed F051 image for app embed | [`Bootloaders/`](Bootloaders/) (see [Bootloaders/README.md](Bootloaders/README.md)) |
-| App-side BL update | F051 builds embed the image by default (including `HWCI_PERF=1`) and rewrite the on-chip BL if it differs (`Src/bootloader_update.c`). Success soft-resets; the next boot plays **`playBootloaderUpdatedTone`** (two rising beeps) then the normal startup tune. Strip with `EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`. |
+| Bootloader source / releases | [ARK-Electronics/ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) · [releases](https://github.com/ARK-Electronics/ARK32-bootloader/releases) |
+| Firmware source / releases | [ARK-Electronics/ARK32](https://github.com/ARK-Electronics/ARK32) · [releases](https://github.com/ARK-Electronics/ARK32/releases) |
+| App-side BL update | F051 builds **fetch** the ARK 4IN1 image from ARK32-bootloader at build time (not committed here) and embed it by default. At boot the app rewrites the on-chip BL if it differs (`Src/bootloader_update.c`). Success soft-resets; the next boot plays **`playBootloaderUpdatedTone`** then the normal startup tune. Strip with `EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`. See [Bootloaders/README.md](Bootloaders/README.md). |
 
-To put ARK32 on a **blank production ESC**, flash the full-chip factory image (`make factory-image` → `obj/*factory.bin` at `0x08000000`) so bootloader, app, and EEPROM defaults land in one step — see [factory/README.md](factory/README.md). For development or field app-only updates, flash a matching **ARK32-bootloader** with ST-LINK (if needed), then the application `.bin`/`.hex` at `0x08001000` (or use a configurator / one-wire serial). Later app flashes can also carry and apply a newer BL via the embed path above.
+To put ARK32 on a **blank production ESC**, flash the full-chip factory image (`make factory-image` → `obj/*factory.bin` at `0x08000000`) so bootloader, app, and EEPROM defaults land in one step — see [factory/README.md](factory/README.md). For development or field app-only updates, flash a matching **ARK32-bootloader** with ST-LINK (if needed), then the **ARK32** application `.bin`/`.hex` at `0x08001000` (or use [ARK32 Configurator](https://github.com/ARK-Electronics/ark32-configurator)). Later app flashes can also carry and apply a newer BL via the embed path above.
 
 ## EEPROM settings
 
@@ -275,7 +275,7 @@ These are **upstream / community** tools; they are not ARK-specific:
 - [AM32 Configurator](https://am32.ca) (web) and [downloads](https://am32.ca/downloads)  
 - [esc-configurator.com](https://esc-configurator.com/)  
 - Upstream bootloaders (non-ARK): [am32-firmware/AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)  
-- Upstream target list: [am32-firmware/AM32 `Inc/targets.h`](https://github.com/am32-firmware/AM32/blob/main/Inc/targets.h)
+- Upstream firmware / targets: [am32-firmware/AM32](https://github.com/am32-firmware/AM32)
 
 ---
 

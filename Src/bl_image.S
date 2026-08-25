@@ -1,10 +1,10 @@
 /*
  * Embedded bootloader image for the app-side bootloader update.
  *
- * The bootloader is committed as a .bin (see Bootloaders/README.md) and pulled
- * in verbatim with .incbin, so the bytes the linker places are provably the
- * same artifact the ARK32-bootloader release produced - a hex-dumped C array is
- * not verifiable against a release, a .bin is.
+ * The bootloader .bin is fetched from ARK32-bootloader (see
+ * Bootloaders/README.md) and pulled in verbatim with .incbin, so the bytes the
+ * linker places match that repo's product build. A hex-dumped C array is not
+ * verifiable against a bootloader artifact; a .bin is.
  *
  * Assembling the blob here rather than compiling a generated C array also keeps
  * it out of the LTO IR entirely: it reaches the linker as an ordinary object,
