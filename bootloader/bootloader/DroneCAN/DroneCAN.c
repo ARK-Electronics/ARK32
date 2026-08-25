@@ -1,0 +1,1436 @@
+/*
+ * DroneCAN.c - support for DroneCAN protocol for ESC control and telemetry
+ */
+
+//#pragma GCC optimize("O0")
+
+#if DRONECAN_SUPPORT
+
+#include <version.h>
+#include <eeprom.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+#include "sys_can.h"
+#include <canard.h>
+#include <blutil.h>
+#include <DroneCAN.h>
+
+// include the headers for the generated DroneCAN messages from the
+// dronecan_dsdlc compiler
+#include "dsdl_generated/dronecan_msgs.h"
+
+#if CANARD_ENABLE_CANFD
+static bool dronecan_tx_canfd;
+
+static void dc_note_rx_frame(const CanardCANFrame *f)
+{
+  dronecan_tx_canfd = f->canfd;
+}
+
+#define DC_BROADCAST(...) canardBroadcast(__VA_ARGS__, dronecan_tx_canfd)
+#define DC_RESPOND(...) canardRequestOrRespond(__VA_ARGS__, dronecan_tx_canfd)
+#else
+static void dc_note_rx_frame(const CanardCANFrame *f)
+{
+  (void)f;
+}
+#define DC_BROADCAST canardBroadcast
+#define DC_RESPOND canardRequestOrRespond
+#endif
+
+#if CANARD_ENABLE_TAO_OPTION
+#define DC_ENCODE(fn, pkt, buf) fn((pkt), (buf), !dronecan_tx_canfd)
+#else
+#define DC_ENCODE(fn, pkt, buf) fn((pkt), (buf))
+#endif
+
+
+#ifndef PREFERRED_NODE_ID
+#define PREFERRED_NODE_ID 0
+#endif
+
+#ifndef CANARD_POOL_SIZE
+#define CANARD_POOL_SIZE 4096
+#endif
+
+#ifndef DRONECAN_DEBUG
+#define DRONECAN_DEBUG 0
+#endif
+
+/*
+  DRONECAN_PARAM_SUPPORT_ENABLED gates the whole
+  uavcan.protocol.param.{GetSet,ExecuteOpcode} interface in the
+  bootloader: the parameter table, the handlers, the dispatch in
+  onTransferReceived(), and the shouldAcceptTransfer() entries.
+  Default on; a custom bootloader that needs the ~1 KB of flash for
+  something else can build with -DDRONECAN_PARAM_SUPPORT_ENABLED=0
+  and the DroneCAN GUI will just see an empty parameter list.
+ */
+#ifndef DRONECAN_PARAM_SUPPORT_ENABLED
+#define DRONECAN_PARAM_SUPPORT_ENABLED 1
+#endif
+
+#ifndef DRONECAN_CHECK_SIGNATURE
+#define DRONECAN_CHECK_SIGNATURE 1
+#endif
+
+// assume that main fw starts at 16k
+#define MAIN_FW_START_ADDR 0x08004000
+
+static CanardInstance canard;
+static uint8_t canard_memory_pool[CANARD_POOL_SIZE];
+
+#ifndef MCU_FLASH_START
+#define MCU_FLASH_START 0x08000000
+#endif
+
+#if BOARD_FLASH_SIZE == 128
+#define EEPROM_START_ADD (MCU_FLASH_START+0x1f800)
+#else
+#error "Only 128K flash size supported for DroneCAN"
+#endif
+
+/*
+  the EEPROM region we preserve on a single-byte update. This must cover
+  the highest parameter offset we touch (currently ESC_INDEX at byte 177)
+  and matches the main firmware's EEPROM_MAX_SIZE so we don't truncate
+  state the application has stored above the default_settings block.
+  Must be a multiple of the flash word granularity (8 on L431/G431).
+ */
+#define EEPROM_PRESERVE_SIZE 1024
+
+/*
+  keep the state for firmware update
+*/
+static struct {
+  char path[256];
+  uint8_t node_id;
+  uint8_t transfer_id;
+  uint32_t last_read_ms;
+  uint32_t offset;
+} fwupdate;
+
+// set from the CAN RX ISR (RawCommand) and read in the boot decision, so
+// volatile (especially with -flto cross-TU optimisation)
+static volatile bool have_raw_command;
+
+// no-CAN-cable fallback: behave like a non-CAN build when no CAN frame is
+// seen within NONCAN_FALLBACK_MS. can_seen is set RX-only; noncan_fallback
+// relaxes the boot gate once the deadline passes with no traffic.
+static volatile bool can_seen;
+static bool noncan_fallback;
+#define NONCAN_FALLBACK_MS 250
+#define DRONECAN_INPUT_TYPE 5   // mirrors DRONECAN_IN in AM32 Inc/common.h (EEPROM byte 46)
+
+void DroneCAN_set_have_signal(void)
+{
+  have_raw_command = true;
+}
+
+// some convenience macros
+#define MIN(a,b) ((a)<(b)?(a):(b))
+#define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
+
+/*
+  hold our node status as a static variable. It will be updated on any errors
+*/
+static struct uavcan_protocol_NodeStatus node_status;
+
+enum boot_code {
+  CHECK_FW_OK = 0,
+  FAIL_REASON_NO_APP_SIG = 10,
+  FAIL_REASON_BAD_LENGTH_APP = 11,
+  FAIL_REASON_BAD_BOARD_ID = 12,
+  FAIL_REASON_BAD_CRC = 13,
+  FAIL_REASON_IN_UPDATE = 14,
+  FAIL_REASON_WATCHDOG = 15,
+  FAIL_REASON_BAD_LENGTH_DESCRIPTOR = 16,
+  FAIL_REASON_BAD_FIRMWARE_SIGNATURE = 17,
+  FAIL_REASON_VERIFICATION = 18,
+  FAIL_REASON_NO_SIGNAL = 19,
+};
+
+#define APP_SIGNATURE_MAGIC1 0x68f058e6
+#define APP_SIGNATURE_MAGIC2 0xafcee5a0
+
+/*
+  application signature
+ */
+struct app_signature {
+  uint32_t magic1;
+  uint32_t magic2;
+  uint32_t fwlen; // total fw length in bytes
+  uint32_t crc1; // crc32 up to start of app_signature
+  uint32_t crc2; // crc32 from end of app_signature to end of fw
+  char mcu[16];
+  uint32_t unused[2];
+};
+
+/*
+  simple 16 bit random number generator
+*/
+static uint16_t get_random16(void)
+{
+  static uint32_t m_z = 1234;
+  static uint32_t m_w = 76542;
+  m_z = 36969 * (m_z & 0xFFFFu) + (m_z >> 16);
+  m_w = 18000 * (m_w & 0xFFFFu) + (m_w >> 16);
+  return ((m_z << 16) + m_w) & 0xFFFF;
+}
+
+/*
+  monotonic microseconds since start. uint32 wraps at ~71min, far beyond the
+  bootloader lifetime, and avoids the libgcc 64-bit divide. libcanard takes
+  uint64 timestamps - cast at the call sites.
+*/
+static uint32_t micros32(void)
+{
+  static uint32_t base_us;
+  static uint16_t last_cnt;
+  uint16_t cnt = bl_timer_us();
+  if (cnt < last_cnt) {
+    base_us += 0x10000;
+  }
+  last_cnt = cnt;
+  return base_us + cnt;
+}
+
+/*
+  get monotonic time in milliseconds since startup. 32-bit divide compiles
+  to a single UDIV on cortex-m4/m33 -- no libgcc helper needed.
+*/
+static uint32_t millis32(void)
+{
+  return micros32() / 1000U;
+}
+
+/*
+  default settings, based on public/assets/eeprom_default.bin in AM32 configurator
+ */
+static const uint8_t default_settings[] = {
+  0x01, 0x02, BOOTLOADER_VERSION, 0x01, 0x23, 0x4e, 0x45, 0x4f, 0x45, 0x53, 0x43, 0x20, 0x66, 0x30, 0x35, 0x31,
+  0x20, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x02, 0x18, 0x64, 0x37, 0x0e, 0x00, 0x00, 0x05, 0x00,
+  0x80, 0x80, 0x80, 0x32, 0x00, 0x32, 0x00, 0x00, 0x0f, 0x0a, 0x0a, 0x8d, 0x66, 0x06, 0x00, 0x00
+};
+
+#if DRONECAN_CHECK_SIGNATURE
+// crc32 implementation, slow method for small flash cost
+static uint32_t crc32(const uint8_t *buf, uint32_t size)
+{
+  uint32_t crc = 0;
+  while (size--) {
+    const uint8_t byte = *buf++;
+    crc ^= byte;
+    for (uint8_t i=0; i<8; i++) {
+      const uint32_t mask = -(crc & 1);
+      crc >>= 1;
+      crc ^= (0xEDB88320 & mask);
+    }
+  }
+  return crc;
+}
+#endif
+
+/*
+  print to CAN LogMessage for debugging. Compiled out unless DRONECAN_DEBUG;
+  the no-op inline stub lets the linker drop LogMessage_encode and the strings.
+ */
+#if DRONECAN_DEBUG
+static void can_print(const char *s)
+{
+  struct uavcan_protocol_debug_LogMessage pkt;
+  memset(&pkt, 0, sizeof(pkt));
+
+  uint8_t buffer[UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_MAX_SIZE];
+  pkt.text.len = strlen(s);
+  memcpy(pkt.text.data, s, pkt.text.len);
+
+  uint32_t len = DC_ENCODE(uavcan_protocol_debug_LogMessage_encode, &pkt, buffer);
+  static uint8_t logmsg_transfer_id;
+
+  DC_BROADCAST(&canard,
+                  UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_SIGNATURE,
+                  UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_ID,
+                  &logmsg_transfer_id,
+                  CANARD_TRANSFER_PRIORITY_LOW,
+                  buffer, len);
+}
+#else
+static inline void can_print(const char *s) { (void)s; }
+#endif
+
+#if DRONECAN_PARAM_SUPPORT_ENABLED
+/*
+  parameter type tags. These mirror what the main firmware exposes over
+  the wire via uavcan.protocol.param.Value so a DroneCAN GUI sees the
+  same value type (and therefore the same widget) for a given parameter
+  whether it's talking to the bootloader or the application.
+ */
+enum bl_param_type {
+  BL_T_UINT8 = 0,
+  BL_T_BOOL,
+  BL_T_UINT16,    // stored as a single EEPROM byte, scaled on the wire
+  BL_T_STRING,    // STARTUP_TUNE only, at eepromBuffer.tune (offset 48..175)
+};
+
+/*
+  EEPROM byte offsets that need a non-trivial uint8 <-> wire mapping.
+  Kept as named constants here so the special-case branches in
+  bl_param_*_value() and the set path read sensibly.
+  These match ../AM32/Inc/eeprom.h::eepromBuffer member offsets.
+ */
+#define EEPROM_OFS_ADVANCE_LEVEL          23
+#define EEPROM_OFS_MOTOR_KV               26
+#define EEPROM_OFS_LOW_CELL_VOLT_CUTOFF   37
+#define EEPROM_OFS_LIMITS_CURRENT         44
+#define EEPROM_OFS_TUNE                   48
+#define EEPROM_TUNE_LEN                   128
+
+/*
+  remap table for legacy pre-v3 EEPROM advance_level encodings. Matches
+  ../AM32/Src/DroneCAN/DroneCAN.c::advance_level_v3_remap so a DroneCAN
+  client reading ADVANCE_LEVEL via the bootloader sees the same value
+  it would see via the application on an ESC that hasn't been rewritten
+  since the v3 migration.
+ */
+static const uint8_t advance_level_v3_remap[] = { 0x00, 0x08, 0x10, 0x16 };
+
+/*
+  parameters the bootloader exposes via uavcan.protocol.param.GetSet.
+  Name / vtype / min / max / default mirror the main firmware's
+  parameters[] table in ../AM32/Src/DroneCAN/DroneCAN.c so a DroneCAN GUI
+  shows the same values and ranges whether it talks to the application
+  or to the bootloader.
+
+  default_value is what we report on the wire when the raw EEPROM byte
+  is uninitialised (0xFF) or out of range. For parameters whose EEPROM
+  offset is inside the default_settings[] block (offsets 0..47) the
+  response's default_value is taken from default_settings instead, to
+  match the main firmware's behaviour exactly.
+ */
+static const struct bl_param {
+  const char *name;
+  uint16_t min_value;
+  uint16_t max_value;
+  uint16_t default_value;
+  uint8_t vtype;          // enum bl_param_type
+  uint8_t eeprom_offset;
+} bl_parameters[] = {
+  /* CAN identity and bus setup only. Motor/tune params need the app and
+   * the 16 KiB CAN FD image does not have room for the full table. */
+  { "CAN_NODE",                  0,   127,    0, BL_T_UINT8,  176 },
+  { "ESC_INDEX",                 0,    32,    0, BL_T_UINT8,  177 },
+  { "REQUIRE_ARMING",            0,     1,    1, BL_T_BOOL,   178 },
+  { "REQUIRE_ZERO_THROTTLE",     0,     1,    1, BL_T_BOOL,   180 },
+  { "INPUT_SIGNAL_TYPE",         0,     5,    0, BL_T_UINT8,  46 },
+#ifdef CAN_TERM_PIN
+  { "CAN_TERM_ENABLE",           0,     1,    0, BL_T_BOOL,   183 },
+#endif
+  { "CAN_FD_MBPS",               0,     5,    0, BL_T_UINT8,  185 },
+};
+
+#define NUM_BL_PARAMS (sizeof(bl_parameters)/sizeof(bl_parameters[0]))
+
+/*
+  patch a contiguous run of bytes in the EEPROM page while preserving
+  the rest. STM32 flash is page-erase-then-program: save_flash_nolib()
+  erases the whole 2 KB page at EEPROM_START_ADD and writes back only
+  the bytes we hand it, so we copy out enough of the live page to cover
+  every application setting, splice in the new bytes, and write the lot
+  back. EEPROM_PRESERVE_SIZE matches the main firmware's EEPROM_MAX_SIZE.
+  Returns true on success.
+ */
+static bool set_eeprom_bytes(uint16_t offset, const uint8_t *data, uint16_t len)
+{
+  static uint8_t buf[EEPROM_PRESERVE_SIZE];
+  if ((uint32_t)offset + len > sizeof(buf)) {
+    return false;
+  }
+  memcpy(buf, (const void *)EEPROM_START_ADD, sizeof(buf));
+  if (memcmp(buf + offset, data, len) == 0) {
+    // nothing to do; avoid an unnecessary erase cycle.
+    return true;
+  }
+  memcpy(buf + offset, data, len);
+  return save_flash_nolib(buf, sizeof(buf), EEPROM_START_ADD);
+}
+
+static bool set_eeprom_byte(uint16_t offset, uint8_t value)
+{
+  return set_eeprom_bytes(offset, &value, 1);
+}
+
+/*
+  read the live (effective) wire value of a numeric parameter from
+  EEPROM, applying the same default-and-clamp rules and scaling the
+  main firmware uses. Sets *out_val and returns true on success;
+  returns false if the parameter is BL_T_STRING (caller must handle
+  strings separately) or if no parameter exists at p_idx.
+ */
+static bool bl_param_read_numeric(uint8_t p_idx, uint16_t *out_val)
+{
+  const uint8_t *eeprom = (const uint8_t *)EEPROM_START_ADD;
+  const struct bl_param *p = &bl_parameters[p_idx];
+  if (p->vtype == BL_T_STRING) {
+    return false;
+  }
+  if (eeprom[0] != 0x01) {
+    *out_val = p->default_value;
+    return true;
+  }
+  const uint8_t raw = eeprom[p->eeprom_offset];
+  uint16_t v;
+  switch (p->vtype) {
+  case BL_T_UINT16:
+    if (p->eeprom_offset == EEPROM_OFS_MOTOR_KV) {
+      v = (uint16_t)raw * 40U + 20U;
+    } else if (p->eeprom_offset == EEPROM_OFS_LOW_CELL_VOLT_CUTOFF) {
+      v = (uint16_t)raw + 250U;
+    } else {
+      v = raw;
+    }
+    break;
+  case BL_T_UINT8:
+  case BL_T_BOOL:
+  default:
+    v = raw;
+    if (p->eeprom_offset == EEPROM_OFS_LIMITS_CURRENT) {
+      v = (uint16_t)(v * 2U);
+    } else if (p->eeprom_offset == EEPROM_OFS_ADVANCE_LEVEL) {
+      if (v < sizeof(advance_level_v3_remap)) {
+        v = advance_level_v3_remap[v];
+      }
+      if (v >= 10) {
+        v -= 10;
+      }
+    }
+    break;
+  }
+  // Clamp to range; an out-of-range raw byte (typically 0xFF on
+  // uninitialised EEPROM) maps to the parameter's default_value.
+  if (v < p->min_value || v > p->max_value) {
+    v = p->default_value;
+  }
+  *out_val = v;
+  return true;
+}
+
+/*
+  write the wire value of a numeric parameter through to EEPROM, applying
+  the inverse of the scaling bl_param_read_numeric() applies. v is
+  pre-clamped to [min_value, max_value]; returns the result of the
+  flash write.
+ */
+static bool bl_param_write_numeric(uint8_t p_idx, uint16_t v)
+{
+  const struct bl_param *p = &bl_parameters[p_idx];
+  if (v < p->min_value) v = p->min_value;
+  if (v > p->max_value) v = p->max_value;
+  uint8_t raw;
+  switch (p->vtype) {
+  case BL_T_UINT16:
+    if (p->eeprom_offset == EEPROM_OFS_MOTOR_KV) {
+      raw = (uint8_t)((v - 20U) / 40U);
+    } else if (p->eeprom_offset == EEPROM_OFS_LOW_CELL_VOLT_CUTOFF) {
+      raw = (uint8_t)(v - 250U);
+    } else {
+      raw = (uint8_t)v;
+    }
+    break;
+  case BL_T_UINT8:
+  case BL_T_BOOL:
+  default:
+    if (p->eeprom_offset == EEPROM_OFS_LIMITS_CURRENT) {
+      raw = (uint8_t)(v / 2U);
+    } else if (p->eeprom_offset == EEPROM_OFS_ADVANCE_LEVEL) {
+      raw = (uint8_t)(v + 10U);
+    } else {
+      raw = (uint8_t)v;
+    }
+    break;
+  }
+  return set_eeprom_byte(p->eeprom_offset, raw);
+}
+
+/*
+  populate pkt.value / pkt.default_value / pkt.min_value / pkt.max_value
+  for parameter p_idx. For BL_T_UINT8/BL_T_BOOL parameters that live in
+  the default_settings[] region (offsets 0..47), the response's
+  default_value comes from default_settings (matching the main firmware);
+  for everything else we report the parameter table's default_value.
+ */
+static void bl_param_fill_response(struct uavcan_protocol_param_GetSetResponse *pkt, uint8_t p_idx)
+{
+  const struct bl_param *p = &bl_parameters[p_idx];
+  const uint8_t off = p->eeprom_offset;
+  uint16_t cur_val = 0;
+  const bool have_numeric = bl_param_read_numeric(p_idx, &cur_val);
+
+  switch (p->vtype) {
+  case BL_T_UINT8: {
+    pkt->value.union_tag = UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE;
+    pkt->value.integer_value = cur_val;
+    pkt->default_value.union_tag = UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE;
+    if (off < sizeof(default_settings)) {
+      uint16_t d = default_settings[off];
+      if (off == EEPROM_OFS_LIMITS_CURRENT) d = (uint16_t)(d * 2U);
+      pkt->default_value.integer_value = d;
+    } else {
+      pkt->default_value.integer_value = p->default_value;
+    }
+    pkt->min_value.union_tag = UAVCAN_PROTOCOL_PARAM_NUMERICVALUE_INTEGER_VALUE;
+    pkt->min_value.integer_value = p->min_value;
+    pkt->max_value.union_tag = UAVCAN_PROTOCOL_PARAM_NUMERICVALUE_INTEGER_VALUE;
+    pkt->max_value.integer_value = p->max_value;
+    break;
+  }
+  case BL_T_BOOL: {
+    pkt->value.union_tag = UAVCAN_PROTOCOL_PARAM_VALUE_BOOLEAN_VALUE;
+    pkt->value.boolean_value = cur_val ? 1 : 0;
+    pkt->default_value.union_tag = UAVCAN_PROTOCOL_PARAM_VALUE_BOOLEAN_VALUE;
+    if (off < sizeof(default_settings)) {
+      pkt->default_value.boolean_value = default_settings[off] ? 1 : 0;
+    } else {
+      pkt->default_value.boolean_value = p->default_value ? 1 : 0;
+    }
+    break;
+  }
+  case BL_T_UINT16: {
+    pkt->value.union_tag = UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE;
+    pkt->value.integer_value = cur_val;
+    pkt->default_value.union_tag = UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE;
+    pkt->default_value.integer_value = p->default_value;
+    pkt->min_value.union_tag = UAVCAN_PROTOCOL_PARAM_NUMERICVALUE_INTEGER_VALUE;
+    pkt->min_value.integer_value = p->min_value;
+    pkt->max_value.union_tag = UAVCAN_PROTOCOL_PARAM_NUMERICVALUE_INTEGER_VALUE;
+    pkt->max_value.integer_value = p->max_value;
+    break;
+  }
+  case BL_T_STRING: {
+    pkt->value.union_tag = UAVCAN_PROTOCOL_PARAM_VALUE_STRING_VALUE;
+    const uint8_t *eeprom = (const uint8_t *)EEPROM_START_ADD;
+    const uint16_t maxlen = sizeof(pkt->value.string_value.data);
+    uint16_t slen = EEPROM_TUNE_LEN;
+    if (slen > maxlen) slen = maxlen;
+    pkt->value.string_value.len = slen;
+    memcpy(pkt->value.string_value.data, &eeprom[off], slen);
+    break;
+  }
+  }
+  (void)have_numeric;
+}
+
+/*
+  handle uavcan.protocol.param.GetSet request. Supports lookup by name
+  or by index. The set path is taken when the caller passes a name AND
+  a non-empty Value union; integers/booleans go through the scaling
+  helpers, strings (STARTUP_TUNE) go straight to EEPROM.
+
+  Set is refused when the EEPROM magic isn't set: we'd otherwise be
+  writing into a page full of 0xFF, and the application would treat
+  the result as uninitialised on next boot.
+*/
+static void handle_param_GetSet(CanardInstance* ins, CanardRxTransfer* transfer)
+{
+  struct uavcan_protocol_param_GetSetRequest req;
+  if (uavcan_protocol_param_GetSetRequest_decode(transfer, &req)) {
+    return;
+  }
+
+  const uint8_t *eeprom = (const uint8_t *)EEPROM_START_ADD;
+  int p_idx = -1;
+
+  if (req.name.len != 0) {
+    for (uint8_t i = 0; i < NUM_BL_PARAMS; i++) {
+      const char *pname = bl_parameters[i].name;
+      const uint32_t plen = strlen(pname);
+      if (req.name.len == plen &&
+          memcmp(req.name.data, pname, plen) == 0) {
+        p_idx = (int)i;
+        break;
+      }
+    }
+  } else if (req.index < NUM_BL_PARAMS) {
+    p_idx = req.index;
+  }
+
+  // Set path. Refuse if EEPROM is unprovisioned; refuse the EMPTY union
+  // (that's how a pure Get-by-name is signalled).
+  if (p_idx >= 0 && req.name.len != 0 &&
+      req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_EMPTY &&
+      eeprom[0] == 0x01) {
+    const struct bl_param *p = &bl_parameters[p_idx];
+    switch (p->vtype) {
+    case BL_T_BOOL: {
+      uint16_t v;
+      if (req.value.union_tag == UAVCAN_PROTOCOL_PARAM_VALUE_BOOLEAN_VALUE) {
+        v = req.value.boolean_value ? 1 : 0;
+      } else if (req.value.union_tag == UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE) {
+        v = req.value.integer_value ? 1 : 0;
+      } else {
+        break;
+      }
+      bl_param_write_numeric((uint8_t)p_idx, v);
+      break;
+    }
+    case BL_T_UINT8:
+    case BL_T_UINT16: {
+      if (req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE) {
+        break;
+      }
+      int64_t v = req.value.integer_value;
+      if (v < 0) v = 0;
+      if (v > 0xFFFF) v = 0xFFFF;
+      bl_param_write_numeric((uint8_t)p_idx, (uint16_t)v);
+      break;
+    }
+    case BL_T_STRING: {
+      if (req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_STRING_VALUE) {
+        break;
+      }
+      // STARTUP_TUNE: 128-byte slot at offset 48. Bytes beyond the
+      // request length are padded to 0xFF, matching the main firmware.
+      uint8_t tune[EEPROM_TUNE_LEN];
+      const uint16_t slen = req.value.string_value.len;
+      for (uint16_t i = 0; i < sizeof(tune); i++) {
+        tune[i] = (i < slen) ? req.value.string_value.data[i] : 0xFF;
+      }
+      set_eeprom_bytes(EEPROM_OFS_TUNE, tune, sizeof(tune));
+      break;
+    }
+    }
+  }
+
+  // Build response.
+  struct uavcan_protocol_param_GetSetResponse pkt;
+  memset(&pkt, 0, sizeof(pkt));
+
+  if (p_idx >= 0) {
+    bl_param_fill_response(&pkt, (uint8_t)p_idx);
+    const char *pname = bl_parameters[p_idx].name;
+    pkt.name.len = strlen(pname);
+    memcpy(pkt.name.data, pname, pkt.name.len);
+  }
+
+  uint8_t buffer[UAVCAN_PROTOCOL_PARAM_GETSET_RESPONSE_MAX_SIZE];
+  uint16_t total_size = DC_ENCODE(uavcan_protocol_param_GetSetResponse_encode, &pkt, buffer);
+
+  DC_RESPOND(ins,
+                         transfer->source_node_id,
+                         UAVCAN_PROTOCOL_PARAM_GETSET_SIGNATURE,
+                         UAVCAN_PROTOCOL_PARAM_GETSET_ID,
+                         &transfer->transfer_id,
+                         transfer->priority,
+                         CanardResponse,
+                         &buffer[0],
+                         total_size);
+}
+
+/*
+  handle parameter executeopcode request
+*/
+static void handle_param_ExecuteOpcode(CanardInstance* ins, CanardRxTransfer* transfer)
+{
+  struct uavcan_protocol_param_ExecuteOpcodeRequest req;
+  if (uavcan_protocol_param_ExecuteOpcodeRequest_decode(transfer, &req)) {
+    return;
+  }
+  struct uavcan_protocol_param_ExecuteOpcodeResponse pkt;
+  memset(&pkt, 0, sizeof(pkt));
+
+  pkt.ok = false;
+
+  if (req.opcode == UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_REQUEST_OPCODE_ERASE) {
+    can_print("resetting to defaults");
+    save_flash_nolib(default_settings, sizeof(default_settings), EEPROM_START_ADD);
+    pkt.ok = true;
+  } else if (req.opcode == UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_REQUEST_OPCODE_SAVE) {
+    // GetSet writes parameters straight to flash, so SAVE is a no-op; ack it
+    // so DroneCAN parameter clients that send SAVE see success.
+    pkt.ok = true;
+  }
+
+
+  uint8_t buffer[UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_RESPONSE_MAX_SIZE];
+  uint16_t total_size = DC_ENCODE(uavcan_protocol_param_ExecuteOpcodeResponse_encode, &pkt, buffer);
+
+  DC_RESPOND(ins,
+                         transfer->source_node_id,
+                         UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_SIGNATURE,
+                         UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_ID,
+                         &transfer->transfer_id,
+                         transfer->priority,
+                         CanardResponse,
+                         &buffer[0],
+                         total_size);
+}
+#endif // DRONECAN_PARAM_SUPPORT_ENABLED
+
+/*
+  handle RestartNode request
+*/
+static void handle_RestartNode(CanardInstance* ins, CanardRxTransfer* transfer)
+{
+  set_rtc_backup_register(0, 0);
+  // reboot the ESC
+  NVIC_SystemReset();
+}
+
+/*
+  handle a GetNodeInfo request
+*/
+static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
+{
+  uint8_t buffer[UAVCAN_PROTOCOL_GETNODEINFO_RESPONSE_MAX_SIZE];
+  struct uavcan_protocol_GetNodeInfoResponse pkt;
+
+  memset(&pkt, 0, sizeof(pkt));
+
+  // uptime_sec is maintained by process1HzTasks via a 1Hz tick counter,
+  // not derived from the 71-minute-wrapping microsecond timer.
+  pkt.status = node_status;
+
+  // fill in your major and minor firmware version
+  pkt.software_version.major = BOOTLOADER_VERSION;
+  pkt.software_version.minor = 0;
+  pkt.software_version.optional_field_flags = 0;
+  pkt.software_version.vcs_commit = 0; // should put git hash in here
+
+#ifdef DRONECAN_HW_VERSION_MAJOR
+  pkt.hardware_version.major = DRONECAN_HW_VERSION_MAJOR;
+  pkt.hardware_version.minor = DRONECAN_HW_VERSION_MINOR;
+#else
+  pkt.hardware_version.major = 2;
+  pkt.hardware_version.minor = 3;
+#endif
+
+  sys_can_getUniqueID(pkt.hardware_version.unique_id);
+
+  strncpy((char*)pkt.name.data, "AM32_BOOTLOADER_" AM32_MCU, sizeof(pkt.name.data));
+  pkt.name.len = strnlen((char*)pkt.name.data, sizeof(pkt.name.data));
+
+  uint16_t total_size = DC_ENCODE(uavcan_protocol_GetNodeInfoResponse_encode, &pkt, buffer);
+
+  DC_RESPOND(ins,
+                         transfer->source_node_id,
+                         UAVCAN_PROTOCOL_GETNODEINFO_SIGNATURE,
+                         UAVCAN_PROTOCOL_GETNODEINFO_ID,
+                         &transfer->transfer_id,
+                         transfer->priority,
+                         CanardResponse,
+                         &buffer[0],
+                         total_size);
+}
+
+/*
+  handle a BeginFirmwareUpdate request from a management tool like
+  DroneCAN GUI tool or MissionPlanner
+ */
+static void handle_begin_firmware_update(CanardInstance* ins, CanardRxTransfer* transfer)
+{
+  /*
+    decode the request
+   */
+  struct uavcan_protocol_file_BeginFirmwareUpdateRequest req;
+  if (uavcan_protocol_file_BeginFirmwareUpdateRequest_decode(transfer, &req)) {
+    return;
+  }
+
+  /*
+    check for a repeated BeginFirmwareUpdateRequest
+   */
+  if (fwupdate.node_id == transfer->source_node_id &&
+      memcmp(fwupdate.path, req.image_file_remote_path.path.data, req.image_file_remote_path.path.len) == 0) {
+    /* ignore duplicate request */
+    return;
+  }
+
+  fwupdate.offset = 0;
+  fwupdate.node_id = transfer->source_node_id;
+  strncpy(fwupdate.path, (char*)req.image_file_remote_path.path.data, req.image_file_remote_path.path.len);
+
+  uint8_t buffer[UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_RESPONSE_MAX_SIZE];
+  struct uavcan_protocol_file_BeginFirmwareUpdateResponse reply;
+  memset(&reply, 0, sizeof(reply));
+  reply.error = UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_RESPONSE_ERROR_OK;
+
+  uint32_t total_size = DC_ENCODE(uavcan_protocol_file_BeginFirmwareUpdateResponse_encode, &reply, buffer);
+
+  DC_RESPOND(ins,
+                         transfer->source_node_id,
+                         UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_SIGNATURE,
+                         UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_ID,
+                         &transfer->transfer_id,
+                         transfer->priority,
+                         CanardResponse,
+                         &buffer[0],
+                         total_size);
+
+  can_print("Started firmware update");
+}
+
+/*
+  send a read for a firmware update. This asks the client (firmware
+  server) for a piece of the new firmware
+ */
+static void send_firmware_read(void)
+{
+  uint32_t now = millis32();
+  if (fwupdate.last_read_ms != 0 && now - fwupdate.last_read_ms < 750) {
+    // the server may still be responding
+    return;
+  }
+  fwupdate.last_read_ms = now;
+
+  uint8_t buffer[UAVCAN_PROTOCOL_FILE_READ_REQUEST_MAX_SIZE];
+
+  struct uavcan_protocol_file_ReadRequest pkt;
+  memset(&pkt, 0, sizeof(pkt));
+
+  pkt.path.path.len = strlen((const char *)fwupdate.path);
+  pkt.offset = fwupdate.offset;
+  memcpy(pkt.path.path.data, fwupdate.path, pkt.path.path.len);
+
+  uint16_t total_size = DC_ENCODE(uavcan_protocol_file_ReadRequest_encode, &pkt, buffer);
+
+  DC_RESPOND(&canard,
+                         fwupdate.node_id,
+                         UAVCAN_PROTOCOL_FILE_READ_SIGNATURE,
+                         UAVCAN_PROTOCOL_FILE_READ_ID,
+                         &fwupdate.transfer_id,
+                         CANARD_TRANSFER_PRIORITY_HIGH,
+                         CanardRequest,
+                         &buffer[0],
+                         total_size);
+}
+
+/*
+  handle response to send_firmware_read()
+ */
+static void handle_file_read_response(CanardInstance* ins, CanardRxTransfer* transfer)
+{
+  if ((transfer->transfer_id+1)%32 != fwupdate.transfer_id ||
+      transfer->source_node_id != fwupdate.node_id) {
+    /* not for us */
+    can_print("Firmware update: not for us");
+    return;
+  }
+  struct uavcan_protocol_file_ReadResponse pkt;
+  if (uavcan_protocol_file_ReadResponse_decode(transfer, &pkt)) {
+    /* bad packet */
+    can_print("Firmware update: bad packet");
+    return;
+  }
+  if (pkt.error.value != UAVCAN_PROTOCOL_FILE_ERROR_OK) {
+    if (fwupdate.offset == 0) {
+      // MissionPlanner does this sometimes, ignore
+      return;
+    }
+    /* read failed */
+    fwupdate.node_id = 0;
+    can_print("Firmware update read failure");
+    return;
+  }
+
+  uint32_t len = pkt.data.len;
+  len = (len+7U) & ~7U;
+  save_flash_nolib(pkt.data.data, len, (uint32_t)MAIN_FW_START_ADDR + fwupdate.offset);
+
+  fwupdate.offset += pkt.data.len;
+
+  if (pkt.data.len < 256) {
+    /* firmware updare done */
+    can_print("Firmwate update complete");
+    fwupdate.node_id = 0;
+    set_rtc_backup_register(0, 0);
+    NVIC_SystemReset();
+    return;
+  }
+
+  /* trigger a new read */
+  fwupdate.last_read_ms = 0;
+  send_firmware_read();
+
+  DroneCAN_processTxQueue();
+}
+
+/*
+  data for dynamic node allocation process
+*/
+static struct {
+  uint32_t send_next_node_id_allocation_request_at_ms;
+  uint32_t node_id_allocation_unique_id_offset;
+} DNA;
+
+/*
+  handle a DNA allocation packet
+*/
+static void handle_DNA_Allocation(CanardInstance *ins, CanardRxTransfer *transfer)
+{
+  if (canardGetLocalNodeID(&canard) != CANARD_BROADCAST_NODE_ID) {
+    // already allocated
+    return;
+  }
+
+  // Rule C - updating the randomized time interval
+  DNA.send_next_node_id_allocation_request_at_ms =
+    millis32() + UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MIN_REQUEST_PERIOD_MS +
+    (get_random16() % UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MAX_FOLLOWUP_DELAY_MS);
+
+  if (transfer->source_node_id == CANARD_BROADCAST_NODE_ID) {
+    DNA.node_id_allocation_unique_id_offset = 0;
+    return;
+  }
+
+  // Copying the unique ID from the message
+  struct uavcan_protocol_dynamic_node_id_Allocation msg;
+
+  if (uavcan_protocol_dynamic_node_id_Allocation_decode(transfer, &msg)) {
+    /* bad packet */
+    return;
+  }
+
+  // Obtaining the local unique ID
+  uint8_t my_unique_id[sizeof(msg.unique_id.data)];
+  sys_can_getUniqueID(my_unique_id);
+
+  // Matching the received UID against the local one
+  if (memcmp(msg.unique_id.data, my_unique_id, msg.unique_id.len) != 0) {
+    DNA.node_id_allocation_unique_id_offset = 0;
+    // No match, return
+    return;
+  }
+
+  if (msg.unique_id.len < sizeof(msg.unique_id.data)) {
+    // The allocator has confirmed part of unique ID, switching to
+    // the next stage and updating the timeout.
+    DNA.node_id_allocation_unique_id_offset = msg.unique_id.len;
+    DNA.send_next_node_id_allocation_request_at_ms -= UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MIN_REQUEST_PERIOD_MS;
+
+  } else {
+    // Allocation complete - copying the allocated node ID from the message
+    canardSetLocalNodeID(ins, msg.node_id);
+  }
+}
+
+/*
+  ask for a dynamic node allocation
+*/
+static void request_DNA()
+{
+  const uint32_t now = millis32();
+  static uint8_t node_id_allocation_transfer_id = 0;
+
+  DNA.send_next_node_id_allocation_request_at_ms =
+    now + UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MIN_REQUEST_PERIOD_MS +
+    (get_random16() % UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_MAX_FOLLOWUP_DELAY_MS);
+
+  // Structure of the request is documented in the DSDL definition
+  // See http://uavcan.org/Specification/6._Application_level_functions/#dynamic-node-id-allocation
+  uint8_t allocation_request[CANARD_CAN_FRAME_MAX_DATA_LEN - 1];
+  allocation_request[0] = (uint8_t)(PREFERRED_NODE_ID << 1U);
+
+  if (DNA.node_id_allocation_unique_id_offset == 0) {
+    allocation_request[0] |= 1;     // First part of unique ID
+  }
+
+  uint8_t my_unique_id[16];
+  sys_can_getUniqueID(my_unique_id);
+
+  static const uint8_t MaxLenOfUniqueIDInRequest = 6;
+  uint8_t uid_size = (uint8_t)(16 - DNA.node_id_allocation_unique_id_offset);
+
+  if (uid_size > MaxLenOfUniqueIDInRequest) {
+    uid_size = MaxLenOfUniqueIDInRequest;
+  }
+
+  memmove(&allocation_request[1], &my_unique_id[DNA.node_id_allocation_unique_id_offset], uid_size);
+
+  // Broadcasting the request
+  DC_BROADCAST(&canard,
+                  UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE,
+                  UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID,
+                  &node_id_allocation_transfer_id,
+                  CANARD_TRANSFER_PRIORITY_LOW,
+                  &allocation_request[0],
+                  (uint16_t) (uid_size + 1));
+
+  // Preparing for timeout; if response is received, this value will be updated from the callback.
+  DNA.node_id_allocation_unique_id_offset = 0;
+}
+
+/*
+  This callback is invoked by the library when a new message or request or response is received.
+*/
+static void onTransferReceived(CanardInstance *ins, CanardRxTransfer *transfer)
+{
+  // switch on data type ID to pass to the right handler function
+  if (transfer->transfer_type == CanardTransferTypeRequest) {
+    // check if we want to handle a specific service request
+    switch (transfer->data_type_id) {
+    case UAVCAN_PROTOCOL_GETNODEINFO_ID: {
+      handle_GetNodeInfo(ins, transfer);
+      break;
+    }
+    case UAVCAN_PROTOCOL_RESTARTNODE_ID: {
+      handle_RestartNode(ins, transfer);
+      break;
+    }
+    case UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_ID: {
+      handle_begin_firmware_update(ins, transfer);
+      break;
+    }
+#if DRONECAN_PARAM_SUPPORT_ENABLED
+    case UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_ID: {
+      handle_param_ExecuteOpcode(ins, transfer);
+      break;
+    }
+    case UAVCAN_PROTOCOL_PARAM_GETSET_ID: {
+      handle_param_GetSet(ins, transfer);
+      break;
+    }
+#endif
+    }
+  }
+  if (transfer->transfer_type == CanardTransferTypeResponse) {
+    switch (transfer->data_type_id) {
+    case UAVCAN_PROTOCOL_FILE_READ_ID:
+      handle_file_read_response(ins, transfer);
+      break;
+    }
+  }
+  if (transfer->transfer_type == CanardTransferTypeBroadcast) {
+    // check if we want to handle a specific broadcast message
+    switch (transfer->data_type_id) {
+    case UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID: {
+      handle_DNA_Allocation(ins, transfer);
+      break;
+    }
+    }
+  }
+}
+
+
+/*
+  This callback is invoked by the library when it detects beginning of a new transfer on the bus that can be received
+  by the local node.
+  If the callback returns true, the library will receive the transfer.
+  If the callback returns false, the library will ignore the transfer.
+  All transfers that are addressed to other nodes are always ignored.
+
+  This function must fill in the out_data_type_signature to be the signature of the message.
+*/
+static bool shouldAcceptTransfer(const CanardInstance *ins,
+                                 uint64_t *out_data_type_signature,
+                                 uint16_t data_type_id,
+                                 CanardTransferType transfer_type,
+                                 uint8_t source_node_id)
+{
+  if (transfer_type == CanardTransferTypeRequest) {
+    // check if we want to handle a specific service request
+    switch (data_type_id) {
+    case UAVCAN_PROTOCOL_GETNODEINFO_ID: {
+      *out_data_type_signature = UAVCAN_PROTOCOL_GETNODEINFO_REQUEST_SIGNATURE;
+      return true;
+    }
+    case UAVCAN_PROTOCOL_RESTARTNODE_ID: {
+      *out_data_type_signature = UAVCAN_PROTOCOL_RESTARTNODE_SIGNATURE;
+      return true;
+    }
+    case UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_ID: {
+      *out_data_type_signature = UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_SIGNATURE;
+      return true;
+    }
+#if DRONECAN_PARAM_SUPPORT_ENABLED
+    case UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_ID: {
+      *out_data_type_signature = UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_SIGNATURE;
+      return true;
+    }
+    case UAVCAN_PROTOCOL_PARAM_GETSET_ID: {
+      *out_data_type_signature = UAVCAN_PROTOCOL_PARAM_GETSET_SIGNATURE;
+      return true;
+    }
+#endif
+    }
+  }
+  if (transfer_type == CanardTransferTypeResponse) {
+    // check if we want to handle a specific service request
+    switch (data_type_id) {
+    case UAVCAN_PROTOCOL_FILE_READ_ID:
+      *out_data_type_signature = UAVCAN_PROTOCOL_FILE_READ_SIGNATURE;
+      return true;
+    }
+  }
+  if (transfer_type == CanardTransferTypeBroadcast) {
+    // see if we want to handle a specific broadcast packet
+    switch (data_type_id) {
+    case UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID: {
+      *out_data_type_signature = UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE;
+      return true;
+    }
+    case UAVCAN_EQUIPMENT_ESC_RAWCOMMAND_ID: {
+      // we are receiving RawCommand, we should boot to the main firmware
+      have_raw_command = true;
+    }
+    }
+  }
+  // we don't want any other messages
+  return false;
+}
+
+/*
+  send the 1Hz NodeStatus message. This is what allows a node to show
+  up in the DroneCAN GUI tool and in the flight controller logs
+*/
+static void send_NodeStatus(void)
+{
+  uint8_t buffer[UAVCAN_PROTOCOL_GETNODEINFO_RESPONSE_MAX_SIZE];
+
+  // uptime_sec is maintained by process1HzTasks (1Hz tick counter), not
+  // derived from the wrapping microsecond timer.
+  node_status.health = UAVCAN_PROTOCOL_NODESTATUS_HEALTH_OK;
+  node_status.mode = UAVCAN_PROTOCOL_NODESTATUS_MODE_MAINTENANCE;
+  node_status.sub_mode = 0;
+
+  /*
+    when doing a firmware update put the size in kbytes in VSSC so
+    the user can see how far it has reached
+  */
+  if (fwupdate.node_id != 0) {
+    node_status.vendor_specific_status_code = fwupdate.offset / 1024;
+    node_status.mode = UAVCAN_PROTOCOL_NODESTATUS_MODE_SOFTWARE_UPDATE;
+  }
+
+  uint32_t len = DC_ENCODE(uavcan_protocol_NodeStatus_encode, &node_status, buffer);
+
+  // we need a static variable for the transfer ID. This is
+  // incremeneted on each transfer, allowing for detection of packet
+  // loss
+  static uint8_t transfer_id;
+
+  DC_BROADCAST(&canard,
+                  UAVCAN_PROTOCOL_NODESTATUS_SIGNATURE,
+                  UAVCAN_PROTOCOL_NODESTATUS_ID,
+                  &transfer_id,
+                  CANARD_TRANSFER_PRIORITY_LOW,
+                  buffer,
+                  len);
+}
+
+/*
+  This function is called at 1 Hz rate from the main loop.
+*/
+static void process1HzTasks(uint32_t timestamp_usec)
+{
+  /*
+    Purge transfers that are no longer transmitted. This can free up some memory.
+    Canard's API is uint64_t; zero-extend here. Stale-transfer timeout is
+    CANARD_TRANSFER_TIMEOUT_USEC (~2s), well below the uint32 wrap window.
+  */
+  canardCleanupStaleTransfers(&canard, (uint64_t)timestamp_usec);
+
+  /*
+    Transmit the node status message. uptime_sec is bumped AFTER the
+    broadcast so the first NodeStatus (which fires almost immediately
+    after boot) reports uptime=0, matching the old micros64()-based
+    semantics.
+  */
+  send_NodeStatus();
+
+  /*
+    wraps at 136 years
+  */
+  node_status.uptime_sec++;
+}
+
+/*
+  receive one frame, only called from interrupt context
+*/
+void DroneCAN_receiveFrame(void)
+{
+  CanardCANFrame rx_frame = {0};
+  while (sys_can_receive(&rx_frame) > 0) {
+    can_seen = true;
+    dc_note_rx_frame(&rx_frame);
+    canardHandleRxFrame(&canard, &rx_frame, (uint64_t)micros32());
+  }
+}
+
+/*
+  handle a frame from interrupt context
+*/
+void DroneCAN_handleFrame(CanardCANFrame *frame)
+{
+  can_seen = true;
+  dc_note_rx_frame(frame);
+  canardHandleRxFrame(&canard, frame, (uint64_t)micros32());
+}
+
+/*
+  Transmits all frames from the TX queue
+*/
+void DroneCAN_processTxQueue(void)
+{
+  for (const CanardCANFrame* txf = NULL; (txf = canardPeekTxQueue(&canard)) != NULL;) {
+    const int16_t tx_res = sys_can_transmit(txf);
+    if (tx_res == 0) {
+      // no space, stop trying
+      break;
+    }
+    // success or error, remove frame
+    canardPopTxQueue(&canard);
+  }
+}
+
+//#pragma GCC optimize("O0")
+
+static void DroneCAN_Startup(void)
+{
+  canardInit(&canard,
+             canard_memory_pool,              // Raw memory chunk used for dynamic allocation
+             sizeof(canard_memory_pool),
+             onTransferReceived,                // Callback, see CanardOnTransferReception
+             shouldAcceptTransfer,              // Callback, see CanardShouldAcceptTransfer
+             NULL);
+
+  /*
+    if doing fw update get node ID from main firmware via RTC backup
+    register
+   */
+  uint8_t node_id = 0;
+  const uint32_t rtc0 = get_rtc_backup_register(0);
+  if ((rtc0 & 0xFFFFU) == RTC_BKUP0_FWUPDATE) {
+    node_id = rtc0 >> 24;
+    uint8_t src_node = (rtc0 >> 16) & 0xFF;
+    uint32_t path[2];
+    path[0] = get_rtc_backup_register(1);
+    path[1] = get_rtc_backup_register(2);
+    if (path[0] != 0 && src_node <= 127) {
+      // we have update path, can start immediately
+      fwupdate.node_id = src_node;
+      memset(fwupdate.path, 0, sizeof(fwupdate.path));
+      memcpy(fwupdate.path, path, sizeof(path));
+    }
+  }
+
+  if (node_id == 0) {
+    // check for valid node ID in settings
+    const uint8_t *eeprom = (const uint8_t *)EEPROM_START_ADD;
+    if (eeprom[0] == 1 && eeprom[176] <= 127) {
+      node_id = eeprom[176];
+    }
+  }
+
+  canardSetLocalNodeID(&canard, node_id);
+
+  // initialise low level CAN peripheral hardware
+  sys_can_init();
+
+#ifdef CAN_TERM_PIN
+  /*
+    apply the CAN bus termination setting from the EEPROM. Byte 183 is
+    eepromBuffer.can.term_enable (declared in ../AM32/Inc/eeprom.h). Mirror the
+    main firmware's load_settings(): an out-of-[0,1]-range byte falls back to the
+    default. default_settings[] only covers the first 48 bytes, so on a
+    defaults-seeded or erased EEPROM byte 183 reads 0xff -> default 0 (disabled),
+    matching the main firmware's default.
+   */
+  {
+    const uint8_t *eeprom = (const uint8_t *)EEPROM_START_ADD;
+    uint8_t term = eeprom[183];
+    if (term > 1) {
+      term = 0; // out of range -> default (disabled)
+    }
+    const bool term_enable = (eeprom[0] == 1) && (term != 0);
+    setup_portpin(CAN_TERM_PIN, term_enable ? CAN_TERM_POLARITY : !CAN_TERM_POLARITY);
+  }
+#endif
+
+#if 0
+  if (fwupdate.node_id != 0) {
+    can_print("fwupdate startup");
+    can_print(fwupdate.path);
+  } else {
+    can_print("bootloader startup");
+  }
+#endif
+}
+
+/*
+  handle DroneCAN packets. Return true if we are ready to boot the main firmware
+ */
+bool DroneCAN_update()
+{
+  static uint32_t next_1hz_service_at;
+  static bool done_startup;
+  if (!done_startup) {
+    done_startup = true;
+    DroneCAN_Startup();
+  }
+
+  sys_can_disable_IRQ();
+  sys_can_service();
+
+  DroneCAN_processTxQueue();
+
+  /*
+    arm the no-CAN fallback. Must run before the DNA early-return below (with no
+    cable the node never gets an ID, so that returns false forever). After
+    NONCAN_FALLBACK_MS with no raw command and no CAN seen, relax the boot gate
+    unless INPUT_SIGNAL_TYPE is DroneCAN. A blank EEPROM arms, but the
+    short-circuit below still refuses to boot it.
+   */
+  if (!have_raw_command && !noncan_fallback && !can_seen &&
+      millis32() > NONCAN_FALLBACK_MS) {
+    const uint8_t *ee = (const uint8_t *)EEPROM_START_ADD;
+    const bool wait_can = (ee[0] == 0x01 && ee[46] == DRONECAN_INPUT_TYPE);
+    if (!wait_can) {
+      noncan_fallback = true;
+    }
+  }
+  if (noncan_fallback && !can_seen) {
+    // fallen back and still no CAN: boot like a non-CAN build. Like the non-CAN
+    // build, refuse a blank/unprogrammed EEPROM (byte0 != 0x01) rather than let
+    // DroneCAN_boot_ok() seed defaults and boot it. If a CAN frame arrives
+    // later, can_seen vetoes this and DNA/CAN handling resumes below.
+    sys_can_enable_IRQ();
+    if (*(const uint8_t *)EEPROM_START_ADD != 0x01) {
+      return false;
+    }
+    return DroneCAN_boot_ok();
+  }
+
+  // see if we are still doing DNA
+  if (canardGetLocalNodeID(&canard) == CANARD_BROADCAST_NODE_ID) {
+    // we're still waiting for a DNA allocation of our node ID
+    if (millis32() > DNA.send_next_node_id_allocation_request_at_ms) {
+      request_DNA();
+    }
+    sys_can_enable_IRQ();
+    return false;
+  }
+
+  const uint32_t ts = micros32();
+
+  /*
+    1Hz tick
+   */
+  if ((int32_t)(ts - next_1hz_service_at) >= 0) {
+    next_1hz_service_at = ts + 1000000U;
+    process1HzTasks(ts);
+  }
+
+  if (fwupdate.node_id != 0) {
+    send_firmware_read();
+  }
+
+  DroneCAN_processTxQueue();
+
+  sys_can_enable_IRQ();
+
+  return DroneCAN_boot_ok();
+}
+
+/*
+  implementation of memmem() for finding app signature
+
+  not called memmem() as newer newlib declares that in string.h and a
+  static definition of the same name is a conflicting redeclaration
+ */
+static void *bl_memmem(const void *haystack, size_t haystacklen, const void *needle, size_t needlelen)
+{
+  while (haystacklen >= needlelen) {
+    char *p = (char *)memchr(haystack, *(const char *)needle, haystacklen-(needlelen-1));
+    if (!p) {
+      return NULL;
+    }
+    if (memcmp(p, needle, needlelen) == 0) {
+      return p;
+    }
+    haystacklen -= (p - (const char *)haystack) + 1;
+    haystack = p+1;
+  }
+  return NULL;
+}
+
+static void set_reason(enum boot_code code, const char *reason)
+{
+  static uint32_t last_msg_us;
+  node_status.vendor_specific_status_code = code;
+  // unsigned subtraction handles uint32 wrap
+  const uint32_t now_us = micros32();
+  if (now_us - last_msg_us > 5000000U) {
+    last_msg_us = now_us;
+    can_print(reason);
+  }
+}
+
+/*
+  see if we are OK to boot
+ */
+bool DroneCAN_boot_ok(void)
+{
+  if (fwupdate.node_id != 0) {
+    // in fw update
+    return false;
+  }
+  if ((get_rtc_backup_register(0) & 0xFFFFU) == RTC_BKUP0_FWUPDATE) {
+    // waiting for firmware update
+    node_status.vendor_specific_status_code = FAIL_REASON_IN_UPDATE;
+    return false;
+  }
+  /*
+    check application signature
+   */
+  uint32_t sig[2] = { APP_SIGNATURE_MAGIC1, APP_SIGNATURE_MAGIC2 };
+  const uint32_t app_max_len = (128-18)*1024;
+  const uint8_t *fw_base = (const uint8_t *)MAIN_FW_START_ADDR;
+  struct app_signature *appsig = bl_memmem(fw_base, app_max_len, sig, sizeof(sig));
+  if (appsig == NULL || (((uint32_t)appsig) & 3) != 0) {
+    set_reason(FAIL_REASON_NO_APP_SIG, "no app signature");
+    return false;
+  }
+  if (appsig->fwlen > app_max_len) {
+    set_reason(FAIL_REASON_BAD_LENGTH_APP, "bad app length");
+    return false;
+  }
+  if (memcmp(AM32_MCU, appsig->mcu, strlen(AM32_MCU)) != 0) {
+    set_reason(FAIL_REASON_BAD_BOARD_ID, "bad board type");
+    return false;
+  }
+
+#if DRONECAN_CHECK_SIGNATURE
+  const uint8_t *appsigend = (const uint8_t *)(appsig+1);
+  const uint32_t crc1 = crc32(fw_base, (uint32_t)((uint8_t*)appsig - fw_base));
+  const uint32_t crc2 = crc32(appsigend, appsig->fwlen - (uint32_t)(appsigend - fw_base));
+  if (appsig->crc1 != crc1 ||
+      appsig->crc2 != crc2) {
+    set_reason(FAIL_REASON_BAD_CRC, "bad firmware CRC");
+    return false;
+  }
+#endif
+
+  // waive the raw-command requirement under no-CAN fallback. The !can_seen
+  // re-check closes the late-frame race: a frame arriving after fallback armed
+  // re-blocks the boot and reverts to CAN behaviour.
+  if (!have_raw_command && !(noncan_fallback && !can_seen)) {
+    set_reason(FAIL_REASON_NO_SIGNAL, "no signal");
+    return false;
+  }
+
+  node_status.vendor_specific_status_code = CHECK_FW_OK;
+
+  const uint8_t eeprom_magic = *(uint8_t*)(EEPROM_START_ADD);
+  if (eeprom_magic == 0 || eeprom_magic == 0xff) {
+      can_print("resetting to defaults");
+      save_flash_nolib(default_settings, sizeof(default_settings), EEPROM_START_ADD);
+  }
+  if (eeprom_magic != 0x01) {
+    set_reason(FAIL_REASON_BAD_FIRMWARE_SIGNATURE, "bad eeprom header");
+  }
+
+  return true;
+}
+
+#endif // DRONECAN_SUPPORT

@@ -153,6 +153,8 @@ void sys_can_disable_IRQ(void)
 	NVIC_DisableIRQ(CAN1_TX_IRQn);
 }
 
+void sys_can_service(void) {}
+
 /*
   enable CAN IRQs
  */

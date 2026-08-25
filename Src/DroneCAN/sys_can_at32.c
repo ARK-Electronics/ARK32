@@ -126,6 +126,8 @@ void sys_can_init(void)
 	can_interrupt_enable(CAN1, CAN_EOIEN_INT, TRUE);
 }
 
+void sys_can_service(void) {}
+
 void sys_can_enable_IRQ(void)
 {
 	NVIC_EnableIRQ(CAN1_SE_IRQn);

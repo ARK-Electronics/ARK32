@@ -36,7 +36,8 @@ SRC_$(MCU) := $(foreach dir,$(SRC_DIR_$(MCU)),$(wildcard $(dir)/*.[cs]))
 CFLAGS_CAN_$(MCU) = \
 	-ISrc/DroneCAN \
 	-ISrc/DroneCAN/libcanard \
-	-ISrc/DroneCAN/dsdl_generated/include
+	-ISrc/DroneCAN/dsdl_generated/include \
+	-DCANARD_ENABLE_CANFD=1
 
 SRC_DIR_CAN_$(MCU) = Src/DroneCAN \
 		Src/DroneCAN/dsdl_generated/src \

@@ -69,6 +69,8 @@ FIELDS = [
     (181, 'can_filter_hz',          'Hz',    None),
     (182, 'can_debug_rate',         'Hz',    None),
     (183, 'can_term_enable',        '',      None),
+    (184, 'temp_derate_band',       'C',     None),
+    (185, 'can_fd_mbps',            'Mbps',  None),
 ]
 
 EEPROM_SIZE = 192
