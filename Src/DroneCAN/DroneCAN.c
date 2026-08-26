@@ -1197,9 +1197,16 @@ static void request_DNA()
 
 	memmove(&allocation_request[1], &my_unique_id[DNA.node_id_allocation_unique_id_offset], uid_size);
 
-	// Broadcasting the request
-	DC_BROADCAST(&canard, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID,
-		     &node_id_allocation_transfer_id, CANARD_TRANSFER_PRIORITY_LOW, &allocation_request[0], (uint16_t)(uid_size + 1));
+	/* DNA is a classic 8-byte anonymous transfer. If we echo CAN FD
+	 * from RawCommand here, the allocator never completes. */
+#	if CANARD_ENABLE_CANFD
+	canardBroadcast(&canard, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID,
+			&node_id_allocation_transfer_id, CANARD_TRANSFER_PRIORITY_LOW, &allocation_request[0], (uint16_t)(uid_size + 1),
+			false);
+#	else
+	canardBroadcast(&canard, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID,
+			&node_id_allocation_transfer_id, CANARD_TRANSFER_PRIORITY_LOW, &allocation_request[0], (uint16_t)(uid_size + 1));
+#	endif
 
 	// Preparing for timeout; if response is received, this value will be updated from the callback.
 	DNA.node_id_allocation_unique_id_offset = 0;
