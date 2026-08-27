@@ -336,7 +336,7 @@ void setInput()
 					input >= DSHOT_MAX_THROTTLE ? 2000
 					: input <= 137		    ? minimum_duty_cycle + 40
 								    : minimum_duty_cycle + 40 +
-									      (uint16_t)(((uint32_t)(input - 137) * sine_throttle_duty_slope_q16) >> 16);
+								 (uint16_t)(((uint32_t)(input - 137) * sine_throttle_duty_slope_q16) >> 16);
 			} else {
 				duty_cycle_setpoint =
 					input >= DSHOT_MAX_THROTTLE ? 2000
@@ -513,9 +513,11 @@ void setInput()
 	}
 	// Missed-ZC power cut (BLHeli-style): while commutating blind the
 	// rotor position is unknown - bound the energy driven into a possibly
-	// wrong phase. On DRV8328 (F051 4IN1) there is no VDS trip; on
-	// DRV8350H (ARK_G431_CAN) the board has a resistor-set VDS limit and
-	// FAULT_N is polled in faultPollGateDriver. Applied here in setInput
+	// wrong phase. On DRV8328 (F051 4IN1) VDS is latched until nSLEEP
+	// reset; on DRV8350H (ARK_G431_CAN) the board has a resistor-set VDS
+	// limit that auto-retries in 8 ms. FAULT_N is polled in
+	// faultPollGateDriver (OTW / short VDS pulses do not cut PWM).
+	// Applied here in setInput
 	// (on F051 that is the DShot EXTI IRQ, not the main loop) rather than
 	// inside the O3 RAM_FUNC 20 kHz body (bench bisect showed adding code
 	// there disturbs F051 startup). Pulling last_duty_cycle down as well
@@ -707,6 +709,7 @@ RAM_FUNC void tenKhzRoutine()
 			PROCESS_ADC_FLAG = 1;		       // set flag to do new adc read at lower priority
 			one_khz_loop_counter = 0;
 			faultDesyncEpisodeTick1kHz();
+			faultGateDriverTick1kHz();
 			if (use_current_limit && escIsDriving()) {
 				/*
 				 * The /10000 is a DEAD ZONE, not just a scale: it is an

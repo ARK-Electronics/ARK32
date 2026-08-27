@@ -59,75 +59,159 @@ volatile uint8_t fault_acq_resist_events;
 static uint16_t acq_grace_ms;
 #endif
 
-/*
- * DRV nFAULT is a single open-drain OR (VDS OCP, UVLO, OTW, GDF). Hardware
- * interface (DRV8350H / DRV8328 without SPI status) cannot report which bit
- * fired — classify from MCU ADC context at the rising edge of the latch.
- */
 #if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
 #	define FAULT_HAS_DRV_NFAULT 1
 #else
 #	define FAULT_HAS_DRV_NFAULT 0
 #endif
 
-#if FAULT_HAS_DRV_NFAULT
-/* Sticky until nFAULT releases; keeps FAULT_STUCK if bemf latch is cleared
- * by the zero-throttle path while the DRV is still asserting. */
-static uint8_t drv_nfault_latched;
-static fault_id_t drv_nfault_cause;
-#	if defined(USE_DRV_ENABLE)
-/* Rate-limit ENABLE recovery pulses (~main-loop iterations). */
-static uint16_t drv_enable_retry_div;
-#	endif
-
+#if defined(USE_DRV_NFAULT)
 /*
- * Best-effort guess: the DRV does not tell us which OR-term pulled nFAULT.
- * Use MCU ADC at the latch edge (call BEFORE clearing running/duty context).
- *
- * Priority: UVLO → OTW → OCP → unknown (VDS/GDF/etc.).
- * Units: battery_voltage 10 mV, actual_current 10 mA, degrees_celsius °C.
- *
- * Thresholds are deliberately coarse — a wrong-but-specific label is more
- * useful on the bench/FC than a generic "nFAULT". They are not datasheet
- * proofs of the DRV comparator that fired.
+ * DRV8350H (ARK 12S CAN). nFAULT is an OR of VDS OCP / UVLO / OTW / OTSD /
+ * GDF with no SPI status. Do not cut PWM on the falling edge: OTW keeps
+ * the drivers active, and VDS auto-retries in ~8 ms. Classify from pin
+ * duration + whether the bridge is still conducting.
  */
-static fault_id_t fault_classify_drv_nfault(void)
-{
-	const uint16_t v_cv = battery_voltage;
-	const int16_t i_ca = actual_current;
-	const int16_t t_c = degrees_celsius;
+#	define GD_CLASSIFY_MS 12u
+#	define GD_UVLO_CV 800u
+#	define GD_LIVE_RAW_MIN 48u
+#	define GD_THERMAL_C 100
+#	define GD_RETRY_WINDOW_MS 100u
+#	define GD_RETRY_BUDGET 8u
+#	define GD_RETRY_LOG_MS 200u
+#	define GD_HIZ_ESCALATE_MS 80u
 
-	/* ~8 V: below useful pack voltage for these ESCs; near DRV VM UVLO. */
-	if (v_cv > 0u && v_cv < 800u) {
-		return FAULT_GD_UVLO;
+enum {
+	GD_NF_IDLE = 0,
+	GD_NF_CLASSIFY,
+	GD_NF_WARN,
+	GD_NF_HIZ,
+	GD_NF_LATCH,
+};
+
+static uint8_t gd_state;
+static fault_id_t gd_cause;
+static uint16_t gd_t0;
+static uint16_t gd_snap_raw;
+static uint8_t gd_retry_count;
+static uint16_t gd_retry_window_t0;
+static uint16_t gd_retry_log_t0;
+static uint16_t gd_reset_div;
+static uint8_t gd_log_level;
+static fault_id_t gd_log_cause;
+static volatile uint16_t gd_ms;
+
+static void gd_queue_log(uint8_t level, fault_id_t cause)
+{
+	if (level >= gd_log_level) {
+		gd_log_level = level;
+		gd_log_cause = cause;
 	}
-	/* FET NTC / motor path hot — OTW class. */
-	if (t_c >= 100) {
-		return FAULT_GD_OTW;
-	}
-	/* High current, or was driving with meaningful duty when the pin fell. */
-	if (i_ca >= 2000 || (running != 0 && duty_cycle > 200u)) {
-		return FAULT_GD_OCP;
-	}
-	return FAULT_GD_UNKNOWN;
 }
 
 #	ifdef USE_DEBUG_UART
-static uint8_t fault_drv_nfault_dbg_event(fault_id_t cause)
+static uint8_t gd_dbg_event(fault_id_t cause, uint8_t warning)
 {
+	if (warning) {
+		return (cause == FAULT_GD_OCP) ? DBG_EVT_NFAULT_RETRY : DBG_EVT_NFAULT_OTW;
+	}
 	switch (cause) {
 		case FAULT_GD_UVLO:
 			return DBG_EVT_NFAULT_UVLO;
 		case FAULT_GD_OCP:
 			return DBG_EVT_NFAULT_OCP;
-		case FAULT_GD_OTW:
-			return DBG_EVT_NFAULT_OTW;
+		case FAULT_GD_OTSD:
+			return DBG_EVT_NFAULT_OTSD;
 		default:
 			return DBG_EVT_NFAULT;
 	}
 }
 #	endif
-#endif /* FAULT_HAS_DRV_NFAULT */
+
+static void gd_hold_cut(void)
+{
+	allOff();
+	maskPhaseInterrupts();
+	SET_DUTY_CYCLE_ALL(0);
+	running = 0;
+	stepper_sine = 0;
+}
+
+static void gd_enter_latch(fault_id_t cause)
+{
+	gd_hold_cut();
+	gd_cause = cause;
+	gd_state = GD_NF_LATCH;
+	gd_queue_log(FAULT_GD_LOG_ERROR, cause);
+#	ifdef USE_DEBUG_UART
+	debugUartLogEvent(gd_dbg_event(cause, 0));
+#	endif
+	if (escGetState() != ESC_FAULT_STUCK) {
+		escToFaultStuck();
+#	ifdef USE_RGB_LED
+		setIndividualRGBLed(1, 0, 0);
+#	endif
+	}
+}
+
+static void gd_enter_dead(uint16_t now)
+{
+	gd_hold_cut();
+	gd_t0 = now;
+	if (battery_voltage > 0u && battery_voltage < GD_UVLO_CV) {
+		gd_cause = FAULT_GD_UVLO;
+		gd_state = GD_NF_HIZ;
+		gd_queue_log(FAULT_GD_LOG_ERROR, FAULT_GD_UVLO);
+#	ifdef USE_DEBUG_UART
+		debugUartLogEvent(DBG_EVT_NFAULT_UVLO);
+#	endif
+		return;
+	}
+	if (degrees_celsius >= GD_THERMAL_C) {
+		gd_cause = FAULT_GD_OTSD;
+		gd_state = GD_NF_HIZ;
+		gd_queue_log(FAULT_GD_LOG_ERROR, FAULT_GD_OTSD);
+#	ifdef USE_DEBUG_UART
+		debugUartLogEvent(DBG_EVT_NFAULT_OTSD);
+#	endif
+		return;
+	}
+	gd_enter_latch(FAULT_GD_UNKNOWN);
+}
+
+static void gd_note_retry(uint16_t now)
+{
+	if ((uint16_t)(now - gd_retry_window_t0) > GD_RETRY_WINDOW_MS) {
+		gd_retry_count = 0;
+		gd_retry_window_t0 = now;
+	}
+	if (gd_retry_count < 255u) {
+		gd_retry_count++;
+	}
+	if (gd_retry_count >= GD_RETRY_BUDGET) {
+		gd_retry_count = 0;
+		gd_enter_latch(FAULT_GD_OCP);
+		return;
+	}
+	if ((uint16_t)(now - gd_retry_log_t0) >= GD_RETRY_LOG_MS) {
+		gd_retry_log_t0 = now;
+		gd_queue_log(FAULT_GD_LOG_WARNING, FAULT_GD_OCP);
+#	ifdef USE_DEBUG_UART
+		debugUartLogEvent(DBG_EVT_NFAULT_RETRY);
+#	endif
+	}
+}
+
+#elif defined(USE_DRV8328_NFAULT)
+/*
+ * DRV8328 (ARK 4IN1). Every nFAULT disables the gate drivers (no OTW-only
+ * report, no 8 ms VDS retry). VDS / OTSD / GDF stay latched until nSLEEP
+ * is pulled low — sleep-on-idle already does that. Firmware: cut PWM, latch
+ * stuck until zero throttle. Ignore the pin while asleep (nSLEEP UVLO).
+ */
+static uint8_t drv_nfault_latched;
+static fault_id_t drv_nfault_cause;
+#endif
 
 const char *faultGateDriverCauseName(fault_id_t cause)
 {
@@ -138,6 +222,8 @@ const char *faultGateDriverCauseName(fault_id_t cause)
 			return "OCP";
 		case FAULT_GD_OTW:
 			return "OTW";
+		case FAULT_GD_OTSD:
+			return "OTSD";
 		case FAULT_GD_UNKNOWN:
 			return "nFAULT";
 		default:
@@ -147,12 +233,34 @@ const char *faultGateDriverCauseName(fault_id_t cause)
 
 fault_id_t faultGateDriverCause(void)
 {
-#if FAULT_HAS_DRV_NFAULT
-	if (drv_nfault_latched || ((NFAULT_PORT->IDR & NFAULT_PIN) == 0u)) {
+#if defined(USE_DRV_NFAULT)
+	if (gd_state != GD_NF_IDLE) {
+		return gd_cause;
+	}
+#elif defined(USE_DRV8328_NFAULT)
+	if (drv_nfault_latched) {
 		return drv_nfault_cause;
 	}
 #endif
 	return FAULT_NONE;
+}
+
+uint8_t faultGateDriverConsumeLog(fault_id_t *cause)
+{
+#if defined(USE_DRV_NFAULT)
+	const uint8_t level = gd_log_level;
+	if (cause) {
+		*cause = (level != FAULT_GD_LOG_NONE) ? gd_log_cause : FAULT_NONE;
+	}
+	gd_log_level = FAULT_GD_LOG_NONE;
+	gd_log_cause = FAULT_NONE;
+	return level;
+#else
+	if (cause) {
+		*cause = FAULT_NONE;
+	}
+	return FAULT_GD_LOG_NONE;
+#endif
 }
 
 uint32_t faultErrorCount(void)
@@ -172,40 +280,49 @@ void faultErrorCountReset(void)
 
 uint8_t faultGateDriverFaultActive(void)
 {
-#if FAULT_HAS_DRV_NFAULT
-	if (drv_nfault_latched) {
-		return 1;
-	}
-	/* ENABLE/nSLEEP low asserts nFAULT (VCP UVLO). That is sleep, not a
-	 * trip — treating it as one made every arm/beep/idle publish a CAN
-	 * ERROR LogMessage and NodeStatus CRITICAL while the motor was fine. */
-	if (!gateDriverNfaultPinTrusted()) {
-		return 0;
-	}
-	return (uint8_t)((NFAULT_PORT->IDR & NFAULT_PIN) == 0u);
+#if defined(USE_DRV_NFAULT)
+	return (uint8_t)(gd_state == GD_NF_HIZ || gd_state == GD_NF_LATCH);
+#elif defined(USE_DRV8328_NFAULT)
+	return drv_nfault_latched;
 #else
 	return 0;
 #endif
 }
 
+uint8_t faultGateDriverWarningActive(void)
+{
+#if defined(USE_DRV_NFAULT)
+	return (uint8_t)(gd_state == GD_NF_WARN);
+#else
+	return 0;
+#endif
+}
+
+uint8_t faultGateDriverKeepAwake(void)
+{
+#if defined(USE_DRV_NFAULT)
+	/* HIZ auto-recover needs ENABLE high to see the pin release. */
+	return (uint8_t)(gd_state == GD_NF_HIZ);
+#else
+	return 0;
+#endif
+}
+
+void faultGateDriverTick1kHz(void)
+{
+#if defined(USE_DRV_NFAULT)
+	gd_ms++;
+#endif
+}
+
 void faultPollGateDriver(void)
 {
-#if FAULT_HAS_DRV_NFAULT
-	/*
-	 * While asleep ENABLE is held low (gate_driver sleep). That already
-	 * satisfies DRV8350H t_RST for latched VDS/GDF faults — but we used to
-	 * return here without ever clearing drv_nfault_latched, so FAULT_STUCK
-	 * survived zero throttle + VM restore until reboot. Clear the software
-	 * sticky at zero demand while asleep; nFAULT is not meaningful with
-	 * ENABLE low, so do not re-assert from the pin in that state.
-	 */
+#if defined(USE_DRV_NFAULT)
 	if (!gateDriverIsAwake()) {
-		if (drv_nfault_latched && adjusted_input == 0) {
-			drv_nfault_latched = 0;
-			drv_nfault_cause = FAULT_NONE;
-#	if defined(USE_DRV_ENABLE)
-			drv_enable_retry_div = 0;
-#	endif
+		if (adjusted_input == 0 && gd_state != GD_NF_IDLE) {
+			gd_state = GD_NF_IDLE;
+			gd_cause = FAULT_NONE;
+			gd_reset_div = 0;
 		}
 		return;
 	}
@@ -215,17 +332,115 @@ void faultPollGateDriver(void)
 		return;
 	}
 
-	/* Active low (open-drain). High = healthy. */
-	const uint8_t pin_ok = (NFAULT_PORT->IDR & NFAULT_PIN) != 0u;
+	const uint8_t pin_low = (uint8_t)((NFAULT_PORT->IDR & NFAULT_PIN) == 0u);
+	const uint16_t now = gd_ms;
 
-	if (!pin_ok) {
-		if (!drv_nfault_latched) {
-			/* Classify while running/duty still reflect the trip context. */
-			drv_nfault_cause = fault_classify_drv_nfault();
-			drv_nfault_latched = 1;
+	switch (gd_state) {
+		case GD_NF_IDLE:
+			if (pin_low) {
+				gd_snap_raw = ADC_raw_current;
+				gd_t0 = now;
+				gd_cause = FAULT_NONE;
+				gd_state = GD_NF_CLASSIFY;
+			}
+			break;
+
+		case GD_NF_CLASSIFY:
+			if (!pin_low) {
+				gd_state = GD_NF_IDLE;
+				gd_note_retry(now);
+				break;
+			}
+			if ((uint16_t)(now - gd_t0) < GD_CLASSIFY_MS) {
+				break;
+			}
+			if (gd_snap_raw >= GD_LIVE_RAW_MIN && ADC_raw_current >= (uint16_t)(gd_snap_raw >> 1)) {
+				gd_cause = FAULT_GD_OTW;
+				gd_state = GD_NF_WARN;
+				gd_queue_log(FAULT_GD_LOG_WARNING, FAULT_GD_OTW);
 #	ifdef USE_DEBUG_UART
-			debugUartLogEvent(fault_drv_nfault_dbg_event(drv_nfault_cause));
+				debugUartLogEvent(DBG_EVT_NFAULT_OTW);
 #	endif
+				break;
+			}
+			gd_enter_dead(now);
+			break;
+
+		case GD_NF_WARN:
+			if (!pin_low) {
+				gd_state = GD_NF_IDLE;
+				gd_cause = FAULT_NONE;
+				break;
+			}
+			if (ADC_raw_current < GD_LIVE_RAW_MIN && ADC_raw_current < (uint16_t)(gd_snap_raw >> 2)) {
+				gd_enter_dead(now);
+			}
+			break;
+
+		case GD_NF_HIZ:
+			gd_hold_cut();
+			if (adjusted_input == 0) {
+				gd_state = GD_NF_IDLE;
+				gd_cause = FAULT_NONE;
+				gd_reset_div = 0;
+				break;
+			}
+			if (!pin_low) {
+				gd_state = GD_NF_IDLE;
+				gd_cause = FAULT_NONE;
+				break;
+			}
+			if (battery_voltage > 0u && battery_voltage < GD_UVLO_CV) {
+				break;
+			}
+			if (degrees_celsius >= GD_THERMAL_C) {
+				break;
+			}
+			if ((uint16_t)(now - gd_t0) >= GD_HIZ_ESCALATE_MS) {
+				gd_enter_latch(gd_cause == FAULT_NONE ? FAULT_GD_UNKNOWN : gd_cause);
+			}
+			break;
+
+		case GD_NF_LATCH:
+			gd_hold_cut();
+			if (!pin_low && adjusted_input == 0) {
+				gd_state = GD_NF_IDLE;
+				gd_cause = FAULT_NONE;
+				gd_reset_div = 0;
+			} else if (pin_low && adjusted_input == 0) {
+				if (++gd_reset_div >= 2000u) {
+					gd_reset_div = 0;
+					gateDriverFaultResetPulse();
+				}
+			} else {
+				gd_reset_div = 0;
+			}
+			break;
+
+		default:
+			gd_state = GD_NF_IDLE;
+			gd_cause = FAULT_NONE;
+			break;
+	}
+
+#elif defined(USE_DRV8328_NFAULT)
+	if (!gateDriverIsAwake()) {
+		if (drv_nfault_latched && adjusted_input == 0) {
+			drv_nfault_latched = 0;
+			drv_nfault_cause = FAULT_NONE;
+		}
+		return;
+	}
+
+	gateDriverNfaultGraceTick();
+	if (!gateDriverNfaultPinTrusted()) {
+		return;
+	}
+
+	if ((NFAULT_PORT->IDR & NFAULT_PIN) == 0u) {
+		if (!drv_nfault_latched) {
+			drv_nfault_cause = (battery_voltage > 0u && battery_voltage < 800u) ? FAULT_GD_UVLO : FAULT_GD_UNKNOWN;
+			drv_nfault_latched = 1;
 		}
 		allOff();
 		maskPhaseInterrupts();
@@ -233,36 +448,11 @@ void faultPollGateDriver(void)
 		running = 0;
 		stepper_sine = 0;
 		if (escGetState() != ESC_FAULT_STUCK) {
-			/* Reuses stuck latch: reconcile holds FAULT_STUCK via
-			 * bemf_timeout_happened == ESC_STUCK_LATCH until zero
-			 * throttle clears it — same pilot-clear semantics. */
 			escToFaultStuck();
-#	ifdef USE_RGB_LED
-			setIndividualRGBLed(1, 0, 0);
-#	endif
 		}
-#	if defined(USE_DRV_ENABLE)
-		/*
-		 * DRV8350H: latched VDS / gate faults stay asserted until
-		 * ENABLE is driven low for t_RST then high again. Only retry
-		 * at zero demand so we never re-arm into a short.
-		 */
-		if (adjusted_input == 0) {
-			if (++drv_enable_retry_div >= 2000u) {
-				drv_enable_retry_div = 0;
-				gateDriverFaultResetPulse();
-			}
-		} else {
-			drv_enable_retry_div = 0;
-		}
-#	endif
 	} else if (drv_nfault_latched && adjusted_input == 0) {
-		/* Pin recovered and pilot at zero: drop sticky so arm can proceed. */
 		drv_nfault_latched = 0;
 		drv_nfault_cause = FAULT_NONE;
-#	if defined(USE_DRV_ENABLE)
-		drv_enable_retry_div = 0;
-#	endif
 	}
 #endif
 }
@@ -271,8 +461,7 @@ uint8_t faultHandleStuckRotorIfNeeded(void)
 {
 #ifndef BRUSHED_MODE
 #	if FAULT_HAS_DRV_NFAULT
-	/* Gate-driver trip: do not map throttle back onto the bridge while
-	 * nFAULT is low or still latched (cause in faultGateDriverCause()). */
+	/* Gate-driver Hi-Z / latch: do not map throttle onto the bridge. */
 	if (faultGateDriverFaultActive()) {
 		allOff();
 		maskPhaseInterrupts();

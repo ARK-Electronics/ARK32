@@ -10,11 +10,9 @@
 #	include "main.h" /* GPIO_TypeDef / BRR / BSRR */
 #	include "motor_runtime.h"
 #	include "targets.h"
-#	if defined(USE_DRV_ENABLE)
-/* DRV8350H on ARK 12S CAN: force bridge inputs inactive before ENABLE. */
-#		include "peripherals.h"
-#		include "phaseouts.h"
-#	endif
+#	include "peripherals.h"
+#	include "phaseouts.h"
+#	include "faults.h"
 
 /*
  * After nSLEEP/ENABLE rises, wait before gate inputs are valid (pin stays high).
@@ -109,21 +107,19 @@ void gateDriverSleep(void)
 
 void gateDriverFaultResetPulse(void)
 {
-	/* DRV8350H ENABLE pulse only; nSLEEP boards do not need t_RST. */
-#	if defined(USE_DRV_ENABLE)
-	/* PWM inactive for the whole reset+wake; wake re-does force-low + t_settle. */
+	/* DRV8350H ENABLE t_RST / DRV8328 nSLEEP reset. PWM inactive for the
+	 * whole pulse+wake so we never re-arm into a short. */
 	allOff();
 	SET_DUTY_CYCLE_ALL(0);
 	GD_PORT->BRR = GD_PIN;
 	delayMicros(GD_FAULT_RST_US);
 	gate_driver_awake = 0;
 	gateDriverWakeBlocking();
-#	endif
 }
 
 void gateDriverPoll(void)
 {
-	if (running || stepper_sine || prop_brake_active) {
+	if (running || stepper_sine || prop_brake_active || faultGateDriverKeepAwake()) {
 		gateDriverWakeBlocking();
 	} else {
 		gateDriverSleep();

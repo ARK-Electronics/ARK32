@@ -5,6 +5,7 @@ Firmware (``Src/debug_uart.c``, ``USE_DEBUG_UART``) emits a small text console:
 * boot banner: ``ARK_G431_CAN debug UART @ 115200 (PB3/USART2)``
 * state: ``esc: <from> -> <to>``
 * faults: ``fault: nFAULT`` / ``fault: desync`` / …
+* warnings: ``warn: nFAULT OTW`` / ``warn: nFAULT retry`` (do not abort)
 
 This is **not** KISS telemetry (that is a separate optional wire). On the
 thrust-stand bench the TX pin is wired to the ST-Link V3 Virtual COM Port;
@@ -22,7 +23,8 @@ from pathlib import Path
 # Host hard-abort on console faults. Free-run BEMF/startup campaigns log
 # many "fault: desync" / "fault: stall" lines during open-loop acquire and
 # map-tier crawl — those are data, not aborts. LiveDesyncWatch + stand
-# safety remain authoritative. Only gate-driver latch aborts the run.
+# safety remain authoritative. Only a gate-driver *latch* (``fault: nFAULT``)
+# aborts the run; OTW / VDS-retry warnings are ``warn:`` and do not abort.
 _ABORT_FAULTS = frozenset({
     "nFAULT",
 })
