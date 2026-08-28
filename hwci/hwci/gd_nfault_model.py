@@ -96,6 +96,7 @@ class GdNfaultMachine:
     live_t0: int = 0
     cmd_arm: int = 0
     cmd_t0: int = 0
+    cmd_held_ms: int = 0
     otw_confirmed: int = 0
     resume_count: int = 0
     log_level: int = LOG_NONE
@@ -143,23 +144,32 @@ class GdNfaultMachine:
         self.queue_log(LOG_ERROR, cause)
 
     def enter_dead(self) -> None:
-        if 0 < self.battery_voltage < GD["GD_UVLO_CV"]:
-            cause = FAULT_GD_UVLO
-        elif self.degrees_celsius >= GD["GD_THERMAL_C"]:
-            cause = FAULT_GD_OTSD
-        else:
-            cause = FAULT_GD_UNKNOWN
-        if self.resume_count >= GD["GD_RESUME_BUDGET"] and cause != FAULT_GD_UVLO:
-            self.enter_latch(cause)
-            return
         self.hold_cut()
         self.t0 = self.ms
         self.dead_arm = 0
         self.live_arm = 0
         self.cmd_arm = 0
+        self.cmd_held_ms = 0
         self.state = GD_NF_HIZ
-        self.cause = cause
+        if 0 < self.battery_voltage < GD["GD_UVLO_CV"]:
+            self.cause = FAULT_GD_UVLO
+        elif self.degrees_celsius >= GD["GD_THERMAL_C"]:
+            self.cause = FAULT_GD_OTSD
+        else:
+            self.cause = FAULT_GD_UNKNOWN
         self.queue_log(LOG_ERROR, self.cause)
+
+    def cmd_held_add(self) -> None:
+        if not self.cmd_arm:
+            self.cmd_arm = 1
+            self.cmd_t0 = self.ms
+            return
+        dt = _u16(self.ms - self.cmd_t0)
+        self.cmd_t0 = self.ms
+        if dt > 0xFFFF - self.cmd_held_ms:
+            self.cmd_held_ms = 0xFFFF
+        else:
+            self.cmd_held_ms += dt
 
     def enter_warn(self) -> None:
         self.cause = FAULT_GD_OTW
@@ -220,6 +230,7 @@ class GdNfaultMachine:
                 self.dead_arm = 0
                 self.live_arm = 0
                 self.cmd_arm = 0
+                self.cmd_held_ms = 0
                 self.otw_confirmed = 0
                 self.cause = FAULT_NONE
                 self.state = GD_NF_CLASSIFY
@@ -253,15 +264,15 @@ class GdNfaultMachine:
                 self.dead_arm = 0
                 self.live_arm = 0
                 self.cmd_arm = 0
+                self.cmd_held_ms = 0
+                self.otw_confirmed = 0
                 return
             if not drive_on:
                 self.dead_arm = 0
                 self.live_arm = 0
                 self.cmd_arm = 0
                 return
-            if not self.cmd_arm:
-                self.cmd_arm = 1
-                self.cmd_t0 = now
+            self.cmd_held_add()
             if current_live:
                 self.dead_arm = 0
                 if not self.live_arm:
@@ -277,14 +288,14 @@ class GdNfaultMachine:
                 elif _u16(now - self.dead_t0) >= GD["GD_DEAD_DWELL_MS"]:
                     self.enter_dead()
                     return
-            if (not self.otw_confirmed
-                    and _u16(now - self.cmd_t0) >= GD["GD_WARN_CEIL_MS"]):
+            if not self.otw_confirmed and self.cmd_held_ms >= GD["GD_WARN_CEIL_MS"]:
                 self.enter_dead()
             return
 
         if self.state == GD_NF_HIZ:
             self.hold_cut()
             if not pin_low:
+                self.resume_count = 0
                 self.state = GD_NF_IDLE
                 self.cause = FAULT_NONE
                 return
@@ -306,6 +317,7 @@ class GdNfaultMachine:
         if self.state == GD_NF_LATCH:
             self.hold_cut()
             if (not pin_low) and self.adjusted_input == 0:
+                self.resume_count = 0
                 self.state = GD_NF_IDLE
                 self.cause = FAULT_NONE
             return

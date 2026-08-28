@@ -259,30 +259,29 @@ def test_unconfirmed_flicker_hits_warn_ceiling():
     assert m.fault_active()
 
 
-def test_resume_budget_survives_pilot_retry():
+def test_hiz_pin_high_resets_resume_budget():
+    """Consecutive-failed tRST: a real pin-high recovery starts a new streak."""
     m = _spinning()
     m.pin_low = 1
     m.actual_current = 0
     m.step()
     m.run_ms(GD["GD_CLASSIFY_MS"])
     m.adjusted_input = 0
-    for _ in range(GD["GD_RESUME_BUDGET"]):
-        m.run_ms(GD["GD_HIZ_RST_MS"])
     m.run_ms(GD["GD_HIZ_RST_MS"])
-    assert m.state == GD_NF_LATCH
-    pulses = m.rst_pulses
+    m.run_ms(GD["GD_HIZ_RST_MS"])
+    assert m.resume_count == 2
     m.pin_low = 0
     m.step()
     assert m.state == GD_NF_IDLE
-    assert m.resume_count == GD["GD_RESUME_BUDGET"]
+    assert m.resume_count == 0
     m.running = 1
     m.adjusted_input = 500
     m.actual_current = 0
     m.pin_low = 1
     m.step()
     m.run_ms(GD["GD_CLASSIFY_MS"])
-    assert m.state == GD_NF_LATCH
-    assert m.rst_pulses == pulses
+    assert m.state == GD_NF_HIZ
+    assert m.state != GD_NF_LATCH
 
 
 def test_resume_budget_survives_sleep_idle():
@@ -298,6 +297,33 @@ def test_resume_budget_survives_sleep_idle():
     m.step()
     assert m.state == GD_NF_IDLE
     assert m.resume_count == 1
+
+
+def test_cmd_held_accumulates_across_idle_blips():
+    """Unconfirmed ceiling is total commanded-held, not one continuous burst."""
+    m = _spinning()
+    m.pin_low = 1
+    m.step()
+    m.actual_current = 80
+    m.run_ms(GD["GD_CLASSIFY_MS"])
+    assert m.state == GD_NF_WARN
+    assert not m.otw_confirmed
+
+    def flicker(n: int) -> None:
+        for _ in range(n):
+            m.actual_current = 80 if ((m.ms // 20) % 2) == 0 else 0
+            m.tick_ms(1)
+            m.step()
+
+    flicker(120)
+    assert m.state == GD_NF_WARN
+    m.adjusted_input = 0
+    m.run_ms(40)
+    assert m.state == GD_NF_WARN
+    m.adjusted_input = 500
+    m.running = 1
+    flicker(GD["GD_WARN_CEIL_MS"] - 120 + 20)
+    assert m.state == GD_NF_HIZ
 
 
 def test_first_retry_logs():

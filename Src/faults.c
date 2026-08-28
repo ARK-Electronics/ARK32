@@ -84,9 +84,10 @@ static uint16_t acq_grace_ms;
 #	define GD_UVLO_CV 800u
 /* Smoothed centiamps (actual_current). 0.50 A is ~6 raw LSB on G431
  * (MILLIVOLT_PER_AMP 10, CURRENT_OFFSET 0) — conduction vs noise, not a
- * "motor is loaded" floor. Idle offset on a warm board is a bench
- * datapoint; unconfirmed commanded-held (GD_WARN_CEIL_MS) is the backstop
- * if the floor sits under the offset. */
+ * "motor is loaded" floor. Bench: capture the actual_current distribution
+ * at warm idle AND at the lowest nonzero throttle the ESC is commanded at.
+ * If either straddles 50 cA, raise this — a barely-spinning motor that
+ * never holds 40 ms consecutive live hits GD_WARN_CEIL_MS and false-drops. */
 #	define GD_LIVE_CA_MIN 50
 /* MCU *die* via __LL_ADC_CALC_TEMPERATURE, not the DRV (OTW ~150 C /
  * OTSD ~175 C). Log label only — never pick HIZ vs latch from this. */
@@ -102,9 +103,11 @@ static uint16_t acq_grace_ms;
 #	define GD_OTW_CONFIRM_MS 40u
 /* Pin held + drive commanded, never confirmed live → Hi-Z. Closes a
  * starvable dwell (one sample ≥ LIVE_CA_MIN resets the 80 ms window).
- * Paused while idle so OTW + throttle-cut is not a delayed drop. */
+ * Accumulates commanded-held time across idle blips (idle does not
+ * restart the 250 ms). */
 #	define GD_WARN_CEIL_MS 250u
-/* Zero-throttle ENABLE tRST while nFAULT is still held (GDF). */
+/* Zero-throttle ENABLE tRST while nFAULT is still held (GDF).
+ * Consecutive failed pulses; pin-high recovery resets the count. */
 #	define GD_HIZ_RST_MS 2000u
 #	define GD_RESUME_BUDGET 3u
 
@@ -132,6 +135,7 @@ static uint8_t gd_live_arm;
 static uint16_t gd_live_t0;
 static uint8_t gd_cmd_arm;
 static uint16_t gd_cmd_t0;
+static uint16_t gd_cmd_held_ms;
 static uint8_t gd_otw_confirmed;
 static uint8_t gd_resume_count;
 static uint8_t gd_log_level;
@@ -212,32 +216,42 @@ static void gd_enter_latch(fault_id_t cause)
 
 static void gd_enter_dead(uint16_t now)
 {
-	fault_id_t cause;
-	if (battery_voltage > 0u && battery_voltage < GD_UVLO_CV) {
-		cause = FAULT_GD_UVLO;
-	} else if (degrees_celsius >= GD_THERMAL_C) {
-		cause = FAULT_GD_OTSD;
-	} else {
-		cause = FAULT_GD_UNKNOWN;
-	}
-	/* Lifetime tRST budget: do not re-arm ENABLE after it is spent
-	 * (sleep→IDLE is still a pilot retry, but it must not pulse). UVLO
-	 * still waits in HIZ — bus recovery is not a GDF. */
-	if (gd_resume_count >= GD_RESUME_BUDGET && cause != FAULT_GD_UVLO) {
-		gd_enter_latch(cause);
-		return;
-	}
 	gd_hold_cut();
 	gd_t0 = now;
 	gd_dead_arm = 0;
 	gd_live_arm = 0;
 	gd_cmd_arm = 0;
+	gd_cmd_held_ms = 0;
 	gd_state = GD_NF_HIZ;
-	gd_cause = cause;
+	if (battery_voltage > 0u && battery_voltage < GD_UVLO_CV) {
+		gd_cause = FAULT_GD_UVLO;
+	} else if (degrees_celsius >= GD_THERMAL_C) {
+		gd_cause = FAULT_GD_OTSD;
+	} else {
+		gd_cause = FAULT_GD_UNKNOWN;
+	}
 	gd_queue_log(FAULT_GD_LOG_ERROR, gd_cause);
 #	ifdef USE_DEBUG_UART
 	debugUartLogEvent(gd_dbg_event(gd_cause, 0));
 #	endif
+}
+
+/* Elapsed commanded-held time. Idle clears cmd_arm so the next drive
+ * poll does not add the idle gap; gd_cmd_held_ms is kept. */
+static void gd_cmd_held_add(uint16_t now)
+{
+	if (!gd_cmd_arm) {
+		gd_cmd_arm = 1;
+		gd_cmd_t0 = now;
+		return;
+	}
+	const uint16_t dt = (uint16_t)(now - gd_cmd_t0);
+	gd_cmd_t0 = now;
+	if (dt > (uint16_t)(0xffffu - gd_cmd_held_ms)) {
+		gd_cmd_held_ms = 0xffffu;
+	} else {
+		gd_cmd_held_ms = (uint16_t)(gd_cmd_held_ms + dt);
+	}
 }
 
 static void gd_enter_warn(uint16_t now)
@@ -398,8 +412,8 @@ void faultPollGateDriver(void)
 			gd_dead_arm = 0;
 			gd_live_arm = 0;
 			gd_cmd_arm = 0;
-			/* gd_resume_count is lifetime — sleep-idle is a pilot retry,
-			 * not a fresh tRST budget. */
+			/* gd_resume_count is consecutive-failed tRST. Sleep-idle
+			 * does not observe pin-high, so it does not reset. */
 		}
 		return;
 	}
@@ -422,6 +436,7 @@ void faultPollGateDriver(void)
 				gd_dead_arm = 0;
 				gd_live_arm = 0;
 				gd_cmd_arm = 0;
+				gd_cmd_held_ms = 0;
 				gd_otw_confirmed = 0;
 				gd_cause = FAULT_NONE;
 				gd_state = GD_NF_CLASSIFY;
@@ -438,6 +453,10 @@ void faultPollGateDriver(void)
 				break;
 			}
 			if (drive_on && gd_snap_ca >= GD_LIVE_CA_MIN && actual_current >= (int16_t)(gd_snap_ca >> 1)) {
+				/* Falling-edge snap and this sample are 12 ms and two
+				 * independent boxcar updates apart. Both live and not
+				 * collapsed vs snap is enough to confirm; the 40 ms
+				 * consecutive dwell is for the unconfirmed fallthrough. */
 				gd_otw_confirmed = 1;
 				gd_enter_warn(now);
 				break;
@@ -456,18 +475,17 @@ void faultPollGateDriver(void)
 				gd_dead_arm = 0;
 				gd_live_arm = 0;
 				gd_cmd_arm = 0;
+				gd_cmd_held_ms = 0;
+				gd_otw_confirmed = 0;
 				break;
 			}
 			if (!drive_on) {
 				gd_dead_arm = 0;
 				gd_live_arm = 0;
-				gd_cmd_arm = 0;
+				gd_cmd_arm = 0; /* pause the ceiling clock; keep held_ms */
 				break;
 			}
-			if (!gd_cmd_arm) {
-				gd_cmd_arm = 1;
-				gd_cmd_t0 = now;
-			}
+			gd_cmd_held_add(now);
 			if (current_live) {
 				gd_dead_arm = 0;
 				if (!gd_live_arm) {
@@ -486,7 +504,7 @@ void faultPollGateDriver(void)
 					break;
 				}
 			}
-			if (!gd_otw_confirmed && (uint16_t)(now - gd_cmd_t0) >= GD_WARN_CEIL_MS) {
+			if (!gd_otw_confirmed && gd_cmd_held_ms >= GD_WARN_CEIL_MS) {
 				gd_enter_dead(now);
 			}
 			break;
@@ -494,6 +512,7 @@ void faultPollGateDriver(void)
 		case GD_NF_HIZ:
 			gd_hold_cut();
 			if (!pin_low) {
+				gd_resume_count = 0; /* pin-high: DRV recovered */
 				gd_state = GD_NF_IDLE;
 				gd_cause = FAULT_NONE;
 				break;
@@ -521,6 +540,7 @@ void faultPollGateDriver(void)
 		case GD_NF_LATCH:
 			gd_hold_cut();
 			if (!pin_low && adjusted_input == 0) {
+				gd_resume_count = 0;
 				gd_state = GD_NF_IDLE;
 				gd_cause = FAULT_NONE;
 			}
