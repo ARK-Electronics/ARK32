@@ -336,7 +336,7 @@ void setInput()
 					input >= DSHOT_MAX_THROTTLE ? 2000
 					: input <= 137		    ? minimum_duty_cycle + 40
 								    : minimum_duty_cycle + 40 +
-								 (uint16_t)(((uint32_t)(input - 137) * sine_throttle_duty_slope_q16) >> 16);
+									      (uint16_t)(((uint32_t)(input - 137) * sine_throttle_duty_slope_q16) >> 16);
 			} else {
 				duty_cycle_setpoint =
 					input >= DSHOT_MAX_THROTTLE ? 2000
@@ -611,6 +611,17 @@ RAM_FUNC void tenKhzRoutine()
 	ledcounter++;
 	ramp_count++;
 	one_khz_loop_counter++;
+#if defined(USE_DRV_NFAULT)
+	{
+		/* nFAULT classify timebase must run during sine start too. The
+		 * PID 1 kHz block is inside !escInSineStart() and would freeze gd_ms. */
+		static uint16_t gd_khz_div;
+		if (++gd_khz_div > PID_LOOP_DIVIDER) {
+			gd_khz_div = 0;
+			faultGateDriverTick1kHz();
+		}
+	}
+#endif
 	if (!escIsArmed()) {
 		if (cell_count == 0) {
 			if (inputSet) {
@@ -709,7 +720,6 @@ RAM_FUNC void tenKhzRoutine()
 			PROCESS_ADC_FLAG = 1;		       // set flag to do new adc read at lower priority
 			one_khz_loop_counter = 0;
 			faultDesyncEpisodeTick1kHz();
-			faultGateDriverTick1kHz();
 			if (use_current_limit && escIsDriving()) {
 				/*
 				 * The /10000 is a DEAD ZONE, not just a scale: it is an

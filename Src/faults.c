@@ -70,16 +70,34 @@ static uint16_t acq_grace_ms;
  * DRV8350H (ARK 12S CAN). nFAULT is an OR of VDS OCP / UVLO / OTW / OTSD /
  * GDF with no SPI status. Do not cut PWM on the falling edge: OTW keeps
  * the drivers active, and VDS auto-retries in ~8 ms. Classify from pin
- * duration + whether the bridge is still conducting.
+ * duration + whether the bridge is still conducting *while drive is
+ * commanded*. A throttle-idle current drop looks like Hi-Z on the shunt.
+ *
+ * VDS tRETRY is ~8 ms; GD_CLASSIFY_MS is 12 ms (1.5×). Back-to-back retries
+ * into a persistent short leave nFAULT low with only microsecond-scale
+ * highs between pulses. A free-running main-loop poll can easily never
+ * observe a release, so GD_RETRY_BUDGET may never arm. The held path
+ * (CLASSIFY/WARN → Hi-Z) is the real backstop; the pulse count is
+ * opportunistic. Host twin: hwci/hwci/gd_nfault_model.py.
  */
 #	define GD_CLASSIFY_MS 12u
 #	define GD_UVLO_CV 800u
-#	define GD_LIVE_RAW_MIN 48u
+/* Smoothed centiamps (actual_current). 0.50 A is conduction vs noise, not
+ * a "motor is loaded" floor — do not go back to raw ADC counts. */
+#	define GD_LIVE_CA_MIN 50
+/* MCU *die* via __LL_ADC_CALC_TEMPERATURE, not the DRV (OTW ~150 C /
+ * OTSD ~175 C). Log label only — never pick HIZ vs latch from this. */
 #	define GD_THERMAL_C 100
 #	define GD_RETRY_WINDOW_MS 100u
 #	define GD_RETRY_BUDGET 8u
 #	define GD_RETRY_LOG_MS 200u
-#	define GD_HIZ_ESCALATE_MS 80u
+#	define GD_OTW_LOG_MS 200u
+/* actual_current is a 50-sample / ~1 kHz boxcar (~50 ms). Dwell past that
+ * so OTW + re-throttle is not Hi-Z'd on stale idle current. */
+#	define GD_DEAD_DWELL_MS 80u
+/* Zero-throttle ENABLE tRST while nFAULT is still held (GDF). */
+#	define GD_HIZ_RST_MS 2000u
+#	define GD_RESUME_BUDGET 3u
 
 enum {
 	GD_NF_IDLE = 0,
@@ -92,18 +110,22 @@ enum {
 static uint8_t gd_state;
 static fault_id_t gd_cause;
 static uint16_t gd_t0;
-static uint16_t gd_snap_raw;
+static int16_t gd_snap_ca;
 static uint8_t gd_retry_count;
 static uint16_t gd_retry_window_t0;
 static uint16_t gd_retry_log_t0;
-static uint16_t gd_reset_div;
+static uint16_t gd_otw_log_t0;
+static uint8_t gd_dead_arm;
+static uint16_t gd_dead_t0;
+static uint8_t gd_resume_count;
 static uint8_t gd_log_level;
 static fault_id_t gd_log_cause;
 static volatile uint16_t gd_ms;
 
 static void gd_queue_log(uint8_t level, fault_id_t cause)
 {
-	if (level >= gd_log_level) {
+	/* Upgrade only: same-level must not clobber (ERROR UVLO → ERROR UNKNOWN). */
+	if (level > gd_log_level) {
 		gd_log_level = level;
 		gd_log_cause = cause;
 	}
@@ -137,6 +159,12 @@ static void gd_hold_cut(void)
 	stepper_sine = 0;
 }
 
+/* Sine start drives the bridge with running==0. */
+static uint8_t gd_drive_commanded(void)
+{
+	return (uint8_t)(adjusted_input != 0 && (running || stepper_sine));
+}
+
 static void gd_enter_latch(fault_id_t cause)
 {
 	gd_hold_cut();
@@ -158,25 +186,35 @@ static void gd_enter_dead(uint16_t now)
 {
 	gd_hold_cut();
 	gd_t0 = now;
+	gd_dead_arm = 0;
+	gd_state = GD_NF_HIZ;
 	if (battery_voltage > 0u && battery_voltage < GD_UVLO_CV) {
 		gd_cause = FAULT_GD_UVLO;
-		gd_state = GD_NF_HIZ;
-		gd_queue_log(FAULT_GD_LOG_ERROR, FAULT_GD_UVLO);
-#	ifdef USE_DEBUG_UART
-		debugUartLogEvent(DBG_EVT_NFAULT_UVLO);
-#	endif
-		return;
-	}
-	if (degrees_celsius >= GD_THERMAL_C) {
+	} else if (degrees_celsius >= GD_THERMAL_C) {
 		gd_cause = FAULT_GD_OTSD;
-		gd_state = GD_NF_HIZ;
-		gd_queue_log(FAULT_GD_LOG_ERROR, FAULT_GD_OTSD);
+	} else {
+		gd_cause = FAULT_GD_UNKNOWN;
+	}
+	gd_queue_log(FAULT_GD_LOG_ERROR, gd_cause);
 #	ifdef USE_DEBUG_UART
-		debugUartLogEvent(DBG_EVT_NFAULT_OTSD);
+	debugUartLogEvent(gd_dbg_event(gd_cause, 0));
 #	endif
+}
+
+static void gd_enter_warn(uint16_t now, uint8_t log_otw)
+{
+	gd_cause = FAULT_GD_OTW;
+	gd_state = GD_NF_WARN;
+	if (!log_otw) {
 		return;
 	}
-	gd_enter_latch(FAULT_GD_UNKNOWN);
+	if (gd_otw_log_t0 == 0u || (uint16_t)(now - gd_otw_log_t0) >= GD_OTW_LOG_MS) {
+		gd_otw_log_t0 = (now == 0u) ? 1u : now;
+		gd_queue_log(FAULT_GD_LOG_WARNING, FAULT_GD_OTW);
+#	ifdef USE_DEBUG_UART
+		debugUartLogEvent(gd_dbg_event(FAULT_GD_OTW, 1));
+#	endif
+	}
 }
 
 static void gd_note_retry(uint16_t now)
@@ -197,7 +235,7 @@ static void gd_note_retry(uint16_t now)
 		gd_retry_log_t0 = now;
 		gd_queue_log(FAULT_GD_LOG_WARNING, FAULT_GD_OCP);
 #	ifdef USE_DEBUG_UART
-		debugUartLogEvent(DBG_EVT_NFAULT_RETRY);
+		debugUartLogEvent(gd_dbg_event(FAULT_GD_OCP, 1));
 #	endif
 	}
 }
@@ -301,7 +339,8 @@ uint8_t faultGateDriverWarningActive(void)
 uint8_t faultGateDriverKeepAwake(void)
 {
 #if defined(USE_DRV_NFAULT)
-	/* HIZ auto-recover needs ENABLE high to see the pin release. */
+	/* HIZ auto-recover needs ENABLE high to see the pin release, and to
+	 * tRST a latched GDF at zero throttle. LATCH lets sleep-on-idle reset. */
 	return (uint8_t)(gd_state == GD_NF_HIZ);
 #else
 	return 0;
@@ -322,7 +361,8 @@ void faultPollGateDriver(void)
 		if (adjusted_input == 0 && gd_state != GD_NF_IDLE) {
 			gd_state = GD_NF_IDLE;
 			gd_cause = FAULT_NONE;
-			gd_reset_div = 0;
+			gd_dead_arm = 0;
+			gd_resume_count = 0;
 		}
 		return;
 	}
@@ -334,12 +374,15 @@ void faultPollGateDriver(void)
 
 	const uint8_t pin_low = (uint8_t)((NFAULT_PORT->IDR & NFAULT_PIN) == 0u);
 	const uint16_t now = gd_ms;
+	const uint8_t drive_on = gd_drive_commanded();
+	const uint8_t current_live = (uint8_t)(actual_current >= GD_LIVE_CA_MIN);
 
 	switch (gd_state) {
 		case GD_NF_IDLE:
 			if (pin_low) {
-				gd_snap_raw = ADC_raw_current;
+				gd_snap_ca = actual_current;
 				gd_t0 = now;
+				gd_dead_arm = 0;
 				gd_cause = FAULT_NONE;
 				gd_state = GD_NF_CLASSIFY;
 			}
@@ -354,50 +397,65 @@ void faultPollGateDriver(void)
 			if ((uint16_t)(now - gd_t0) < GD_CLASSIFY_MS) {
 				break;
 			}
-			if (gd_snap_raw >= GD_LIVE_RAW_MIN && ADC_raw_current >= (uint16_t)(gd_snap_raw >> 1)) {
-				gd_cause = FAULT_GD_OTW;
-				gd_state = GD_NF_WARN;
-				gd_queue_log(FAULT_GD_LOG_WARNING, FAULT_GD_OTW);
-#	ifdef USE_DEBUG_UART
-				debugUartLogEvent(DBG_EVT_NFAULT_OTW);
-#	endif
+			if (drive_on && gd_snap_ca >= GD_LIVE_CA_MIN && actual_current >= (int16_t)(gd_snap_ca >> 1)) {
+				gd_enter_warn(now, 1);
 				break;
 			}
-			gd_enter_dead(now);
+			if (drive_on && !current_live) {
+				gd_enter_dead(now);
+				break;
+			}
+			gd_enter_warn(now, 0);
 			break;
 
 		case GD_NF_WARN:
 			if (!pin_low) {
 				gd_state = GD_NF_IDLE;
 				gd_cause = FAULT_NONE;
+				gd_dead_arm = 0;
 				break;
 			}
-			if (ADC_raw_current < GD_LIVE_RAW_MIN && ADC_raw_current < (uint16_t)(gd_snap_raw >> 2)) {
-				gd_enter_dead(now);
+			if (!drive_on) {
+				gd_dead_arm = 0;
+				break;
+			}
+			if (!current_live) {
+				if (!gd_dead_arm) {
+					gd_dead_arm = 1;
+					gd_dead_t0 = now;
+				} else if ((uint16_t)(now - gd_dead_t0) >= GD_DEAD_DWELL_MS) {
+					gd_enter_dead(now);
+				}
+			} else {
+				gd_dead_arm = 0;
 			}
 			break;
 
 		case GD_NF_HIZ:
 			gd_hold_cut();
-			if (adjusted_input == 0) {
-				gd_state = GD_NF_IDLE;
-				gd_cause = FAULT_NONE;
-				gd_reset_div = 0;
-				break;
-			}
 			if (!pin_low) {
+				gd_resume_count = 0;
 				gd_state = GD_NF_IDLE;
 				gd_cause = FAULT_NONE;
 				break;
 			}
+			/* Stay while nFAULT is held. Zero throttle must not return
+			 * to IDLE — that re-queued ERROR every classify window
+			 * (prop-brake keeps ENABLE high with adjusted_input == 0). */
 			if (battery_voltage > 0u && battery_voltage < GD_UVLO_CV) {
 				break;
 			}
-			if (degrees_celsius >= GD_THERMAL_C) {
+			if (adjusted_input != 0) {
 				break;
 			}
-			if ((uint16_t)(now - gd_t0) >= GD_HIZ_ESCALATE_MS) {
-				gd_enter_latch(gd_cause == FAULT_NONE ? FAULT_GD_UNKNOWN : gd_cause);
+			if ((uint16_t)(now - gd_t0) >= GD_HIZ_RST_MS) {
+				gd_t0 = now;
+				if (gd_resume_count >= GD_RESUME_BUDGET) {
+					gd_enter_latch(gd_cause == FAULT_NONE ? FAULT_GD_UNKNOWN : gd_cause);
+				} else {
+					gd_resume_count++;
+					gateDriverFaultResetPulse();
+				}
 			}
 			break;
 
@@ -406,15 +464,9 @@ void faultPollGateDriver(void)
 			if (!pin_low && adjusted_input == 0) {
 				gd_state = GD_NF_IDLE;
 				gd_cause = FAULT_NONE;
-				gd_reset_div = 0;
-			} else if (pin_low && adjusted_input == 0) {
-				if (++gd_reset_div >= 2000u) {
-					gd_reset_div = 0;
-					gateDriverFaultResetPulse();
-				}
-			} else {
-				gd_reset_div = 0;
 			}
+			/* ENABLE tRST is sleep-on-idle (gateDriverPoll), not a
+			 * pulse from this state — KeepAwake is false here. */
 			break;
 
 		default:

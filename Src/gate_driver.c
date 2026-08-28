@@ -10,9 +10,11 @@
 #	include "main.h" /* GPIO_TypeDef / BRR / BSRR */
 #	include "motor_runtime.h"
 #	include "targets.h"
-#	include "peripherals.h"
-#	include "phaseouts.h"
 #	include "faults.h"
+#	if defined(USE_DRV_ENABLE)
+#		include "peripherals.h"
+#		include "phaseouts.h"
+#	endif
 
 /*
  * After nSLEEP/ENABLE rises, wait before gate inputs are valid (pin stays high).
@@ -109,8 +111,10 @@ void gateDriverFaultResetPulse(void)
 {
 	/* DRV8350H ENABLE t_RST / DRV8328 nSLEEP reset. PWM inactive for the
 	 * whole pulse+wake so we never re-arm into a short. */
+#	if defined(USE_DRV_ENABLE)
 	allOff();
 	SET_DUTY_CYCLE_ALL(0);
+#	endif
 	GD_PORT->BRR = GD_PIN;
 	delayMicros(GD_FAULT_RST_US);
 	gate_driver_awake = 0;

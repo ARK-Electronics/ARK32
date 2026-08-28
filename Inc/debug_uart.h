@@ -23,7 +23,7 @@ enum {
 	DBG_EVT_NFAULT_UVLO,  /* nFAULT held, low bus → UVLO */
 	DBG_EVT_NFAULT_OCP,   /* retry budget exceeded (persistent VDS) */
 	DBG_EVT_NFAULT_OTW,   /* nFAULT held, bridge live → warning (OTW) */
-	DBG_EVT_NFAULT_OTSD,  /* nFAULT held, bridge dead, thermal band */
+	DBG_EVT_NFAULT_OTSD,  /* nFAULT held, bridge dead, MCU thermal label */
 	DBG_EVT_NFAULT_RETRY, /* short nFAULT pulse (VDS auto-retry) */
 	DBG_EVT_STUCK,
 	DBG_EVT_LVC,

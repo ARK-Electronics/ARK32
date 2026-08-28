@@ -23,7 +23,7 @@ typedef enum {
 	FAULT_GD_UVLO,	  /* bus below useful pack voltage */
 	FAULT_GD_OCP,	  /* VDS retry pulse, or retry budget exceeded */
 	FAULT_GD_OTW,	  /* nFAULT held, bridge still driving (DRV OTW) */
-	FAULT_GD_OTSD,	  /* nFAULT held, bridge dead, MCU in thermal band */
+	FAULT_GD_OTSD,	  /* held + dead, MCU die in thermal band (log label) */
 	FAULT_GD_UNKNOWN, /* held + dead, no UVLO/thermal signature (GDF etc.) */
 } fault_id_t;
 
@@ -216,10 +216,12 @@ void faultErrorCountReset(void);
 /*
  * Gate-driver nFAULT poll. Two chip policies (see faults.c):
  *
- * DRV8350H (ARK 12S CAN): pin duration + bridge still conducting.
- *   pulse ~8 ms     : VDS auto-retry — keep PWM, count pulses
- *   held + live     : OTW warning — keep PWM, thermal derate
- *   held + dead     : Hi-Z; UVLO/OTSD auto-resume; GDF / retry budget latch
+ * DRV8350H (ARK 12S CAN): pin duration + bridge conducting *while driven*.
+ *   pulse ~8 ms     : VDS auto-retry — keep PWM, count pulses if seen
+ *   held + live     : OTW warning — keep PWM (do not Hi-Z on throttle idle)
+ *   held + dead     : Hi-Z until pin releases; MCU temp is a log label only
+ *                     (not HIZ vs latch). Persistent pin-low at zero throttle
+ *                     ENABLE tRST, then latch. Sleep-on-idle is the LATCH tRST.
  *
  * DRV8328 (ARK 4IN1): every nFAULT already Hi-Z's the FETs (no OTW-only,
  * no 8 ms retry). Cut PWM, latch stuck until zero throttle; nSLEEP sleep
@@ -241,9 +243,9 @@ uint8_t faultGateDriverFaultActive(void);
 /* 1 while nFAULT is held and the bridge is still driving (OTW class). */
 uint8_t faultGateDriverWarningActive(void);
 
-/* 1 while a Hi-Z wait needs ENABLE/nSLEEP high so the pin can auto-clear
- * (UVLO / 8350 OTSD). gateDriverPoll uses this to avoid sleeping the DRV
- * before the pin has been observed high. */
+/* 1 while a Hi-Z wait needs ENABLE high so the pin can auto-clear and so
+ * a zero-throttle ENABLE tRST can unlatch GDF. LATCH does not set this:
+ * sleep-on-idle is that state's reset. */
 uint8_t faultGateDriverKeepAwake(void);
 
 #endif /* FAULTS_H_ */
