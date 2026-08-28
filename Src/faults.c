@@ -82,8 +82,11 @@ static uint16_t acq_grace_ms;
  */
 #	define GD_CLASSIFY_MS 12u
 #	define GD_UVLO_CV 800u
-/* Smoothed centiamps (actual_current). 0.50 A is conduction vs noise, not
- * a "motor is loaded" floor — do not go back to raw ADC counts. */
+/* Smoothed centiamps (actual_current). 0.50 A is ~6 raw LSB on G431
+ * (MILLIVOLT_PER_AMP 10, CURRENT_OFFSET 0) — conduction vs noise, not a
+ * "motor is loaded" floor. Idle offset on a warm board is a bench
+ * datapoint; unconfirmed commanded-held (GD_WARN_CEIL_MS) is the backstop
+ * if the floor sits under the offset. */
 #	define GD_LIVE_CA_MIN 50
 /* MCU *die* via __LL_ADC_CALC_TEMPERATURE, not the DRV (OTW ~150 C /
  * OTSD ~175 C). Log label only — never pick HIZ vs latch from this. */
@@ -95,6 +98,12 @@ static uint16_t acq_grace_ms;
 /* actual_current is a 50-sample / ~1 kHz boxcar (~50 ms). Dwell past that
  * so OTW + re-throttle is not Hi-Z'd on stale idle current. */
 #	define GD_DEAD_DWELL_MS 80u
+/* Consecutive current_live under drive before we trust OTW (no ceiling). */
+#	define GD_OTW_CONFIRM_MS 40u
+/* Pin held + drive commanded, never confirmed live → Hi-Z. Closes a
+ * starvable dwell (one sample ≥ LIVE_CA_MIN resets the 80 ms window).
+ * Paused while idle so OTW + throttle-cut is not a delayed drop. */
+#	define GD_WARN_CEIL_MS 250u
 /* Zero-throttle ENABLE tRST while nFAULT is still held (GDF). */
 #	define GD_HIZ_RST_MS 2000u
 #	define GD_RESUME_BUDGET 3u
@@ -114,9 +123,16 @@ static int16_t gd_snap_ca;
 static uint8_t gd_retry_count;
 static uint16_t gd_retry_window_t0;
 static uint16_t gd_retry_log_t0;
+static uint8_t gd_retry_logged;
 static uint16_t gd_otw_log_t0;
+static uint8_t gd_otw_logged;
 static uint8_t gd_dead_arm;
 static uint16_t gd_dead_t0;
+static uint8_t gd_live_arm;
+static uint16_t gd_live_t0;
+static uint8_t gd_cmd_arm;
+static uint16_t gd_cmd_t0;
+static uint8_t gd_otw_confirmed;
 static uint8_t gd_resume_count;
 static uint8_t gd_log_level;
 static fault_id_t gd_log_cause;
@@ -129,6 +145,18 @@ static void gd_queue_log(uint8_t level, fault_id_t cause)
 		gd_log_level = level;
 		gd_log_cause = cause;
 	}
+}
+
+/* Wrap-safe rate limit. First event always logs (*have_logged == 0); no
+ * t0==0 sentinel, so a gd_ms wrap cannot look like "never logged". */
+static uint8_t gd_rate_due(uint16_t now, uint8_t *have_logged, uint16_t *t0, uint16_t period)
+{
+	if (!*have_logged || (uint16_t)(now - *t0) >= period) {
+		*have_logged = 1;
+		*t0 = now;
+		return 1;
+	}
+	return 0;
 }
 
 #	ifdef USE_DEBUG_UART
@@ -184,32 +212,39 @@ static void gd_enter_latch(fault_id_t cause)
 
 static void gd_enter_dead(uint16_t now)
 {
+	fault_id_t cause;
+	if (battery_voltage > 0u && battery_voltage < GD_UVLO_CV) {
+		cause = FAULT_GD_UVLO;
+	} else if (degrees_celsius >= GD_THERMAL_C) {
+		cause = FAULT_GD_OTSD;
+	} else {
+		cause = FAULT_GD_UNKNOWN;
+	}
+	/* Lifetime tRST budget: do not re-arm ENABLE after it is spent
+	 * (sleep→IDLE is still a pilot retry, but it must not pulse). UVLO
+	 * still waits in HIZ — bus recovery is not a GDF. */
+	if (gd_resume_count >= GD_RESUME_BUDGET && cause != FAULT_GD_UVLO) {
+		gd_enter_latch(cause);
+		return;
+	}
 	gd_hold_cut();
 	gd_t0 = now;
 	gd_dead_arm = 0;
+	gd_live_arm = 0;
+	gd_cmd_arm = 0;
 	gd_state = GD_NF_HIZ;
-	if (battery_voltage > 0u && battery_voltage < GD_UVLO_CV) {
-		gd_cause = FAULT_GD_UVLO;
-	} else if (degrees_celsius >= GD_THERMAL_C) {
-		gd_cause = FAULT_GD_OTSD;
-	} else {
-		gd_cause = FAULT_GD_UNKNOWN;
-	}
+	gd_cause = cause;
 	gd_queue_log(FAULT_GD_LOG_ERROR, gd_cause);
 #	ifdef USE_DEBUG_UART
 	debugUartLogEvent(gd_dbg_event(gd_cause, 0));
 #	endif
 }
 
-static void gd_enter_warn(uint16_t now, uint8_t log_otw)
+static void gd_enter_warn(uint16_t now)
 {
 	gd_cause = FAULT_GD_OTW;
 	gd_state = GD_NF_WARN;
-	if (!log_otw) {
-		return;
-	}
-	if (gd_otw_log_t0 == 0u || (uint16_t)(now - gd_otw_log_t0) >= GD_OTW_LOG_MS) {
-		gd_otw_log_t0 = (now == 0u) ? 1u : now;
+	if (gd_rate_due(now, &gd_otw_logged, &gd_otw_log_t0, GD_OTW_LOG_MS)) {
 		gd_queue_log(FAULT_GD_LOG_WARNING, FAULT_GD_OTW);
 #	ifdef USE_DEBUG_UART
 		debugUartLogEvent(gd_dbg_event(FAULT_GD_OTW, 1));
@@ -231,8 +266,7 @@ static void gd_note_retry(uint16_t now)
 		gd_enter_latch(FAULT_GD_OCP);
 		return;
 	}
-	if ((uint16_t)(now - gd_retry_log_t0) >= GD_RETRY_LOG_MS) {
-		gd_retry_log_t0 = now;
+	if (gd_rate_due(now, &gd_retry_logged, &gd_retry_log_t0, GD_RETRY_LOG_MS)) {
 		gd_queue_log(FAULT_GD_LOG_WARNING, FAULT_GD_OCP);
 #	ifdef USE_DEBUG_UART
 		debugUartLogEvent(gd_dbg_event(FAULT_GD_OCP, 1));
@@ -362,7 +396,10 @@ void faultPollGateDriver(void)
 			gd_state = GD_NF_IDLE;
 			gd_cause = FAULT_NONE;
 			gd_dead_arm = 0;
-			gd_resume_count = 0;
+			gd_live_arm = 0;
+			gd_cmd_arm = 0;
+			/* gd_resume_count is lifetime — sleep-idle is a pilot retry,
+			 * not a fresh tRST budget. */
 		}
 		return;
 	}
@@ -383,6 +420,9 @@ void faultPollGateDriver(void)
 				gd_snap_ca = actual_current;
 				gd_t0 = now;
 				gd_dead_arm = 0;
+				gd_live_arm = 0;
+				gd_cmd_arm = 0;
+				gd_otw_confirmed = 0;
 				gd_cause = FAULT_NONE;
 				gd_state = GD_NF_CLASSIFY;
 			}
@@ -398,14 +438,15 @@ void faultPollGateDriver(void)
 				break;
 			}
 			if (drive_on && gd_snap_ca >= GD_LIVE_CA_MIN && actual_current >= (int16_t)(gd_snap_ca >> 1)) {
-				gd_enter_warn(now, 1);
+				gd_otw_confirmed = 1;
+				gd_enter_warn(now);
 				break;
 			}
 			if (drive_on && !current_live) {
 				gd_enter_dead(now);
 				break;
 			}
-			gd_enter_warn(now, 0);
+			gd_enter_warn(now);
 			break;
 
 		case GD_NF_WARN:
@@ -413,28 +454,46 @@ void faultPollGateDriver(void)
 				gd_state = GD_NF_IDLE;
 				gd_cause = FAULT_NONE;
 				gd_dead_arm = 0;
+				gd_live_arm = 0;
+				gd_cmd_arm = 0;
 				break;
 			}
 			if (!drive_on) {
 				gd_dead_arm = 0;
+				gd_live_arm = 0;
+				gd_cmd_arm = 0;
 				break;
 			}
-			if (!current_live) {
+			if (!gd_cmd_arm) {
+				gd_cmd_arm = 1;
+				gd_cmd_t0 = now;
+			}
+			if (current_live) {
+				gd_dead_arm = 0;
+				if (!gd_live_arm) {
+					gd_live_arm = 1;
+					gd_live_t0 = now;
+				} else if ((uint16_t)(now - gd_live_t0) >= GD_OTW_CONFIRM_MS) {
+					gd_otw_confirmed = 1;
+				}
+			} else {
+				gd_live_arm = 0;
 				if (!gd_dead_arm) {
 					gd_dead_arm = 1;
 					gd_dead_t0 = now;
 				} else if ((uint16_t)(now - gd_dead_t0) >= GD_DEAD_DWELL_MS) {
 					gd_enter_dead(now);
+					break;
 				}
-			} else {
-				gd_dead_arm = 0;
+			}
+			if (!gd_otw_confirmed && (uint16_t)(now - gd_cmd_t0) >= GD_WARN_CEIL_MS) {
+				gd_enter_dead(now);
 			}
 			break;
 
 		case GD_NF_HIZ:
 			gd_hold_cut();
 			if (!pin_low) {
-				gd_resume_count = 0;
 				gd_state = GD_NF_IDLE;
 				gd_cause = FAULT_NONE;
 				break;

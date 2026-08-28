@@ -35,6 +35,8 @@ def test_defines_parsed_from_firmware():
     assert GD["GD_CLASSIFY_MS"] == 12
     assert GD["GD_LIVE_CA_MIN"] == 50
     assert GD["GD_DEAD_DWELL_MS"] >= 50
+    assert GD["GD_OTW_CONFIRM_MS"] >= 1
+    assert GD["GD_WARN_CEIL_MS"] >= GD["GD_DEAD_DWELL_MS"]
     assert GD["GD_RESUME_BUDGET"] >= 1
 
 
@@ -75,6 +77,9 @@ def test_idle_during_classify_is_warn_not_dead():
     m.run_ms(GD["GD_CLASSIFY_MS"])
     assert m.state == GD_NF_WARN
     assert not m.fault_active()
+    level, cause = m.consume_log()
+    assert level == LOG_WARNING
+    assert cause == FAULT_GD_OTW
 
 
 def test_otw_idle_current_drop_does_not_hiz():
@@ -223,6 +228,87 @@ def test_queue_log_does_not_clobber_same_level():
     assert cause == FAULT_GD_UVLO
     level, _ = m.consume_log()
     assert level == LOG_NONE
+
+
+def test_confirmed_otw_survives_warn_ceiling():
+    m = _spinning()
+    m.pin_low = 1
+    m.step()
+    m.run_ms(GD["GD_CLASSIFY_MS"])
+    assert m.state == GD_NF_WARN
+    assert m.otw_confirmed
+    m.run_ms(GD["GD_WARN_CEIL_MS"] + 50)
+    assert m.state == GD_NF_WARN
+    assert not m.fault_active()
+
+
+def test_unconfirmed_flicker_hits_warn_ceiling():
+    """Intermittent ≥ LIVE_CA_MIN must not starve the dwell forever."""
+    m = _spinning()
+    m.pin_low = 1
+    m.step()
+    m.actual_current = 80  # live vs 50, but < snap/2 → unconfirmed WARN
+    m.run_ms(GD["GD_CLASSIFY_MS"])
+    assert m.state == GD_NF_WARN
+    assert not m.otw_confirmed
+    for _ in range(GD["GD_WARN_CEIL_MS"] + 30):
+        m.actual_current = 80 if ((m.ms // 20) % 2) == 0 else 0
+        m.tick_ms(1)
+        m.step()
+    assert m.state == GD_NF_HIZ
+    assert m.fault_active()
+
+
+def test_resume_budget_survives_pilot_retry():
+    m = _spinning()
+    m.pin_low = 1
+    m.actual_current = 0
+    m.step()
+    m.run_ms(GD["GD_CLASSIFY_MS"])
+    m.adjusted_input = 0
+    for _ in range(GD["GD_RESUME_BUDGET"]):
+        m.run_ms(GD["GD_HIZ_RST_MS"])
+    m.run_ms(GD["GD_HIZ_RST_MS"])
+    assert m.state == GD_NF_LATCH
+    pulses = m.rst_pulses
+    m.pin_low = 0
+    m.step()
+    assert m.state == GD_NF_IDLE
+    assert m.resume_count == GD["GD_RESUME_BUDGET"]
+    m.running = 1
+    m.adjusted_input = 500
+    m.actual_current = 0
+    m.pin_low = 1
+    m.step()
+    m.run_ms(GD["GD_CLASSIFY_MS"])
+    assert m.state == GD_NF_LATCH
+    assert m.rst_pulses == pulses
+
+
+def test_resume_budget_survives_sleep_idle():
+    m = _spinning()
+    m.pin_low = 1
+    m.actual_current = 0
+    m.step()
+    m.run_ms(GD["GD_CLASSIFY_MS"])
+    m.adjusted_input = 0
+    m.run_ms(GD["GD_HIZ_RST_MS"])
+    assert m.rst_pulses == 1
+    m.awake = 0
+    m.step()
+    assert m.state == GD_NF_IDLE
+    assert m.resume_count == 1
+
+
+def test_first_retry_logs():
+    m = _spinning()
+    m.pin_low = 1
+    m.step()
+    m.pin_low = 0
+    m.step()
+    level, cause = m.consume_log()
+    assert level == LOG_WARNING
+    assert cause == FAULT_GD_OCP
 
 
 def test_otw_log_is_rate_limited():

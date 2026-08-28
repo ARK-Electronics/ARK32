@@ -27,7 +27,9 @@
 #	else
 #		define GD_WAKE_US 1000u
 #	endif
-#	define GD_FAULT_RST_US 50u
+#	if defined(USE_DRV_ENABLE)
+#		define GD_FAULT_RST_US 50u
+#	endif
 /* Main-loop polls to ignore nFAULT after ENABLE/nSLEEP rises. Covers the
  * same-loop DroneCAN read after wake, and the first PWM edges. */
 #	define GD_NFAULT_GRACE_POLLS 8u
@@ -107,19 +109,19 @@ void gateDriverSleep(void)
 	gd_nfault_grace = 0;
 }
 
+#	if defined(USE_DRV_ENABLE)
 void gateDriverFaultResetPulse(void)
 {
-	/* DRV8350H ENABLE t_RST / DRV8328 nSLEEP reset. PWM inactive for the
-	 * whole pulse+wake so we never re-arm into a short. */
-#	if defined(USE_DRV_ENABLE)
+	/* DRV8350H ENABLE t_RST. PWM inactive for the whole pulse+wake so we
+	 * never re-arm into a short. DRV8328 uses the header stub. */
 	allOff();
 	SET_DUTY_CYCLE_ALL(0);
-#	endif
 	GD_PORT->BRR = GD_PIN;
 	delayMicros(GD_FAULT_RST_US);
 	gate_driver_awake = 0;
 	gateDriverWakeBlocking();
 }
+#	endif
 
 void gateDriverPoll(void)
 {

@@ -218,10 +218,11 @@ void faultErrorCountReset(void);
  *
  * DRV8350H (ARK 12S CAN): pin duration + bridge conducting *while driven*.
  *   pulse ~8 ms     : VDS auto-retry — keep PWM, count pulses if seen
- *   held + live     : OTW warning — keep PWM (do not Hi-Z on throttle idle)
+ *   held + live     : OTW warning — keep PWM, log WARNING (rate-limited)
  *   held + dead     : Hi-Z until pin releases; MCU temp is a log label only
  *                     (not HIZ vs latch). Persistent pin-low at zero throttle
- *                     ENABLE tRST, then latch. Sleep-on-idle is the LATCH tRST.
+ *                     ENABLE tRST (lifetime budget), then latch.
+ *   held + commanded, never confirmed live, ~250 ms : Hi-Z (dwell backstop)
  *
  * DRV8328 (ARK 4IN1): every nFAULT already Hi-Z's the FETs (no OTW-only,
  * no 8 ms retry). Cut PWM, latch stuck until zero throttle; nSLEEP sleep

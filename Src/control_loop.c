@@ -614,9 +614,11 @@ RAM_FUNC void tenKhzRoutine()
 #if defined(USE_DRV_NFAULT)
 	{
 		/* nFAULT classify timebase must run during sine start too. The
-		 * PID 1 kHz block is inside !escInSineStart() and would freeze gd_ms. */
+		 * PID 1 kHz block is inside !escInSineStart() and would freeze gd_ms.
+		 * >= PID_LOOP_DIVIDER is 20 ticks at 20 kHz = 1 kHz; the PID
+		 * block still uses `>` (21 ticks, ~952 Hz). */
 		static uint16_t gd_khz_div;
-		if (++gd_khz_div > PID_LOOP_DIVIDER) {
+		if (++gd_khz_div >= PID_LOOP_DIVIDER) {
 			gd_khz_div = 0;
 			faultGateDriverTick1kHz();
 		}
