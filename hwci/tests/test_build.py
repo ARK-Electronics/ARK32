@@ -6,12 +6,14 @@ from hwci.build import find_artifact
 
 def test_find_artifact_skips_eeprom_and_factory_sidecars(tmp_path):
     target = "ARK_G431_CAN"
-    eeprom = tmp_path / f"{target}_3.0.3-ark.eeprom.bin"
-    factory_hex = tmp_path / f"{target}_3.0.3-ark.factory.hex"
-    uavcan = tmp_path / f"{target}_3.0.3-ark.uavcan.bin"
-    app_bin = tmp_path / f"{target}_3.0.3-ark.bin"
-    app_hex = tmp_path / f"{target}_3.0.3-ark.hex"
-    older = tmp_path / f"{target}_3.0.2-ark.bin"
+    # Makefile IDENTIFIER := ARK32 → obj/ARK32_<target>_<ver>.{bin,hex,elf}
+    prefix = f"ARK32_{target}"
+    eeprom = tmp_path / f"{prefix}_3.0.3-ark.eeprom.bin"
+    factory_hex = tmp_path / f"{prefix}_3.0.3-ark.factory.hex"
+    uavcan = tmp_path / f"{prefix}_3.0.3-ark.uavcan.bin"
+    app_bin = tmp_path / f"{prefix}_3.0.3-ark.bin"
+    app_hex = tmp_path / f"{prefix}_3.0.3-ark.hex"
+    older = tmp_path / f"{prefix}_3.0.2-ark.bin"
     for p, n in ((eeprom, 2048), (factory_hex, 64), (uavcan, 64),
                  (older, 64), (app_bin, 128), (app_hex, 64)):
         p.write_bytes(b"\x00" * n)
