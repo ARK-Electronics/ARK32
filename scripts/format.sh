@@ -32,12 +32,34 @@ for arg in "$@"; do
   esac
 done
 
+# Keep in lockstep with .github/workflows/static-analysis.yml
+# (python3 -m pip install --user 'clang-format==22.1.5').
+PINNED_CLANG_FORMAT=22.1.5
+
 if ! command -v clang-format >/dev/null 2>&1; then
   echo "clang-format not found on PATH." >&2
-  echo "Install one of:" >&2
-  echo "  pip install --user 'clang-format==22.1.5'" >&2
-  echo "  sudo apt-get install clang-format" >&2
+  echo "Install: pip install --user 'clang-format==${PINNED_CLANG_FORMAT}'" >&2
+  echo "and put ~/.local/bin first on PATH." >&2
   exit 1
+fi
+
+# A different local version + `make format` (AGENTS.md) is how we got a
+# whitespace-only commit that CI then rejected. Fail here instead.
+cf_ver_line="$(clang-format --version | head -1)"
+cf_ver="$(printf '%s\n' "$cf_ver_line" | sed -n 's/.*[[:space:]]\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')"
+if [[ "${CLANG_FORMAT_SKIP_VERSION:-}" != "1" ]]; then
+  if [[ -z "$cf_ver" ]]; then
+    echo "Could not parse clang-format version from: $cf_ver_line" >&2
+    echo "Expected ${PINNED_CLANG_FORMAT} (CI pin)." >&2
+    exit 1
+  fi
+  if [[ "$cf_ver" != "$PINNED_CLANG_FORMAT" ]]; then
+    echo "clang-format ${cf_ver} does not match CI pin ${PINNED_CLANG_FORMAT}." >&2
+    echo "Install: pip install --user 'clang-format==${PINNED_CLANG_FORMAT}'" >&2
+    echo "and ensure that binary is first on PATH." >&2
+    echo "Override (not for PRs): CLANG_FORMAT_SKIP_VERSION=1" >&2
+    exit 1
+  fi
 fi
 
 # Collect sources under application and MCU trees, pruning third-party /
@@ -91,7 +113,7 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
   exit 0
 fi
 
-echo "clang-format $(clang-format --version | head -1)"
+echo "clang-format ${cf_ver_line}"
 echo "Files: ${#FILES[@]}  mode: $([[ $CHECK -eq 1 ]] && echo check || echo fix)"
 
 # Canonical form = clang-format, then drop trailing whitespace (clang-format
