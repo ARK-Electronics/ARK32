@@ -1,0 +1,27 @@
+name: g431_current_floor
+description: >
+  ARK_G431_CAN nFAULT GD_LIVE_CA_MIN datapoint. Armed idle, then the lowest
+  nonzero throttles this ESC is actually commanded at (5% / 8%), no-prop.
+  After the run, p50/p95 hwci_perf.current_ca on idle vs hold05/hold08
+  against 50 cA (0.50 A). If either straddles 50, raise GD_LIVE_CA_MIN —
+  unconfirmed WARN + 250 ms ceiling would false-drop a barely-spinning motor.
+  Props off. See hwci/docs/BENCH_SETUPS.md (G4 nFAULT current floor).
+sample_rate_hz: 100
+arm_settle_s: 3.0
+steady_tail_fraction: 0.5
+
+safety:
+  max_current_a: 80.0
+  max_motor_temp_c: 80.0
+  max_rpm: 4000
+  max_thrust_n: 2.0
+
+segments:
+  - {label: idle,    throttle: 0.00, duration_s: 4.0, steady: true}
+  - {label: ramp05,  throttle: 0.05, duration_s: 3.0, ramp: true}
+  - {label: hold05,  throttle: 0.05, duration_s: 6.0, steady: true}
+  - {label: off05,   throttle: 0.00, duration_s: 2.0}
+  - {label: ramp08,  throttle: 0.08, duration_s: 3.0, ramp: true}
+  - {label: hold08,  throttle: 0.08, duration_s: 6.0, steady: true}
+  - {label: rampdn,  throttle: 0.00, duration_s: 3.0, ramp: true}
+  - {label: stop,    throttle: 0.00, duration_s: 2.0}

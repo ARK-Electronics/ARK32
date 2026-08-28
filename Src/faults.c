@@ -104,7 +104,10 @@ static uint16_t acq_grace_ms;
 /* Pin held + drive commanded, never confirmed live → Hi-Z. Closes a
  * starvable dwell (one sample ≥ LIVE_CA_MIN resets the 80 ms window).
  * Accumulates commanded-held time across idle blips (idle does not
- * restart the 250 ms). */
+ * restart the 250 ms). Per-wake-episode, not per-power-cycle: IDLE→CLASSIFY
+ * zeroes gd_cmd_held_ms, and a cut long enough for gateDriverPoll to sleep
+ * (running==0) drops to IDLE, so the next wake is a fresh 250 ms. Blips
+ * below that sleep threshold still accumulate. */
 #	define GD_WARN_CEIL_MS 250u
 /* Zero-throttle ENABLE tRST while nFAULT is still held (GDF).
  * Consecutive failed pulses; pin-high recovery resets the count. */
@@ -237,7 +240,8 @@ static void gd_enter_dead(uint16_t now)
 }
 
 /* Elapsed commanded-held time. Idle clears cmd_arm so the next drive
- * poll does not add the idle gap; gd_cmd_held_ms is kept. */
+ * poll does not add the idle gap; gd_cmd_held_ms is kept. A sleep-to-IDLE
+ * path (gateDriverPoll) still zeroes it via CLASSIFY — see GD_WARN_CEIL_MS. */
 static void gd_cmd_held_add(uint16_t now)
 {
 	if (!gd_cmd_arm) {

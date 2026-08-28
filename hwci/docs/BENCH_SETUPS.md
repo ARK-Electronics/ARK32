@@ -43,6 +43,27 @@ hwci debug-uart --config rig.yaml
 # and aborts on fault: nFAULT / desync / stuck / stall / acq_desync.
 ```
 
+### G4 nFAULT current floor (`GD_LIVE_CA_MIN`)
+
+`Src/faults.c` treats smoothed `actual_current` ≥ 50 cA (0.50 A) as "bridge
+still conducting". That number is ~6 raw LSB on ARK_G431_CAN. Before shipping
+the nFAULT classifier, capture the distribution from a real run — not just
+warm idle:
+
+```bash
+.venv/bin/python -m hwci run --config rig.yaml --profile g431_current_floor \
+  --out runs/g431-current-floor
+```
+
+In `samples.csv` / `hwci_perf.current_ca`, compare p50/p95 of:
+
+* `idle` (armed, throttle 0, DRV may be asleep — offset / noise)
+* `hold05` / `hold08` (lowest nonzero throttle this ESC is actually commanded)
+
+If either straddles 50 cA, raise `GD_LIVE_CA_MIN`. A barely-spinning motor
+that never holds 40 ms consecutive live hits the 250 ms unconfirmed WARN
+ceiling and false-drops (Hi-Z / CRITICAL / FAULT_STUCK).
+
 ## SETUP A — Flight Stand throttle (no PX4 / no BDShot)
 
 ```

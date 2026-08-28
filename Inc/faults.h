@@ -224,7 +224,8 @@ void faultErrorCountReset(void);
  *                     ENABLE tRST (consecutive failed pulses; pin-high
  *                     recovery resets), then latch.
  *   held + commanded, never confirmed live, ~250 ms : Hi-Z (dwell backstop;
- *                     commanded time accumulates across idle blips)
+ *                     commanded time accumulates across idle blips below
+ *                     the DRV sleep threshold; a sleep re-classifies)
  *
  * DRV8328 (ARK 4IN1): every nFAULT already Hi-Z's the FETs (no OTW-only,
  * no 8 ms retry). Cut PWM, latch stuck until zero throttle; nSLEEP sleep
