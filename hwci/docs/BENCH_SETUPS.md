@@ -66,16 +66,31 @@ ceiling and false-drops (Hi-Z / CRITICAL / FAULT_STUCK).
 
 ### G4 nFAULT HIZ resume (high throttle)
 
-HIZ pin-high at throttle waits `GD_HIZ_SPINDOWN_MS` (1 s coast) before
-`startMotor()`; zero throttle may resume immediately. The host twin models
-`faults.c` only — not the 20 kHz CCR race or `zero_crosses` startup cap.
-Confirm the first commutation is a cold start into a stopped rotor:
+HIZ pin-high at throttle waits `GD_HIZ_SPINDOWN_MS` (3 s from
+`gd_enter_dead`, clock `gd_hiz_t0` — not the tRST `gd_t0`) before
+`startMotor()`; zero throttle may resume immediately. 3 s is a guess:
+a 5" prop may be down inside 1 s, a 15–18" prop takes several, and a
+windmilling disc may never reach the ~300 RPM `startMotor()` assumes.
+Same class of number as `GD_LIVE_CA_MIN` — measure it.
+
+Throttle-cut proxy (sizes the dwell; stop-then-punch, not nFAULT):
+
+```bash
+.venv/bin/python -m hwci run --config rig.yaml --profile g431_hiz_spindown \
+  --out runs/g431-hiz-spindown
+```
+
+For each `re20_*` segment, time from throttle-up to `perf_running==1`
+with a stable RPM and no `fault: stall` burst. The shortest clean coast
+is a lower bound on `GD_HIZ_SPINDOWN_MS`. Pair with `g431_current_floor`
+on the same session.
+
+nFAULT jumper (the real HIZ path — save the scope trace):
 
 1. Hold ~20% DShot. Jumper nFAULT low past 12 ms (UART `fault: nFAULT`).
 2. Release nFAULT. Do not idle throttle between assert and release.
-3. Scope phase current. Restart must not be on the pin edge — it should
-   wait ~1 s of coast, then a cold start (no pre-fault CCR spike). Save
-   the 20% trace as the run artifact.
+3. Restart must not be on the pin edge — ~3 s of coast, then a cold
+   start (no pre-fault CCR spike). Save the 20% phase-current trace.
 
 ## SETUP A — Flight Stand throttle (no PX4 / no BDShot)
 

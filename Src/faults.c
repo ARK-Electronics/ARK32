@@ -114,10 +114,12 @@ static uint16_t acq_grace_ms;
 #	define GD_HIZ_RST_MS 2000u
 #	define GD_RESUME_BUDGET 3u
 /* Coast after PWM cut before startMotor() (interval=10000, no ZC).
- * Stall's BEMF_STALL_TICKS (~22.5 ms) is lost-sync, not stopped-rotor.
- * Pin-high + throttle inside this window stays HIZ; zero throttle or
- * elapsed dwell may resume. OTW never enters HIZ. */
-#	define GD_HIZ_SPINDOWN_MS 1000u
+ * Clock is gd_hiz_t0 (set once in enter_dead), not gd_t0 — tRST
+ * rewrites gd_t0 every 2 s. Stall's BEMF_STALL_TICKS (~22.5 ms) is
+ * lost-sync, not stopped-rotor. 3 s is generous for large props; a
+ * windmilling disc may never reach the implicit ~300 RPM. Measure
+ * with profile g431_hiz_spindown. OTW never enters HIZ. */
+#	define GD_HIZ_SPINDOWN_MS 3000u
 
 enum {
 	GD_NF_IDLE = 0,
@@ -130,6 +132,7 @@ enum {
 static uint8_t gd_state;
 static fault_id_t gd_cause;
 static uint16_t gd_t0;
+static uint16_t gd_hiz_t0; /* enter_dead only; tRST must not rewrite */
 static int16_t gd_snap_ca;
 static uint8_t gd_retry_count;
 static uint16_t gd_retry_window_t0;
@@ -231,6 +234,7 @@ static void gd_enter_dead(uint16_t now)
 {
 	gd_hold_cut();
 	gd_t0 = now;
+	gd_hiz_t0 = now;
 	gd_dead_arm = 0;
 	gd_live_arm = 0;
 	gd_cmd_arm = 0;
@@ -529,7 +533,7 @@ void faultPollGateDriver(void)
 				gd_resume_count = 0; /* pin-high: DRV recovered */
 				/* startMotor() is a blind start. Short HIZ (12–92 ms)
 				 * would re-enable into a still-spinning rotor. */
-				if (adjusted_input == 0 || (uint16_t)(now - gd_t0) >= GD_HIZ_SPINDOWN_MS) {
+				if (adjusted_input == 0 || (uint16_t)(now - gd_hiz_t0) >= GD_HIZ_SPINDOWN_MS) {
 					gd_state = GD_NF_IDLE;
 					gd_cause = FAULT_NONE;
 				}

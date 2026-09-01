@@ -38,7 +38,7 @@ def test_defines_parsed_from_firmware():
     assert GD["GD_OTW_CONFIRM_MS"] >= 1
     assert GD["GD_WARN_CEIL_MS"] >= GD["GD_DEAD_DWELL_MS"]
     assert GD["GD_RESUME_BUDGET"] >= 1
-    assert GD["GD_HIZ_SPINDOWN_MS"] >= 500
+    assert GD["GD_HIZ_SPINDOWN_MS"] >= 2000
 
 
 def test_short_pulse_is_retry_not_hiz():
@@ -239,6 +239,31 @@ def test_hiz_long_coast_resumes_at_throttle_on_pin_high():
     assert m.adjusted_input != 0
     m.pin_low = 0
     m.step()
+    assert m.state == GD_NF_IDLE
+    assert not m.fault_active()
+
+
+def test_hiz_spindown_survives_trst_pulse():
+    """gd_hiz_t0 is from enter_dead; tRST rewriting gd_t0 must not stretch it."""
+    m = _spinning()
+    m.pin_low = 1
+    m.actual_current = 0
+    m.step()
+    m.run_ms(GD["GD_CLASSIFY_MS"])
+    assert m.state == GD_NF_HIZ
+    hiz_t0 = m.hiz_t0
+    m.adjusted_input = 0
+    m.run_ms(GD["GD_HIZ_RST_MS"])
+    assert m.rst_pulses == 1
+    assert m.t0 != hiz_t0
+    assert m.hiz_t0 == hiz_t0
+    m.adjusted_input = 500
+    m.pin_low = 0
+    m.step()
+    elapsed = (m.ms - m.hiz_t0) & 0xFFFF
+    assert elapsed < GD["GD_HIZ_SPINDOWN_MS"]
+    assert m.state == GD_NF_HIZ
+    m.run_ms(GD["GD_HIZ_SPINDOWN_MS"] - elapsed)
     assert m.state == GD_NF_IDLE
     assert not m.fault_active()
 

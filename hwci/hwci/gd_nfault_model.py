@@ -84,6 +84,7 @@ class GdNfaultMachine:
     state: int = GD_NF_IDLE
     cause: int = FAULT_NONE
     t0: int = 0
+    hiz_t0: int = 0
     snap_ca: int = 0
     retry_count: int = 0
     retry_window_t0: int = 0
@@ -150,6 +151,7 @@ class GdNfaultMachine:
     def enter_dead(self) -> None:
         self.hold_cut()
         self.t0 = self.ms
+        self.hiz_t0 = self.ms
         self.dead_arm = 0
         self.live_arm = 0
         self.cmd_arm = 0
@@ -300,7 +302,7 @@ class GdNfaultMachine:
             self.hold_cut()
             if not pin_low:
                 self.resume_count = 0
-                if self.adjusted_input == 0 or _u16(now - self.t0) >= GD["GD_HIZ_SPINDOWN_MS"]:
+                if self.adjusted_input == 0 or _u16(now - self.hiz_t0) >= GD["GD_HIZ_SPINDOWN_MS"]:
                     self.state = GD_NF_IDLE
                     self.cause = FAULT_NONE
                 return

@@ -1,0 +1,33 @@
+name: g431_hiz_spindown
+description: >
+  Size GD_HIZ_SPINDOWN_MS. Hold 20% (same point as the HIZ jumper scope),
+  cut drive, wait, re-apply 20%. The property that matters is time-to-clean
+  acquire on the blind startMotor() (interval=10000), not RPM per se.
+  Short coasts that stall or take many open-loop retries mean the dwell
+  must be at least that long. This is a throttle-cut proxy (stop branch
+  then punch); the nFAULT path is the jumper procedure in BENCH_SETUPS.md.
+  Props off. Pair with g431_current_floor on the same rig session.
+sample_rate_hz: 100
+arm_settle_s: 3.0
+steady_tail_fraction: 0.5
+
+safety:
+  max_current_a: 8.0
+  max_motor_temp_c: 80.0
+  max_rpm: 4000
+  max_thrust_n: 2.0
+
+segments:
+  - {label: idle,     throttle: 0.00, duration_s: 2.0, steady: true}
+  - {label: ramp20,   throttle: 0.20, duration_s: 2.0, ramp: true}
+  - {label: hold20,   throttle: 0.20, duration_s: 4.0, steady: true}
+  - {label: coast05,  throttle: 0.00, duration_s: 0.5}
+  - {label: re20_05,  throttle: 0.20, duration_s: 4.0, steady: true}
+  - {label: coast10,  throttle: 0.00, duration_s: 1.0}
+  - {label: re20_10,  throttle: 0.20, duration_s: 4.0, steady: true}
+  - {label: coast20,  throttle: 0.00, duration_s: 2.0}
+  - {label: re20_20,  throttle: 0.20, duration_s: 4.0, steady: true}
+  - {label: coast30,  throttle: 0.00, duration_s: 3.0}
+  - {label: re20_30,  throttle: 0.20, duration_s: 4.0, steady: true}
+  - {label: rampdn,   throttle: 0.00, duration_s: 2.0, ramp: true}
+  - {label: stop,     throttle: 0.00, duration_s: 2.0}
