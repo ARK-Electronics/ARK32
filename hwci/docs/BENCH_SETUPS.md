@@ -64,6 +64,17 @@ If either straddles 50 cA, raise `GD_LIVE_CA_MIN`. A barely-spinning motor
 that never holds 40 ms consecutive live hits the 250 ms unconfirmed WARN
 ceiling and false-drops (Hi-Z / CRITICAL / FAULT_STUCK).
 
+### G4 nFAULT HIZ resume (high throttle)
+
+HIZ pin-high auto-resumes without zeroing throttle. The host twin models
+`faults.c` only — not the 20 kHz CCR race or `zero_crosses` startup cap.
+Confirm the first commutation is a cold start, not pre-fault duty:
+
+1. Hold ~20% DShot. Jumper nFAULT low past 12 ms (UART `fault: nFAULT`).
+2. Release nFAULT. Do not idle throttle between assert and release.
+3. Scope phase current on the first commutation. Save the 20% trace as the
+   run artifact — "no spike" is easy to assert loosely and hard to re-check.
+
 ## SETUP A — Flight Stand throttle (no PX4 / no BDShot)
 
 ```

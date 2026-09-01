@@ -136,6 +136,9 @@ class GdNfaultMachine:
     def hold_cut(self) -> None:
         self.running = 0
         self.stepper_sine = 0
+        # C also zeros duty_cycle_setpoint / zero_crosses / ZC trend so a
+        # high-throttle HIZ resume is a cold start. Those live in
+        # control_loop.c (20 kHz CCR race); this twin is the poll SM only.
 
     def enter_latch(self, cause: int) -> None:
         self.hold_cut()

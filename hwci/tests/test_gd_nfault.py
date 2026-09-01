@@ -177,11 +177,13 @@ def test_hiz_zero_throttle_stays_hiz_while_pin_low():
 
 
 def test_hiz_pin_release_returns_idle():
+    """Auto-resume at throttle: pin high → IDLE with adjusted_input still high."""
     m = _spinning()
     m.pin_low = 1
     m.actual_current = 0
     m.step()
     m.run_ms(GD["GD_CLASSIFY_MS"])
+    assert m.adjusted_input != 0
     m.pin_low = 0
     m.step()
     assert m.state == GD_NF_IDLE

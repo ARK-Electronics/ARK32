@@ -192,6 +192,11 @@ static void gd_hold_cut(void)
 	SET_DUTY_CYCLE_ALL(0);
 	running = 0;
 	stepper_sine = 0;
+	/* HIZ resume keeps throttle; reset start state the old stop branch
+	 * used to. 20 kHz rewrites CCR — zero it again before startMotor(). */
+	duty_cycle_setpoint = 0;
+	zero_crosses = 0;
+	bemfZcResetTrend();
 }
 
 /* Sine start drives the bridge with running==0. */

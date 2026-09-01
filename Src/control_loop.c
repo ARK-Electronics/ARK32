@@ -321,6 +321,9 @@ void setInput()
 				/* Wake DRV with IRQs enabled (ENABLE settle is multi-ms on
 				 * DRV8350H). comStep gateDriverEnsure() is then a no-op. */
 				allOff();
+				/* 20 kHz writes CCR even while !running.
+				 * startMotor() → comStep() re-enables at that CCR. */
+				SET_DUTY_CYCLE_ALL(0);
 				gateDriverWakeBlocking();
 				if (!old_routine) {
 					startMotor();
