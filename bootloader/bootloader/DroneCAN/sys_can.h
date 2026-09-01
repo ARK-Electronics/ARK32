@@ -45,6 +45,8 @@ void sys_can_init(void);
 
 void sys_can_service(void);
 
+bool sys_can_prefer_canfd_tx(void);
+
 /*
   drive a static GPIO output (used for CAN bus termination). The portpin is
   encoded with GPIO_PORT_PIN(portnum, pinnum) where portnum is 0=A,1=B,2=C.

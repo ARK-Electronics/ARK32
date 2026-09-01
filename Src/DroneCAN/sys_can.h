@@ -50,6 +50,12 @@ void sys_can_init(void);
 void sys_can_service(void);
 
 /*
+  True when telemetry/status should go out as CAN FD (pinned CAN_FD_MBPS,
+  or auto-hunt locked onto a host FD data rate). Classic backends: false.
+ */
+bool sys_can_prefer_canfd_tx(void);
+
+/*
   called from CAN IRQ indicating we may have a free TX slot
  */
 extern void DroneCAN_processTxQueue();

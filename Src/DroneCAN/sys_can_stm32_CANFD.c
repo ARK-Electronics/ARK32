@@ -4,7 +4,9 @@
  * Based on ArduPilot CANFDIface.cpp. Nominal (arbitration) bit timing is
  * 1 Mbps at 80 MHz. Data-phase timings are the Kvaser/ArduPilot 80 MHz table
  * (1/2/4/5 Mbps). EEPROM CAN_FD_MBPS 0 auto-matches the host data rate;
- * 1/2/4/5 pins it. TX FDF/BRS follows CanardCANFrame.canfd (set from RX).
+ * 1/2/4/5 pins it. Classic DNA is expected on an FD bus and does not
+ * abort auto-hunt. TX FDF/BRS for Status/telemetry latches on once an
+ * FD frame is received (or CAN_FD_MBPS is pinned).
  */
 
 #include "targets.h"
@@ -80,7 +82,6 @@ static const struct {
 static uint8_t fd_idx;
 static uint8_t fd_auto;
 static uint8_t fd_locked;
-static uint8_t saw_classic;
 static uint16_t fd_err_streak;
 static volatile uint8_t fd_need_retune;
 
@@ -261,8 +262,6 @@ static void handleRxInterrupt(uint8_t fifo_index)
 	fd_err_streak = 0;
 	if (is_fd) {
 		fd_locked = 1;
-	} else {
-		saw_classic = 1;
 	}
 
 	DroneCAN_handleFrame(&frame);
@@ -276,7 +275,7 @@ static void pollErrorFlagsFromISR(void)
 	if (cel == 0) {
 		return;
 	}
-	if (fd_auto && !fd_locked && !saw_classic) {
+	if (fd_auto && !fd_locked) {
 		if (fd_err_streak < 0xFFFF) {
 			fd_err_streak++;
 		}
@@ -434,14 +433,18 @@ static void fd_select_initial_rate(void)
 		fd_locked = 1;
 		fd_idx = (uint8_t)idx;
 	}
-	saw_classic = 0;
 	fd_err_streak = 0;
 	fd_need_retune = 0;
 }
 
+bool sys_can_prefer_canfd_tx(void)
+{
+	return fd_locked != 0;
+}
+
 void sys_can_service(void)
 {
-	if (!fd_need_retune || !fd_auto || fd_locked || saw_classic) {
+	if (!fd_need_retune || !fd_auto || fd_locked) {
 		fd_need_retune = 0;
 		return;
 	}
