@@ -47,6 +47,7 @@ _DEFINE_NAMES = (
     "GD_WARN_CEIL_MS",
     "GD_HIZ_RST_MS",
     "GD_RESUME_BUDGET",
+    "GD_HIZ_SPINDOWN_MS",
 )
 
 
@@ -299,8 +300,9 @@ class GdNfaultMachine:
             self.hold_cut()
             if not pin_low:
                 self.resume_count = 0
-                self.state = GD_NF_IDLE
-                self.cause = FAULT_NONE
+                if self.adjusted_input == 0 or _u16(now - self.t0) >= GD["GD_HIZ_SPINDOWN_MS"]:
+                    self.state = GD_NF_IDLE
+                    self.cause = FAULT_NONE
                 return
             if 0 < self.battery_voltage < GD["GD_UVLO_CV"]:
                 return

@@ -38,6 +38,7 @@ def test_defines_parsed_from_firmware():
     assert GD["GD_OTW_CONFIRM_MS"] >= 1
     assert GD["GD_WARN_CEIL_MS"] >= GD["GD_DEAD_DWELL_MS"]
     assert GD["GD_RESUME_BUDGET"] >= 1
+    assert GD["GD_HIZ_SPINDOWN_MS"] >= 500
 
 
 def test_short_pulse_is_retry_not_hiz():
@@ -176,13 +177,65 @@ def test_hiz_zero_throttle_stays_hiz_while_pin_low():
     assert m.keep_awake()
 
 
-def test_hiz_pin_release_returns_idle():
-    """Auto-resume at throttle: pin high → IDLE with adjusted_input still high."""
+def test_hiz_pin_release_at_throttle_waits_spindown():
+    """Short HIZ must not blind-start into a spinning rotor."""
     m = _spinning()
     m.pin_low = 1
     m.actual_current = 0
     m.step()
     m.run_ms(GD["GD_CLASSIFY_MS"])
+    assert m.adjusted_input != 0
+    m.pin_low = 0
+    m.step()
+    assert m.state == GD_NF_HIZ
+    assert m.fault_active()
+    m.run_ms(GD["GD_HIZ_SPINDOWN_MS"] - 1)
+    assert m.state == GD_NF_HIZ
+    m.run_ms(1)
+    assert m.state == GD_NF_IDLE
+    assert not m.fault_active()
+    assert m.adjusted_input != 0
+
+
+def test_hiz_pin_release_at_zero_throttle_is_immediate():
+    m = _spinning()
+    m.pin_low = 1
+    m.actual_current = 0
+    m.step()
+    m.run_ms(GD["GD_CLASSIFY_MS"])
+    m.adjusted_input = 0
+    m.pin_low = 0
+    m.step()
+    assert m.state == GD_NF_IDLE
+    assert not m.fault_active()
+
+
+def test_hiz_pin_release_idles_when_throttle_drops():
+    """Zero throttle unblocks resume without waiting out the coast dwell."""
+    m = _spinning()
+    m.pin_low = 1
+    m.actual_current = 0
+    m.step()
+    m.run_ms(GD["GD_CLASSIFY_MS"])
+    m.pin_low = 0
+    m.step()
+    assert m.state == GD_NF_HIZ
+    m.adjusted_input = 0
+    m.step()
+    assert m.state == GD_NF_IDLE
+    assert not m.fault_active()
+
+
+def test_hiz_long_coast_resumes_at_throttle_on_pin_high():
+    """OTSD/UVLO that already coasted: pin-high at throttle is IDLE."""
+    m = _spinning()
+    m.pin_low = 1
+    m.actual_current = 0
+    m.step()
+    m.run_ms(GD["GD_CLASSIFY_MS"])
+    assert m.state == GD_NF_HIZ
+    m.run_ms(GD["GD_HIZ_SPINDOWN_MS"])
+    assert m.state == GD_NF_HIZ
     assert m.adjusted_input != 0
     m.pin_low = 0
     m.step()

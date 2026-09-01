@@ -113,6 +113,11 @@ static uint16_t acq_grace_ms;
  * Consecutive failed pulses; pin-high recovery resets the count. */
 #	define GD_HIZ_RST_MS 2000u
 #	define GD_RESUME_BUDGET 3u
+/* Coast after PWM cut before startMotor() (interval=10000, no ZC).
+ * Stall's BEMF_STALL_TICKS (~22.5 ms) is lost-sync, not stopped-rotor.
+ * Pin-high + throttle inside this window stays HIZ; zero throttle or
+ * elapsed dwell may resume. OTW never enters HIZ. */
+#	define GD_HIZ_SPINDOWN_MS 1000u
 
 enum {
 	GD_NF_IDLE = 0,
@@ -522,8 +527,12 @@ void faultPollGateDriver(void)
 			gd_hold_cut();
 			if (!pin_low) {
 				gd_resume_count = 0; /* pin-high: DRV recovered */
-				gd_state = GD_NF_IDLE;
-				gd_cause = FAULT_NONE;
+				/* startMotor() is a blind start. Short HIZ (12–92 ms)
+				 * would re-enable into a still-spinning rotor. */
+				if (adjusted_input == 0 || (uint16_t)(now - gd_t0) >= GD_HIZ_SPINDOWN_MS) {
+					gd_state = GD_NF_IDLE;
+					gd_cause = FAULT_NONE;
+				}
 				break;
 			}
 			/* Stay while nFAULT is held. Zero throttle must not return

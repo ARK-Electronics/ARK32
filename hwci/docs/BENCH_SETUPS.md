@@ -66,14 +66,16 @@ ceiling and false-drops (Hi-Z / CRITICAL / FAULT_STUCK).
 
 ### G4 nFAULT HIZ resume (high throttle)
 
-HIZ pin-high auto-resumes without zeroing throttle. The host twin models
+HIZ pin-high at throttle waits `GD_HIZ_SPINDOWN_MS` (1 s coast) before
+`startMotor()`; zero throttle may resume immediately. The host twin models
 `faults.c` only — not the 20 kHz CCR race or `zero_crosses` startup cap.
-Confirm the first commutation is a cold start, not pre-fault duty:
+Confirm the first commutation is a cold start into a stopped rotor:
 
 1. Hold ~20% DShot. Jumper nFAULT low past 12 ms (UART `fault: nFAULT`).
 2. Release nFAULT. Do not idle throttle between assert and release.
-3. Scope phase current on the first commutation. Save the 20% trace as the
-   run artifact — "no spike" is easy to assert loosely and hard to re-check.
+3. Scope phase current. Restart must not be on the pin edge — it should
+   wait ~1 s of coast, then a cold start (no pre-fault CCR spike). Save
+   the 20% trace as the run artifact.
 
 ## SETUP A — Flight Stand throttle (no PX4 / no BDShot)
 
