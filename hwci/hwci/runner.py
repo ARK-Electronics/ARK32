@@ -469,6 +469,25 @@ def _safe(fn):
         return None
 
 
+def _enforce_require_eeprom(profile: Profile, blob: bytes | None) -> None:
+    if not profile.require_eeprom:
+        return
+    from .settings import Settings, assert_required, default_blob
+    assert_required(Settings(blob or default_blob()), profile.require_eeprom)
+
+
+def _enforce_require_eeprom_live(profile: Profile, dbg, elf_path: str) -> None:
+    if not profile.require_eeprom:
+        return
+    from .settings import Settings, assert_required, resolve_eeprom_address
+    addr = resolve_eeprom_address(dbg, elf_path)
+    page = Settings.from_device(dbg, addr)
+    assert_required(page, profile.require_eeprom)
+    print("eeprom precondition: " +
+          ", ".join(f"{k}={v}" for k, v in sorted(profile.require_eeprom.items())),
+          file=sys.stderr)
+
+
 # --------------------------------------------------------------------------
 # Source builders
 # --------------------------------------------------------------------------
@@ -493,6 +512,7 @@ def build_sim_sources(rig: RigConfig, profile: Profile, *,
                                               demag_prone=demag_prone))
     if settings_blob is not None:
         sim.set_settings(SimSettings.from_blob(settings_blob))
+    _enforce_require_eeprom(profile, settings_blob)
     stand = SimulatedStand(sim, fixed_dt=period).open()
     stand.set_safety_limits(profile.safety)
     throttle = FlightStandThrottle(stand, arm_settle_s=0.0)
@@ -738,6 +758,11 @@ def build_live_sources(rig: RigConfig, profile: Profile, *,
     try:
         if perf_reader is not None:
             _ensure_app_alive(dbg, perf_reader, throttle, elf=str(elf))
+            _enforce_require_eeprom_live(profile, dbg, str(elf))
+        elif profile.require_eeprom:
+            raise ValueError(
+                f"profile {profile.name!r} requires EEPROM preconditions "
+                "but debugger_backend is not openocd")
         if battery_cells is not None:
             check_battery(_live_voltage(stand, perf_source), battery_cells,
                          min_cell_voltage)

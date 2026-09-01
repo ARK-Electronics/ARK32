@@ -73,7 +73,11 @@ a 5" prop may be down inside 1 s, a 15–18" prop takes several, and a
 windmilling disc may never reach the ~300 RPM `startMotor()` assumes.
 Same class of number as `GD_LIVE_CA_MIN` — measure it.
 
-Throttle-cut proxy (sizes the dwell; stop-then-punch, not nFAULT):
+Throttle-cut proxy (sizes the dwell; stop-then-punch, not nFAULT).
+`require_eeprom` aborts unless `brake_on_stop=0` and `rc_car_reverse=0`:
+HIZ does `allOff()` (no regen), so a braked coast would look too fast
+and silently under-size the dwell. The run asserts this against the
+live page rather than trusting whatever was last flashed.
 
 ```bash
 .venv/bin/python -m hwci run --config rig.yaml --profile g431_hiz_spindown \
@@ -85,7 +89,13 @@ with a stable RPM and no `fault: stall` burst. The shortest clean coast
 is a lower bound on `GD_HIZ_SPINDOWN_MS`. Pair with `g431_current_floor`
 on the same session.
 
-nFAULT jumper (the real HIZ path — save the scope trace):
+Props off is the conservative direction on the bench (bare rotor coasts
+longer than a loaded prop) but it is a floor, not an answer — it cannot
+see windmilling, which is what the 3 s dwell is hedging.
+
+nFAULT jumper (the real HIZ path — save the scope trace). This one is
+`allOff()` by construction, so `brake_on_stop` does not apply. If the
+proxy and the jumper disagree, believe the jumper.
 
 1. Hold ~20% DShot. Jumper nFAULT low past 12 ms (UART `fault: nFAULT`).
 2. Release nFAULT. Do not idle throttle between assert and release.

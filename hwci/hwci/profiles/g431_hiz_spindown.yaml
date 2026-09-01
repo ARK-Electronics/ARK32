@@ -4,9 +4,17 @@ description: >
   cut drive, wait, re-apply 20%. The property that matters is time-to-clean
   acquire on the blind startMotor() (interval=10000), not RPM per se.
   Short coasts that stall or take many open-loop retries mean the dwell
-  must be at least that long. This is a throttle-cut proxy (stop branch
-  then punch); the nFAULT path is the jumper procedure in BENCH_SETUPS.md.
-  Props off. Pair with g431_current_floor on the same rig session.
+  must be at least that long. Throttle-cut proxy (stop branch then punch):
+  require_eeprom pins brake_on_stop=0 and rc_car_reverse=0 so the coast is
+  allOff(), matching HIZ, not a phase-short. The jumper procedure in
+  BENCH_SETUPS.md is the real nFAULT path — if brake is on, the two
+  disagree and the jumper is the one to believe. Props off is conservative
+  (bare rotor coasts longer than a loaded prop on the bench) but a floor,
+  not an answer: no bench run reproduces windmilling. Pair with
+  g431_current_floor on the same rig session.
+require_eeprom:
+  brake_on_stop: 0
+  rc_car_reverse: 0
 sample_rate_hz: 100
 arm_settle_s: 3.0
 steady_tail_fraction: 0.5
