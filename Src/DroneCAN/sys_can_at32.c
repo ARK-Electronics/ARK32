@@ -128,6 +128,11 @@ void sys_can_init(void)
 
 void sys_can_service(void) {}
 
+bool sys_can_prefer_canfd_tx(void)
+{
+	return false;
+}
+
 void sys_can_enable_IRQ(void)
 {
 	NVIC_EnableIRQ(CAN1_SE_IRQn);

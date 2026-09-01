@@ -37,7 +37,11 @@ static bool dronecan_tx_canfd;
 
 static void dc_note_rx_frame(const CanardCANFrame *f)
 {
-	dronecan_tx_canfd = f->canfd;
+	/* Latch CAN FD TX on the first FD frame. Classic DNA/NodeStatus on
+	 * an FD bus must not flip Status and telemetry back to classic. */
+	if (f->canfd) {
+		dronecan_tx_canfd = true;
+	}
 }
 
 #		define DC_BROADCAST(...) canardBroadcast(__VA_ARGS__, dronecan_tx_canfd)
@@ -334,7 +338,8 @@ static const struct parameter {
 #	endif
 #	ifdef MCU_G431
 	/* 0 = auto-match host CAN FD data bitrate (1/2/4/5 Mbps). 1/2/4/5 pins
-	 * the data phase. Product max is 5 Mbps. */
+	 * the data phase. Product max is 5 Mbps. Status/telemetry TX is CAN FD
+	 * once locked; DNA stays classic. */
 	{"CAN_FD_MBPS", T_UINT8, 0, 5, 0, &eepromBuffer.can.fd_mbps},
 #	endif
 	{"STARTUP_TUNE", T_STRING, 0, 4, 0, &eepromBuffer.tune},
@@ -1524,6 +1529,9 @@ static void DroneCAN_Startup(void)
 
 	// initialise low level CAN peripheral hardware
 	sys_can_init();
+#	if CANARD_ENABLE_CANFD
+	dronecan_tx_canfd = sys_can_prefer_canfd_tx();
+#	endif
 
 	/*
 	 * DRONECAN_IN (5) is exclusive: disable DShot/PWM IRQs so noise on the

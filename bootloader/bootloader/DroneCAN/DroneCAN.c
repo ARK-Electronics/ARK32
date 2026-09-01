@@ -25,7 +25,11 @@ static bool dronecan_tx_canfd;
 
 static void dc_note_rx_frame(const CanardCANFrame *f)
 {
-  dronecan_tx_canfd = f->canfd;
+  /* Latch CAN FD TX on the first FD frame. Classic DNA must not flip
+   * bootloader transfers back to classic on an FD bus. */
+  if (f->canfd) {
+    dronecan_tx_canfd = true;
+  }
 }
 
 #define DC_BROADCAST(...) canardBroadcast(__VA_ARGS__, dronecan_tx_canfd)
@@ -947,14 +951,25 @@ static void request_DNA()
 
   memmove(&allocation_request[1], &my_unique_id[DNA.node_id_allocation_unique_id_offset], uid_size);
 
-  // Broadcasting the request
-  DC_BROADCAST(&canard,
+  /* DNA is a classic 8-byte anonymous transfer. */
+#if CANARD_ENABLE_CANFD
+  canardBroadcast(&canard,
+                  UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE,
+                  UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID,
+                  &node_id_allocation_transfer_id,
+                  CANARD_TRANSFER_PRIORITY_LOW,
+                  &allocation_request[0],
+                  (uint16_t) (uid_size + 1),
+                  false);
+#else
+  canardBroadcast(&canard,
                   UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE,
                   UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID,
                   &node_id_allocation_transfer_id,
                   CANARD_TRANSFER_PRIORITY_LOW,
                   &allocation_request[0],
                   (uint16_t) (uid_size + 1));
+#endif
 
   // Preparing for timeout; if response is received, this value will be updated from the callback.
   DNA.node_id_allocation_unique_id_offset = 0;
@@ -1226,6 +1241,9 @@ static void DroneCAN_Startup(void)
 
   // initialise low level CAN peripheral hardware
   sys_can_init();
+#if CANARD_ENABLE_CANFD
+  dronecan_tx_canfd = sys_can_prefer_canfd_tx();
+#endif
 
 #ifdef CAN_TERM_PIN
   /*

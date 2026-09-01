@@ -155,6 +155,11 @@ void sys_can_disable_IRQ(void)
 
 void sys_can_service(void) {}
 
+bool sys_can_prefer_canfd_tx(void)
+{
+	return false;
+}
+
 /*
   enable CAN IRQs
  */
