@@ -138,3 +138,68 @@ def test_param_save_opcode(sitl_can_factory, state_stream, mcast_uri):
         assert ok, 'OPCODE_SAVE failed\n' + sitl.log_tail()
     finally:
         node.close()
+
+
+def test_param_erase_restores_armed_protections(sitl_can_factory, state_stream,
+                                                mcast_uri):
+    '''a "restore defaults" must not disarm the protections
+
+    OPCODE_ERASE memcpy's default_settings[] over the whole eeprom page, and
+    that array began life as the AM32 configurator skeleton whose bytes 43/44
+    (141/102) sit just OUTSIDE the ranges settings.c arms. So a field param
+    erase used to silently turn the thermal foldback and the current limiter
+    off on a shipped ESC — the one config change nobody re-checks afterwards.
+
+    Drives the real opcode and reads the parameters back, so it covers the
+    array, the post-skeleton band byte written by
+    apply_post_skeleton_defaults(), and the settings.c coercion together.
+    scripts/check-erase-defaults.py gates the same values against the
+    product's factory JSON at build time.
+    '''
+    sitl = sitl_can_factory(
+        extra_args=['--node-id', '10'],
+        can_uri=mcast_uri,
+        wait_s=1.0)
+    sim = state_stream(sitl)
+    node, _found = _require_mcast_node(sitl, sim, mcast_uri, our_id=113)
+    try:
+        # Move all three away from the shipped values first, so a no-op erase
+        # cannot pass this test.
+        for name, value in (('TEMPERATURE_LIMIT', 255),
+                            ('CURRENT_LIMIT', 0),
+                            ('TEMP_DERATE_BAND', 40)):
+            assert _set_param(node, 10, name, value) is not None, \
+                'setup: could not clear %s\n%s' % (name, sitl.log_tail())
+
+        ok = False
+        for _ in range(5):
+            req = dronecan.uavcan.protocol.param.ExecuteOpcode.Request()
+            req.opcode = req.OPCODE_ERASE
+            rsp = _request_wait(node, 10, req, timeout=3.0)
+            if rsp is not None and rsp.ok:
+                ok = True
+                break
+            time.sleep(0.3)
+        assert ok, 'OPCODE_ERASE failed\n' + sitl.log_tail()
+
+        temp = _get_param(node, 10, 'TEMPERATURE_LIMIT')
+        current = _get_param(node, 10, 'CURRENT_LIMIT')
+        band = _get_param(node, 10, 'TEMP_DERATE_BAND')
+        for name, rsp in (('TEMPERATURE_LIMIT', temp), ('CURRENT_LIMIT', current),
+                          ('TEMP_DERATE_BAND', band)):
+            assert rsp is not None, 'read-back of %s failed\n%s' % (name, sitl.log_tail())
+
+        t = int(temp.value.integer_value)
+        c = int(current.value.integer_value)   # reported in amps (2x the byte)
+        b = int(band.value.integer_value)
+        # Src/settings.c arms only inside these ranges; outside is "off".
+        assert 70 <= t <= 140, \
+            'erase left the thermal foldback disabled: TEMPERATURE_LIMIT=%d' % t
+        assert 0 < c <= 200, \
+            'erase left the current limiter disabled: CURRENT_LIMIT=%d' % c
+        assert 5 <= b <= 40, 'erase left a nonsense foldback band: %d' % b
+        # Shipped ARK_G431_CAN envelope (TARGET_DEFAULT_* in targets.h).
+        assert (t, c, b) == (105, 200, 15), \
+            'erase restored %s, expected (105, 200, 15)' % ((t, c, b),)
+    finally:
+        node.close()

@@ -1,8 +1,11 @@
 /*
  * gate_driver.h - sleep/wake for DRV8350 ENABLE / DRV8328 nSLEEP
  *
- * Active-high run: low = sleep, high = awake. After rising edge, block ~1 ms
- * (datasheet tWAKE) before PWM/commutation — IC bias must settle; pin stays high.
+ * Active-high run: low = sleep, high = awake. After rising edge, block for
+ * t_WAKE settle (1 ms DRV8328; 3 ms DRV8350H) before PWM/commutation.
+ *
+ * DRV8350H (ARK 12S CAN, USE_DRV_ENABLE): wake forces bridge inputs inactive
+ * (allOff + duty 0) before ENABLE rises — avoids the common sleep-exit blip.
  */
 #ifndef GATE_DRIVER_H_
 #define GATE_DRIVER_H_
@@ -20,6 +23,10 @@ void gateDriverWakeBlocking(void);
 void gateDriverSleep(void);
 void gateDriverFaultResetPulse(void);
 void gateDriverPoll(void);
+/* 1 when ENABLE/nSLEEP is high and nFAULT is past the post-wake settle.
+ * Pin is asserted in sleep (VCP UVLO) and can glitch on the first PWM. */
+uint8_t gateDriverNfaultPinTrusted(void);
+void gateDriverNfaultGraceTick(void);
 
 static inline uint8_t gateDriverIsAwake(void)
 {
@@ -46,6 +53,11 @@ static inline uint8_t gateDriverIsAwake(void)
 {
 	return 1;
 }
+static inline uint8_t gateDriverNfaultPinTrusted(void)
+{
+	return 1;
+}
+static inline void gateDriverNfaultGraceTick(void) {}
 static inline void gateDriverEnsure(void) {}
 
 #endif

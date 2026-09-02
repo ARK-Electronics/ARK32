@@ -9,13 +9,31 @@
 
 #include <stdint.h>
 
-/* Optional fault IDs for future telemetry / logging (not yet exposed). */
+/* Optional fault IDs for telemetry / logging. */
 typedef enum {
 	FAULT_NONE = 0,
 	FAULT_STUCK_ROTOR,
 	FAULT_SIGNAL_TIMEOUT,
 	FAULT_BEMF_STALL,
+	/*
+	 * Gate-driver nFAULT classes (DRV8350H / DRV8328). The pin is a single
+	 * open-drain OR of UVLO/OCP/OTW/GDF — no SPI status on hardware-interface
+	 * parts — so these are ADC guesses at the latch edge (V / I / temp).
+	 */
+	FAULT_GD_UVLO,	  /* low bus voltage guess */
+	FAULT_GD_OCP,	  /* high current / was-driving guess */
+	FAULT_GD_OTW,	  /* high temperature guess */
+	FAULT_GD_UNKNOWN, /* nFAULT with no clear ADC signature */
 } fault_id_t;
+
+/*
+ * Latched gate-driver fault cause while nFAULT is active or sticky.
+ * FAULT_NONE when healthy. Best-effort only — not a DRV status register.
+ */
+fault_id_t faultGateDriverCause(void);
+
+/* Short name for logs ("UVLO", "OCP", "OTW", "nFAULT", or ""). */
+const char *faultGateDriverCauseName(fault_id_t cause);
 
 /*
  * Stuck-rotor protection (was the top of setInput after throttle map).
@@ -116,6 +134,27 @@ uint8_t faultDesyncRestartHoldoffActive(void);
 extern volatile uint32_t fault_stall_trips;
 
 /*
+ * Set once the loop has genuinely established (zero_crosses > 100) while
+ * the motor is driving; cleared when running stops and with the other
+ * counters in faultErrorCountReset(). Not the ESC `armed` flag — that
+ * stays 1 across PX4 arm/disarm.
+ *
+ * The error-count rails cannot gate on the instantaneous zero_crosses:
+ * that counter is reset in ten places, including by the desync and stall
+ * handling being measured. An established run that desyncs therefore
+ * re-enters the jump check with a count rebuilt from zero (observed: 75 on
+ * a steady 900-throttle spool), and a > 100 test would misfile it as an
+ * acquisition kick and drop it from esc.Status.error_count / NodeStatus.
+ * A latch has the arm-cycle lifetime the DSDL error_count wants, so the
+ * gate keeps its intent - a start that NEVER got going never sets it -
+ * without depending on a counter the fault path clears.
+ *
+ * volatile: written from tenKhzRoutine (ISR context), read from the main
+ * loop (telemetry).
+ */
+extern volatile uint8_t fault_run_established;
+
+/*
  * Acquisition-rail episode charges this power cycle ("start resisted":
  * batches of early desyncs that never reached acquisition - see
  * faultNoteEarlyDesync).
@@ -145,9 +184,9 @@ extern volatile uint8_t fault_acq_resist_events;
  *   - desync_happened   : the jump-desync check in runtimeProcessDesyncCheck
  *   - fault_stall_trips : the INTERVAL_TIMER stall rail
  *
- * Both are zeroed on arm (0->1) via faultErrorCountReset() so a clean re-arm
- * reports error_count 0; the flight controller then sees only faults that
- * occurred after this arm. Do not clear only one addend - lifetimes must match.
+ * Both are zeroed on ESC armed 0->1 and on FC ArmingStatus 0->1 via
+ * faultErrorCountReset() so a clean re-arm reports error_count 0. Do not
+ * clear only one addend - lifetimes must match.
  *
  * Deliberately NOT additional addends, because each already funnels into the
  * stall rail and would double-count one physical failure:
@@ -161,7 +200,28 @@ extern volatile uint8_t fault_acq_resist_events;
  */
 uint32_t faultErrorCount(void);
 
-/* Zero both error_count addends. Call only on the armed 0->1 edge. */
+/* Zero both error_count addends and the established-run latch. Call on
+ * ESC armed 0->1 and on FC ArmingStatus 0->1. */
 void faultErrorCountReset(void);
+
+/*
+ * Gate-driver nFAULT poll (DRV8350H FAULT_N on ARK_G431_CAN, DRV8328 on
+ * ARK_4IN1_F051 when the pin is defined).
+ *
+ * The DRV pin is a single open-drain OR of VDS OCP, UVLO, OTW, and GDF —
+ * hardware interface parts (…H) do not expose SPI status. On assert we
+ * classify a best-effort cause from MCU bus voltage / current / temp
+ * (faultGateDriverCause), cut PWM, latch ESC_FAULT_STUCK, log the specific
+ * cause, and at zero throttle pulse DRV ENABLE (or clear the software latch
+ * after ENABLE-low sleep) so latched trips can clear without reboot.
+ *
+ * Call from the main loop (not the 20 kHz path). No-op without the pin.
+ */
+void faultPollGateDriver(void);
+
+/* 1 while a real gate-driver trip is latched, or nFAULT is low while the
+ * driver is awake and past post-wake settle. Sleep (ENABLE/nSLEEP low) does
+ * not count — the pin is asserted by VCP UVLO then. */
+uint8_t faultGateDriverFaultActive(void);
 
 #endif /* FAULTS_H_ */

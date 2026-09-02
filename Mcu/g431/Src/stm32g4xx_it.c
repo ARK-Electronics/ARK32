@@ -91,7 +91,7 @@ void DMA1_Channel1_IRQHandler(void)
 
 void COMP1_2_3_IRQHandler(void)
 {
-	if (INTERVAL_TIMER->CNT > (commutation_interval >> 1)) {
+	if (INTERVAL_TIMER->CNT > ZC_SEARCH_BLANK(commutation_interval)) {
 		interrupt++;
 		if (LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_22)) {
 			LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_22);
@@ -118,11 +118,19 @@ void TIM6_DAC_IRQHandler(void)
 	}
 }
 
+#ifdef USE_TIMER_16_CHANNEL_1
+void TIM7_IRQHandler(void)
+{
+	PeriodElapsedCallback();
+	LL_TIM_ClearFlag_UPDATE(TIM7);
+}
+#else
 void TIM1_UP_TIM16_IRQHandler(void)
 {
 	PeriodElapsedCallback();
 	LL_TIM_ClearFlag_UPDATE(TIM16);
 }
+#endif
 
 void EXTI15_10_IRQHandler(void)
 {

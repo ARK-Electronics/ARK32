@@ -10,6 +10,7 @@
 #include "faults.h"
 #include "esc_state.h"
 #include "gate_driver.h"
+#include "debug_uart.h"
 #include "control_loop.h"
 #include "commutation.h"
 #include "bemf_zc.h"
@@ -34,15 +35,75 @@
 #	include "serial_telemetry.h"
 #endif
 
-/* Zero-cross filter levels (were file-local defines in main.c) */
-#ifdef MCU_F051
-#	define ZC_FILTER_MAX 42
-#	define ZC_FILTER_RUN_MIN 10
-#	define ZC_FILTER_FAST 7
+/* Zero-cross filter levels (were file-local defines in main.c).
+ *
+ * F051 (48 MHz): 42/10/7 — proven on ARK 4IN1 free-run and prop benches.
+ *
+ * G431 (160 MHz / ARK 12S CAN): keep the same RUN_MIN/FAST as F051 (A/B
+ * 2026-08: raising to 14/10 hurt 15–20% free-run jitter). Slightly higher
+ * MAX only for the startup/slow tier (zero_crosses < 100, CI > 500) where
+ * the G4 dual-COMP path is noisier than F051's single muxed COMP.
+ * Turn-on grid hump band is G431-specific in bemf_zc.c (mult 24).
+ */
+#if defined(MCU_G431)
+/*
+ * Confirm-window lengths (samples). Free-run pack 48/12/9 (2026-08, then
+ * post-blanking re-check 2026-08-07 on AOS 2207 1980 KV no-prop, optical RPM):
+ *   - MAX 48: dual-COMP acquisition is noisier than F051's single muxed COMP
+ *   - RUN/FAST 12/9: one step above F051 for 160 MHz wall-clock + mid-eRPM
+ *     hump (w/ zc_hump_mult 24 in bemf_zc.c)
+ *
+ * Post-blanking noprop_zc_map A/B (single-run each, blanking on):
+ *   pack      mid(t30-70)  t50 hump  blind_zc  notes
+ *   48/12/9     4.61%       6.28%      334     incumbent
+ *   42/10/7     5.00%       6.39%      302     worse mid (F051-scale)
+ *   48/13/9     4.64%       6.08%      333     noise / reshuffle
+ *   48/14/10    4.63%       6.08%      327     reshuffles band, no net win
+ *   48/16/12    4.55%       6.05%      347     tiny mid win, more blind
+ *   56/12/9     4.58%       6.18%      275     jitter flat; fewer blind on
+ *                                              staircase (MAX helps ramps)
+ * Startup matrix (noprop_startup_matrix_hiI, same article, complete 21 starts):
+ *   48/12/9  0 fail, mean ttr 21 ms, max 90 ms, open% ~1.1–1.5 at 6–12%
+ *   56/12/9  0 fail, mean ttr 37 ms, max 213 ms, open% ~1.7–2.1 at 6–12%
+ * So the map's blind-step win for MAX=56 does not become better acquisition
+ * residency or time-to-run — if anything 56 is slightly worse at low tiers.
+ * No pack beats 48/12/9. Raising RUN_MIN reshapes the hump; MAX only moves
+ * the acq/ramp tier. Leave 48/12/9 and spend the next knobs on time-domain
+ * reject (ZC_SEARCH_BLANK_64THS) / hump compensator, not more confirm counts.
+ *
+ * At the free-run jitter hump (t40–t60, CI ~100–150) the live level sits
+ * near RUN_MIN; FAST only arms when CI < 50 (above this article's free-run
+ * ceiling at 48 kHz PWM). Override via -DZC_FILTER_MAX=N etc. for A/B.
+ */
+#	ifndef ZC_FILTER_MAX
+#		define ZC_FILTER_MAX 48
+#	endif
+#	ifndef ZC_FILTER_RUN_MIN
+#		define ZC_FILTER_RUN_MIN 12
+#	endif
+#	ifndef ZC_FILTER_FAST
+#		define ZC_FILTER_FAST 9
+#	endif
+#elif defined(MCU_F051)
+#	ifndef ZC_FILTER_MAX
+#		define ZC_FILTER_MAX 42
+#	endif
+#	ifndef ZC_FILTER_RUN_MIN
+#		define ZC_FILTER_RUN_MIN 10
+#	endif
+#	ifndef ZC_FILTER_FAST
+#		define ZC_FILTER_FAST 7
+#	endif
 #else
-#	define ZC_FILTER_MAX 12
-#	define ZC_FILTER_RUN_MIN 3
-#	define ZC_FILTER_FAST 2
+#	ifndef ZC_FILTER_MAX
+#		define ZC_FILTER_MAX 12
+#	endif
+#	ifndef ZC_FILTER_RUN_MIN
+#		define ZC_FILTER_RUN_MIN 3
+#	endif
+#	ifndef ZC_FILTER_FAST
+#		define ZC_FILTER_FAST 2
+#	endif
 #endif
 
 /*
@@ -130,6 +191,12 @@ void runtimeProcessDesyncCheck(void)
 	if (zero_crosses <= 10) {
 		slow_avg_revs = 0;
 	}
+	/* Latch "this arm cycle reached an established loop" while the count is
+	 * still intact. Runs at 10 kHz, so it always samples the peak before a
+	 * desync/stall reset can clear it - see fault_run_established. */
+	if (zero_crosses > 100) {
+		fault_run_established = 1;
+	}
 	if (desync_check && zero_crosses > 10) {
 		uint8_t desynced = (getAbsDif(last_average_interval, average_interval) > average_interval >> 1) &&
 				   (average_interval < 2000); // throttle resitricted before zc 20.
@@ -164,6 +231,7 @@ void runtimeProcessDesyncCheck(void)
 		if (desynced) {
 			slow_avg_revs = 0;
 			const uint32_t zc_at_desync = zero_crosses;
+			const uint8_t commanded_stop = (input <= DSHOT_CMD_MAX);
 			// Freeze the throttle ceiling briefly: k_erpm is about to
 			// collapse because the ESTIMATE died, not because the rotor
 			// did, and re-deriving the ceiling from the collapsed
@@ -183,34 +251,54 @@ void runtimeProcessDesyncCheck(void)
 			}
 			zero_crosses = 0;
 			bemfZcResetTrend();
-			desync_happened++;
-			// Same established-run gate as the stall rail (see
-			// faultHandleBemfIntervalStall): interval jumps while the
-			// loop is still acquiring (zc 11..100) are normal startup
-			// roughness on light motors - charging them stacks holdoff
-			// onto honest starts until the bucket
-			// latches a motor that never got going (SITL racer model
-			// reproduces this under plain dshot spool). Legacy desync
-			// handling below still restarts; only the episode
-			// accounting is established-runs-only.
-			if (zc_at_desync > 100) {
-				faultDesyncEpisodeCharge(DESYNC_EPISODE_JUMP);
-			} else {
-				// Acquisition-regime desyncs are not charged directly
-				// (that is what the gate above exists to prevent), but
-				// they must not be free either: without this the loop
-				// can desync forever below zc 100 with every rail and
-				// counter reading zero. See faultNoteEarlyDesync.
-				faultNoteEarlyDesync();
+#ifdef USE_DEBUG_UART
+			/* Single UART line (LogEvent would print "fault: desync" twice). */
+			debugUartPrintf("fault: desync zc=%lu e_com=%lu input=%u duty=%u\r\n", (unsigned long)zc_at_desync,
+					(unsigned long)average_interval, (unsigned)input, (unsigned)duty_cycle);
+#endif
+			// Established-run gate (zc > 100): same as stall rail. Interval
+			// jumps while still acquiring are normal startup roughness —
+			// charge early desyncs softly (faultNoteEarlyDesync), and do
+			// not full-stop (running=0). Established desyncs charge the
+			// episode bucket and may stop the motor.
+			// REPORTING (esc.Status.error_count / NodeStatus WARNING) is
+			// gated on the arm-cycle latch, not on zc_at_desync: this path
+			// zeroes zero_crosses itself, so an established run that
+			// desyncs comes back through here with a rebuilt count and
+			// would otherwise be misfiled as an acquisition kick and never
+			// reported. A start that never got going never sets the latch.
+			//
+			// Commanded stop (input < 48, PX4 disarm / zero throttle): BEMF
+			// dies while running is still 1, so interval jumps look like a
+			// desync. The stall rail already skips those; counting them
+			// here left error_count/WARN set on every arm/disarm.
+			if (fault_run_established && !commanded_stop) {
+				desync_happened++;
 			}
-			if ((!eepromBuffer.bi_direction && (input > DSHOT_CMD_MAX)) || commutation_interval > 1000) {
-				running = 0;
+			// ESCALATION is deliberately NOT on the latch: it must ask "is
+			// THIS event an established-run failure, or acquisition thrash?"
+			// After a stall the loop drops back to acquisition and kicks
+			// repeatedly; charging those (latch still set for the arm cycle)
+			// fills the bucket in a few events and latches the ESC during
+			// the recovery it should be riding out. Live regime test only.
+			if (zc_at_desync > 100) {
+				if (!commanded_stop) {
+					faultDesyncEpisodeCharge(DESYNC_EPISODE_JUMP);
+				}
+				if ((!eepromBuffer.bi_direction && (input > DSHOT_CMD_MAX)) || commutation_interval > 1000) {
+					running = 0;
+				}
+#ifndef MCU_F051
+				/* F051: skip — historical post-clear reseed was dead
+				 * (zero_crosses already 0) and LTO dropped it; restoring
+				 * live reseed overflows the 99.8% flash gate. */
+				average_interval = 5000;
+#endif
+			} else if (!commanded_stop) {
+				faultNoteEarlyDesync();
 			}
 			/* Always fall back to poll-ZC path after a desync event. */
 			escNoteStallOrDesync(0);
-			if (zero_crosses > 100) {
-				average_interval = 5000;
-			}
 			last_duty_cycle = min_startup_duty / 2;
 			if (faultDesyncRestartHoldoffActive() || escIsFault()) {
 				running = 0;
@@ -302,6 +390,85 @@ void runtimeSendTelemetryIfNeeded(void)
 		send_telem_DMA(49);
 		send_esc_info_flag = 0;
 	}
+}
+
+/*
+ * Thermal duty limiter, 1 kHz (main-loop context, fresh degrees_celsius).
+ *
+ * A CONTINUOUS derate, not a threshold. Upstream mapped
+ * [limit-10, limit+10] onto [throttle_max_at_high_rpm/2, 1] but only
+ * entered that map at temp > limit, so the first degree over the limit
+ * stepped the ceiling from full authority to ~22% and one degree back
+ * restored it in full: a bang-bang whose amplitude is the entire derate
+ * range, cycling on the board's thermal time constant. It also
+ * OVERWROTE duty_cycle_maximum, discarding the low-rpm map and the
+ * post-desync ceiling hold (dcm_hold, PR #62) in the process.
+ *
+ * Here the derate starts AT the limit and falls linearly to
+ * THERMAL_CEIL_FLOOR over temp_derate_band_c degrees, and it lands in its own
+ * ceiling that setInput() min-combines with every other one. A
+ * proportional derate settles where a threshold cannot: shedding duty
+ * sheds heat, so the ESC finds an equilibrium inside the band instead of
+ * oscillating across its edge.
+ *
+ * The input is filtered because it is not smooth. degrees_celsius is a
+ * whole-degree integer from a single unaveraged conversion of the MCU die
+ * sensor (every ARK target - no board NTC), so it dithers +-1 C and a
+ * derate driven straight off it would step by 1/20th of the band at the
+ * dither rate. The Q12 IIR (tau ~64 ms at 1 kHz) removes the dither and
+ * gives the derate the sub-degree resolution the integer input lacks.
+ * Q12 rather than Q8 so the >> in the filter never rounds a small delta
+ * to zero: at Q8 a positive delta under 64 (0.25 C) stalls the filter and
+ * biases it permanently cold, which is the direction that under-protects.
+ *
+ * The floor is authority, not protection: BAND_C over the limit the ESC
+ * still allows 10% duty rather than the 0.05% upstream allowed, because a
+ * multirotor that loses a motor outright is worse off than one flying on
+ * a derated motor, and the gate driver's own thermal shutdown is the real
+ * backstop below this. Placed correctly the floor is unreachable anyway -
+ * equilibrium lands inside the band.
+ *
+ * Nothing here is gated on limits.temperature being in range: settings.c
+ * coerces anything outside 70..140 to 255, which no die reading reaches,
+ * so a disabled limit falls out of the arithmetic as a constant 2000.
+ */
+#define THERMAL_CEIL_FLOOR 200 /* 10% of full scale; see above */
+#define THERMAL_FILT_Q 12
+#define THERMAL_FILT_SHIFT 6 /* tau ~64 ms at 1 kHz */
+
+void runtimeThermalLimitTick(void)
+{
+	static int32_t temp_q;
+	static uint8_t temp_seeded;
+
+	const int32_t sample_q = (int32_t)degrees_celsius << THERMAL_FILT_Q;
+	if (!temp_seeded) {
+		/* Seed on the first sample: ramping up from 0 C would read cold
+		 * (i.e. unprotected) for the filter's settling time at boot. */
+		temp_q = sample_q;
+		temp_seeded = 1;
+	} else {
+		temp_q += (sample_q - temp_q) >> THERMAL_FILT_SHIFT;
+	}
+	/* ROUND, do not truncate. The IIR stalls once the remaining delta is
+	 * under one shift step (1/64 C here), so temp_q settles just short of
+	 * the input - and truncating 99.98 to 99 would report a whole degree
+	 * cold forever. The residue is far too small to matter to the derate
+	 * (which uses full-resolution temp_q below), but the published degree
+	 * is what a bench or a test compares against. */
+	degrees_celsius_filtered = (int16_t)((temp_q + (1 << (THERMAL_FILT_Q - 1))) >> THERMAL_FILT_Q);
+
+	const int32_t over_q = temp_q - ((int32_t)eepromBuffer.limits.temperature << THERMAL_FILT_Q);
+	if (over_q <= 0) {
+		thermal_duty_ceiling = 2000;
+		return;
+	}
+	const int32_t band_q = (int32_t)temp_derate_band_c << THERMAL_FILT_Q;
+	if (over_q >= band_q) {
+		thermal_duty_ceiling = THERMAL_CEIL_FLOOR;
+		return;
+	}
+	thermal_duty_ceiling = (uint16_t)(2000 - (((2000 - THERMAL_CEIL_FLOOR) * over_q) / band_q));
 }
 
 /*
@@ -535,6 +702,9 @@ void runtimeProcessAdcAndProtections(void)
 {
 	if (PROCESS_ADC_FLAG == 1) { // for adc and telemetry set adc counter at 1khz loop rate
 		adcAppServiceConversion();
+		/* Fresh degrees_celsius: the derate filter needs a fixed rate, and
+		 * this 1 kHz block is the only one the ADC actually updates at. */
+		runtimeThermalLimitTick();
 #ifndef BRUSHED_MODE
 		runtimeTransientGovernorTick();
 #endif
@@ -560,6 +730,7 @@ void runtimeProcessAdcAndProtections(void)
 			allOff();
 			maskPhaseInterrupts();
 			zero_input_count = 0;
+			debugUartLogEvent(DBG_EVT_LVC);
 			escToFaultLvc();
 		}
 
@@ -660,10 +831,10 @@ void runtimeMotorModeTick(void)
 			duty_cycle_maximum = 2000;
 		}
 
-		if (degrees_celsius > eepromBuffer.limits.temperature) {
-			duty_cycle_maximum = map(degrees_celsius, eepromBuffer.limits.temperature - 10,
-						 eepromBuffer.limits.temperature + 10, throttle_max_at_high_rpm / 2, 1);
-		}
+		/* The thermal derate used to overwrite duty_cycle_maximum here.
+		 * It is now its own ceiling (runtimeThermalLimitTick, 1 kHz) that
+		 * setInput() min-combines, so duty_cycle_maximum stays what its
+		 * name says - the rpm-based ceiling plus the post-desync hold. */
 		if (zero_crosses < 100 && commutation_interval > 500) {
 			filter_level = ZC_FILTER_MAX;
 		} else {

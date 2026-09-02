@@ -88,10 +88,12 @@ jobs:
       - name: Build ARK + codegen check
         run: make codegen-check-ark -j$(nproc)
 
-  # Production full-flash image (BL + app + factory EEPROM). Fails if the
-  # 32 KiB layout or ARK 4IN1 ship defaults regress. See factory/README.md.
+  # Production full-flash images (BL + app + factory EEPROM). Fails if the
+  # flash layout or ARK ship defaults regress. See factory/README.md.
+  # Covers ARK_4IN1_F051 (32 KiB + committed BL) and ARK_G431_CAN (128 KiB
+  # + committed AM32_G431_BOOTLOADER_ARKG4_CAN under Bootloaders/).
   factory-image:
-    name: factory image (ARK 4IN1 full flash)
+    name: factory image (ARK 4IN1 + G431 CAN)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,17 +103,52 @@ jobs:
       - name: Install Arm toolchain
         uses: ./.github/actions/setup-arm-sdk
 
-      - name: Build + verify factory full-flash image
+      - name: Build + verify factory full-flash images
         run: make factory-image-check -j$(nproc)
 
       - name: Upload factory artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ark-4in1-factory-image
+          name: ark-factory-images
           path: |
-            obj/ARK32_ARK_4IN1_F051_*.factory.bin
+            obj/ARK32_ARK_4IN1_F051_*.factory.img
             obj/ARK32_ARK_4IN1_F051_*.factory.hex
             obj/ARK32_ARK_4IN1_F051_*.eeprom.bin
+            obj/ARK32_ARK_G431_CAN_*.factory.img
+            obj/ARK32_ARK_G431_CAN_*.factory.hex
+            obj/ARK32_ARK_G431_CAN_*.eeprom.bin
+            obj/*.uavcan.bin
           if-no-files-found: error
           retention-days: 30
+
+  # Keep ARK_G431_CAN building under LTO so shared control-path PRs cannot
+  # silently break the 12S CAN target (no size gate yet — flash is ample).
+  build-ark-g431-can:
+    name: build ARK_G431_CAN
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Arm toolchain
+        run: |
+          make arm_sdk_install
+          make arm_sdk_check
+
+      - name: Build ARK_G431_CAN
+        run: make ARK_G431_CAN -j$(nproc)
+
+      - name: Upload G431 CAN binary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ark-g431-can
+          path: |
+            obj/ARK32_ARK_G431_CAN_*.elf
+            obj/ARK32_ARK_G431_CAN_*.bin
+            obj/ARK32_ARK_G431_CAN_*.hex
+            obj/*.uavcan.bin
+          if-no-files-found: ignore
+          retention-days: 14

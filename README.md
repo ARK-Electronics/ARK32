@@ -56,6 +56,10 @@ Source: [`Src/runtime_loop.c`](Src/runtime_loop.c) (governor), [`Src/faults.c`](
 
 On the ARK 4IN1 the DRV8328 is put to sleep (`nSLEEP`) when the ESC is not driving, braking, or beeping. See [`Src/gate_driver.c`](Src/gate_driver.c).
 
+### G431 COMP blanking (turn-on noise)
+
+On **ARK 12S CAN** (STM32G4), TIM1 OC5 can blank the comparator output over the PWM turn-on transient. ST’s blanking **forces the output low** (it does not hold the last level), so it is only safe on **falling-BEMF** steps; rising-BEMF steps run ungated. Design note, Alka/ST semantics, knobs, and bench checks: [doc/g431-comp-blanking.md](doc/g431-comp-blanking.md).
+
 ### Global refactor
 Large control-path split out of a monolithic `main.c` into focused modules (runtime, settings, motor control helpers, and related MCU/F051 work). The goal is safer changes, clearer ownership of hot paths, and room for instrumentation without growing one file forever.
 
@@ -108,7 +112,7 @@ make -j$(nproc) ARK_4IN1_F051
 
 # Production full-flash image (bootloader + app + factory EEPROM defaults)
 make factory-image
-# -> obj/ARK32_ARK_4IN1_F051_<ver>.factory.bin  (flash at 0x08000000)
+# -> obj/ARK32_ARK_4IN1_F051_<ver>.factory.img  (flash at 0x08000000)
 make factory-image-check   # same + layout/defaults gate (CI)
 ```
 
@@ -130,7 +134,7 @@ That links the release app, then runs [`scripts/build_factory_image.py`](scripts
 | Application @ `0x08001000` | `make ARK_4IN1_F051` |
 | EEPROM @ `0x08007C00` | [`factory/ARK_4IN1_F051_eeprom_defaults.json`](factory/ARK_4IN1_F051_eeprom_defaults.json) |
 
-Ship/program `obj/ARK32_ARK_4IN1_F051_*.factory.bin` (or `.factory.hex`). Defaults (variable PWM, 1020 kV, 2 %/ms ramp, 15° fixed advance, PWM min/max 1020/1980 µs) are documented in [`factory/README.md`](factory/README.md).
+Ship/program `obj/ARK32_ARK_4IN1_F051_*.factory.img` (or `.factory.hex`). Defaults (variable PWM, 1020 kV, 2 %/ms ramp, 15° fixed advance, PWM min/max 1020/1980 µs) are documented in [`factory/README.md`](factory/README.md).
 
 Optional static analysis / size / format helpers:
 
@@ -252,15 +256,45 @@ Other DShot commands (direction, bi-dir, EDT, programming mode, etc.) do **not**
 
 ## Bootloader
 
-ARK ESCs use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** (fork of upstream [AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)). Use ARK release images for ARK hardware — not the stock upstream bootloader alone when you need ARK-specific fixes (e.g. bidirectional DShot idle detection).
+ARK ESCs use **[ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader)** (fork of upstream [AM32-bootloader](https://github.com/am32-firmware/AM32-bootloader)). The **ARK 12S CAN** bootloader is built from in-tree [`bootloader/`](bootloader/) (`make bootloader-g431-can`). F051 still uses committed ARK32-bootloader images.
 
 | | |
 |--|--|
-| Source / releases | [ARK-Electronics/ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) · [releases](https://github.com/ARK-Electronics/ARK32-bootloader/releases) |
-| Committed F051 image for app embed | [`Bootloaders/`](Bootloaders/) (see [Bootloaders/README.md](Bootloaders/README.md)) |
-| App-side BL update | F051 builds embed the image by default (including `HWCI_PERF=1`) and rewrite the on-chip BL if it differs (`Src/bootloader_update.c`). Success soft-resets; the next boot plays **`playBootloaderUpdatedTone`** (two rising beeps) then the normal startup tune. Strip with `EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`. |
+| G431 CAN (ARK 12S) source | [`bootloader/`](bootloader/) — `make bootloader-g431-can` |
+| Other images / releases | [ARK-Electronics/ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) · [releases](https://github.com/ARK-Electronics/ARK32-bootloader/releases) |
+| Committed images for app embed | [`Bootloaders/`](Bootloaders/) (see [Bootloaders/README.md](Bootloaders/README.md)) |
+| App-side BL update | F051 release and **every G431 CAN** build embed the image and rewrite the on-chip BL if it differs (`Src/bootloader_update.c`). Success soft-resets; the next boot plays **`playBootloaderUpdatedTone`** (two rising beeps) then the normal startup tune. Strip with `EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`. F051 `HWCI_PERF=1` omits the blob (flash is tight); G431 CAN keeps it. |
 
-To put ARK32 on a **blank production ESC**, flash the full-chip factory image (`make factory-image` → `obj/*factory.bin` at `0x08000000`) so bootloader, app, and EEPROM defaults land in one step — see [factory/README.md](factory/README.md). For development or field app-only updates, flash a matching **ARK32-bootloader** with ST-LINK (if needed), then the application `.bin`/`.hex` at `0x08001000` (or use a configurator / one-wire serial). Later app flashes can also carry and apply a newer BL via the embed path above.
+To put ARK32 on a **blank production ESC**, flash the full-chip factory image (`make factory-image` → `obj/*.factory.img` at `0x08000000`) so bootloader, app, and EEPROM defaults land in one step — see [factory/README.md](factory/README.md). For development or field app-only updates, flash the application `.bin`/`.hex` at the app base (F051 `0x08001000`, G431 CAN `0x08004000`). The first boot applies a newer BL via the embed path above if the on-chip image differs.
+
+Do **not** copy a factory image to a PX4 SD card. PX4 globs every `*.bin` on the card root and scans the **whole file** for an APDescriptor (the documented 1 KiB window is a no-op). A G431 `*.factory.bin` would be staged as `/ufw/71.bin` and written at the app base. Factory artifacts are `.factory.img` / `.factory.hex` so that cannot happen.
+
+### PX4 SD-card update (ARK 12S CAN)
+
+`make ARK_G431_CAN` signs the application image with a PX4 APDescriptor and emits a second copy named for the SD-card workflow:
+
+```text
+obj/<board_id>-<MAJOR.MINOR[.PATCH]>.<githash>.uavcan.bin
+```
+
+`board_id` is `(hw_major << 8) | hw_minor`. This target reports hardware version **0.71**, so `board_id` is **71**. The rest of the name is the numeric ship version (no `-ark`) and the 8-digit git hash from the APDescriptor, e.g. `71-3.0.2.59efc137.uavcan.bin`.
+
+1. Copy **only** that `.uavcan.bin` to the **root** of the PX4 SD card (or to `ufw_staging/`). Do not copy `*.factory.img`, `*.factory.hex`, or any other `*.bin`.
+2. In QGC **Actuators**, unassign this ESC (clear it as a motor). An assigned motor makes PX4 publish `esc.RawCommand` and that blocks the update — see below.
+3. Reboot the flight controller. PX4 copies the file to `/ufw/71.bin`. That is **staging**, not the flash.
+4. Keep the vehicle **disarmed**. Wait until the ESC is `OPERATIONAL` and GetNodeInfo shows the new `image_crc` / git hash, then re-assign the motor.
+
+The same bytes are in `obj/AM32_ARK_G431_CAN_<ver>.bin`. The `.uavcan.bin` name is what PX4's firmware database records; the APDescriptor inside is what makes PX4 accept the file. The factory full-flash image is a different artifact (`.factory.img`) and must not go on the SD card.
+
+**How PX4 actually updates this ESC**
+
+- **Staging is not flashing.** `/ufw/71.bin` only means PX4 ingested a signed image for board_id 71. The ESC does not change until it accepts `BeginFirmwareUpdate` and the bootloader writes the app.
+- **CRC match skips the node.** PX4 compares the file's APDescriptor `image_crc` to GetNodeInfo. It sends `BeginFirmwareUpdate` only if the node's CRC is 0, the reported software version is 0.0, or the CRCs differ. Same CRC → file sits in `/ufw/` and nothing is written.
+- **The bootloader does not scan the SD card.** It never starts an update on its own. It only flashes when it receives `BeginFirmwareUpdate`, or when the app accepted that request and left an RTC flag before reset.
+- **An assigned motor boots the app first.** The bootloader stays in `MAINTENANCE` until it sees a valid signal. PX4 `esc.RawCommand` on this ESC's index (the usual result of mapping it as a motor in Actuators) sets that signal and the bootloader jumps to the app. PX4's updater typically runs *after* actuators are already publishing, so the node it talks to is the app, not the bootloader. The bootloader will not "catch" a pending `/ufw/71.bin` on power-up while that motor is assigned.
+- **The app refuses the request unless idle.** `BeginFirmwareUpdate` is dropped with no reply when the motor is running and `newinput != 0` (`safe_to_write_settings()` in `Src/DroneCAN/DroneCAN.c`). PX4 times out and retries; the flash never starts. Unassign the ESC (or otherwise stop `RawCommand`) and leave the vehicle disarmed so throttle is zero.
+
+Field sequence that works: copy the `.uavcan.bin` → unassign the ESC in Actuators → reboot the FC → wait for `OPERATIONAL` + new CRC → re-assign.
 
 ## EEPROM settings
 

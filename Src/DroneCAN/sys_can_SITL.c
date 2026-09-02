@@ -339,6 +339,13 @@ void sys_can_disable_IRQ(void)
 	sitl_nvic_disable_irq(SITL_IRQ_CAN);
 }
 
+void sys_can_service(void) {}
+
+bool sys_can_prefer_canfd_tx(void)
+{
+	return false;
+}
+
 void sys_can_enable_IRQ(void)
 {
 	sitl_nvic_enable_irq(SITL_IRQ_CAN);

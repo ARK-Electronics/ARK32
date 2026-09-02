@@ -118,9 +118,53 @@ void loadEEpromSettings(void)
 			startup_max_duty_cycle = startup_max_duty_cycle + dead_time_override;
 			setPwmDeadTime(dead_time_override);
 		}
-		if (eepromBuffer.limits.temperature < 70 || eepromBuffer.limits.temperature > 140) {
-			eepromBuffer.limits.temperature = 255;
+		/* Valid window for the thermal ceiling. Outside it resolves to the
+		 * target's shipped limit (see the fail-safe note below); only the
+		 * explicit 255 sentinel means "derate disabled".
+		 *
+		 * The lower bound is a build-time override ONLY
+		 * so a bench can exercise the derate at a temperature the board
+		 * actually reaches: the derate starts AT limits.temperature and
+		 * hits THERMAL_CEIL_FLOOR at +temp_derate_band_c, so verifying it
+		 * against the shipped 70 C floor needs the die driven past 70,
+		 * which a propped ESC in its own slipstream may never do (a 5-inch
+		 * 6S attempt plateaued at 57 C). Do not lower this in a shipping
+		 * build - 70 C is the floor the product's protection envelope
+		 * assumes, and check-erase-defaults.py gates the shipped pair.
+		 *
+		 * THERMAL_LIMIT_MIN_C lives in targets.h because this is NOT the
+		 * only floor: the DroneCAN parameter table re-validates this same
+		 * byte at boot against TEMPERATURE_LIMIT's own min and substitutes
+		 * its default, so lowering only this one gets silently overridden
+		 * (observed: a 30 C write came back as 105). Both now share the
+		 * macro; keep it that way.
+		 */
+		if (eepromBuffer.limits.temperature != THERMAL_LIMIT_DISABLED &&
+		    (eepromBuffer.limits.temperature < THERMAL_LIMIT_MIN_C || eepromBuffer.limits.temperature > THERMAL_LIMIT_MAX_C)) {
+			/* FAIL SAFE, not fail open. This used to coerce to 255
+			 * (= derate disabled), which also defeated the DroneCAN
+			 * parameter layer's own safety net: load_settings() resets
+			 * an out-of-range value to TEMPERATURE_LIMIT's default, but
+			 * 255 is INSIDE its accepted 70..255 window, so the 255
+			 * written here always survived and the ESC came up with no
+			 * thermal protection at all. A garbled or mis-set byte now
+			 * lands on the target's shipped limit instead. 255 itself
+			 * still means "deliberately disabled" and is preserved.
+			 *
+			 * Non-DroneCAN targets are unaffected: their
+			 * TARGET_DEFAULT_TEMPERATURE_LIMIT is 255, so out-of-range
+			 * still resolves to disabled exactly as before. */
+			eepromBuffer.limits.temperature = TARGET_DEFAULT_TEMPERATURE_LIMIT;
 		}
+
+		/* Foldback ramp width. 0xFF on any page that never wrote the CAN
+		 * block (every non-DroneCAN product) lands here, so the coercion
+		 * is the normal path, not an error case. */
+		if (eepromBuffer.can.temp_derate_band < THERMAL_DERATE_BAND_MIN ||
+		    eepromBuffer.can.temp_derate_band > THERMAL_DERATE_BAND_MAX) {
+			eepromBuffer.can.temp_derate_band = THERMAL_DERATE_BAND_DEFAULT;
+		}
+		temp_derate_band_c = eepromBuffer.can.temp_derate_band;
 
 		if (eepromBuffer.limits.current > 0 && eepromBuffer.limits.current <= 100) {
 			use_current_limit = 1;
@@ -138,6 +182,8 @@ void loadEEpromSettings(void)
 		if (eepromBuffer.input_type < 10) {
 			switch (eepromBuffer.input_type) {
 				case AUTO_IN:
+					/* Detect first wire protocol (DShot/PWM). DroneCAN still
+					 * runs; while RawCommand is live it wins (DroneCAN_active). */
 					dshot = 0;
 					servoPwm = 0;
 					EDT_ARMED = 1;
@@ -155,6 +201,12 @@ void loadEEpromSettings(void)
 					EDT_ARM_ENABLE = 1;
 					EDT_ARMED = 0;
 					dshot = 1;
+					break;
+				case DRONECAN_IN:
+					/* Wire capture left idle; DroneCAN_Init disables its IRQs. */
+					dshot = 0;
+					servoPwm = 0;
+					EDT_ARMED = 1;
 					break;
 			};
 		} else {
@@ -178,8 +230,28 @@ void loadEEpromSettings(void)
 		max_ramp_low_rpm = RAMP_SPEED_LOW_RPM;
 		max_ramp_high_rpm = RAMP_SPEED_HIGH_RPM;
 		if (eepromBuffer.max_ramp < 10) {
+			/*
+			 * Fine mode: one step every 10th 20 kHz tick, so a step of N
+			 * is N counts per 500 us = 0.1*N %/ms - a tenth of what the
+			 * same number means in coarse mode.
+			 *
+			 * STARTUP KEEPS ITS COARSE RATE. It used to take the eeprom
+			 * value like the other two regimes, which silently handed the
+			 * spool-up ramp to a cruise setting: ARK_G431_CAN's 0.5 %/ms
+			 * left the racer plant unable to start at all in SITL
+			 * (test_acq_desync_rail: "motor never entered running", 12 s,
+			 * deterministic - clean at the old 16 %/ms default). That
+			 * contradicts the schedule's own documented intent, which is
+			 * that RAMP_SPEED_STARTUP governs spool-up reliability and is
+			 * deliberately NOT a vehicle-tuning knob (see targets.h).
+			 *
+			 * x10 converts the coarse ceiling into fine-cadence units, so
+			 * startup slews at exactly the rate it would in coarse mode
+			 * while low/high rpm honour the requested value. Nothing here
+			 * lets the eeprom RAISE a regime past its targets.h ceiling.
+			 */
 			ramp_divider = 9;
-			max_ramp_startup = eepromBuffer.max_ramp;
+			max_ramp_startup = RAMP_SPEED_STARTUP * 10;
 			max_ramp_low_rpm = eepromBuffer.max_ramp;
 			max_ramp_high_rpm = eepromBuffer.max_ramp;
 		} else {
@@ -263,6 +335,38 @@ void loadEEpromSettings(void)
 		advance_erpm_scale_q12 = (uint16_t)(scale - (scale >> 4)); /* * 15/16 */
 	}
 
+	reverse_speed_threshold = map(motor_kv, 300, 3000, 1000, 500);
+	if (eepromBuffer.bi_direction) {
+		polling_mode_changeover = POLLING_MODE_THRESHOLD / 2;
+	} else {
+		polling_mode_changeover = POLLING_MODE_THRESHOLD;
+	}
+}
+
+/*
+ * Re-apply tables that depend on motor_kv / motor_poles after a DroneCAN (or
+ * other) live change. Does not re-read flash. motor_kv is the live decoded
+ * value (e.g. 360); eepromBuffer.motor_kv may be the quantised byte form.
+ */
+void applyMotorIdentitySettings(void)
+{
+	if (motor_kv < 300) {
+		low_rpm_throttle_limit = 0;
+	} else {
+		low_rpm_throttle_limit = 1;
+	}
+	if (eepromBuffer.motor_poles >= 2 && eepromBuffer.motor_poles <= 64) {
+		low_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (100U * 32U);
+		high_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (17U * 32U);
+	} else {
+		low_rpm_level = 0;
+		high_rpm_level = 0;
+	}
+	advance_erpm_scale_q12 = 0;
+	if (motor_kv >= 300 && eepromBuffer.motor_poles >= 2 && eepromBuffer.motor_poles <= 64) {
+		uint16_t scale = (uint16_t)(((uint32_t)motor_kv * eepromBuffer.motor_poles * 4096u) / 200000u);
+		advance_erpm_scale_q12 = (uint16_t)(scale - (scale >> 4)); /* * 15/16 */
+	}
 	reverse_speed_threshold = map(motor_kv, 300, 3000, 1000, 500);
 	if (eepromBuffer.bi_direction) {
 		polling_mode_changeover = POLLING_MODE_THRESHOLD / 2;

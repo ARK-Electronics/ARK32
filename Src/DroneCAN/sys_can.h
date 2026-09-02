@@ -44,6 +44,18 @@ void sys_can_getUniqueID(uint8_t id[16]);
 void sys_can_init(void);
 
 /*
+  periodic FDCAN housekeeping (CAN FD data-rate auto-match). No-op on
+  classic-CAN backends.
+ */
+void sys_can_service(void);
+
+/*
+  True when telemetry/status should go out as CAN FD (pinned CAN_FD_MBPS,
+  or auto-hunt locked onto a host FD data rate). Classic backends: false.
+ */
+bool sys_can_prefer_canfd_tx(void);
+
+/*
   called from CAN IRQ indicating we may have a free TX slot
  */
 extern void DroneCAN_processTxQueue();
@@ -83,6 +95,7 @@ void set_rtc_backup_register(uint8_t idx, uint32_t value);
 #define RTC_BKUP0_FWUPDATE 0x42c7 // top byte is CAN node number, 2nd byte is file server node
 #define RTC_BKUP0_BOOTED 0x8c42c8 // set when main started
 #define RTC_BKUP0_SIGNAL 0x8c42c9 // set on 5 DroneCAN messages processed
+#define RTC_BKUP0_FLASHED 0x8c42ca // BL just wrote the app; jump once without RawCommand
 
 // setup a static port/pin
 void setup_portpin(uint16_t portpin, bool enable);
