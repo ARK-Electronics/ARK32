@@ -86,6 +86,10 @@ EEPROM_FIELDS: dict[str, Field] = {f.name: f for f in [
           "startup duty boost; firmware accepts 50..150"),
     Field("auto_advance", 47, 0, 1,
           "1 = firmware maps advance from duty cycle, ignoring advance_level"),
+    Field("brake_on_stop", 28, 0, 2,
+          "0=coast (allOff), 1=full brake, 2=active brake"),
+    Field("rc_car_reverse", 38, 0, 1,
+          "1 = RC-car reverse / proportional prop brake"),
 ]}
 
 # Identity/version bytes that a settings write must NEVER change: a mismatch
@@ -101,6 +105,25 @@ _OFFSET_TO_NAME: dict[int, str] = {
     **{f.offset: f.name for f in EEPROM_FIELDS.values()},
     **READ_ONLY_OFFSETS,
 }
+
+
+def assert_required(page: Settings, required: dict[str, int]) -> None:
+    """Refuse a run whose EEPROM would silently invalidate the measurement.
+
+    Empty ``required`` is a no-op. Names must be in :data:`EEPROM_FIELDS`.
+    """
+    if not required:
+        return
+    bad = []
+    for name, want in required.items():
+        got = page.get(name)
+        if got != want:
+            bad.append(f"{name}={got} (need {want})")
+    if bad:
+        raise SettingsError(
+            "EEPROM precondition failed: " + ", ".join(bad)
+            + "; refusing to run rather than produce a plausible wrong number. "
+            "Inspect with `hwci settings read` and write a corrected page.")
 
 
 def resolve_field(name: str, offset: int | None = None) -> Field:

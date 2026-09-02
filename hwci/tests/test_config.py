@@ -121,3 +121,10 @@ def test_profile_roundtrips_through_dict():
     p = load_profile("demag_step_stress")
     q = profile_from_dict(profile_to_dict(p))
     assert q == p
+
+
+def test_hiz_spindown_requires_coast_eeprom():
+    p = load_profile("g431_hiz_spindown")
+    assert p.require_eeprom == {"brake_on_stop": 0, "rc_car_reverse": 0}
+    q = profile_from_dict(profile_to_dict(p))
+    assert q.require_eeprom == p.require_eeprom

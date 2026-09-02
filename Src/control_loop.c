@@ -321,6 +321,9 @@ void setInput()
 				/* Wake DRV with IRQs enabled (ENABLE settle is multi-ms on
 				 * DRV8350H). comStep gateDriverEnsure() is then a no-op. */
 				allOff();
+				/* 20 kHz writes CCR even while !running.
+				 * startMotor() → comStep() re-enables at that CCR. */
+				SET_DUTY_CYCLE_ALL(0);
 				gateDriverWakeBlocking();
 				if (!old_routine) {
 					startMotor();
@@ -513,9 +516,11 @@ void setInput()
 	}
 	// Missed-ZC power cut (BLHeli-style): while commutating blind the
 	// rotor position is unknown - bound the energy driven into a possibly
-	// wrong phase. On DRV8328 (F051 4IN1) there is no VDS trip; on
-	// DRV8350H (ARK_G431_CAN) the board has a resistor-set VDS limit and
-	// FAULT_N is polled in faultPollGateDriver. Applied here in setInput
+	// wrong phase. On DRV8328 (F051 4IN1) VDS is latched until nSLEEP
+	// reset; on DRV8350H (ARK_G431_CAN) the board has a resistor-set VDS
+	// limit that auto-retries in 8 ms. FAULT_N is polled in
+	// faultPollGateDriver (OTW / short VDS pulses do not cut PWM).
+	// Applied here in setInput
 	// (on F051 that is the DShot EXTI IRQ, not the main loop) rather than
 	// inside the O3 RAM_FUNC 20 kHz body (bench bisect showed adding code
 	// there disturbs F051 startup). Pulling last_duty_cycle down as well
@@ -609,6 +614,19 @@ RAM_FUNC void tenKhzRoutine()
 	ledcounter++;
 	ramp_count++;
 	one_khz_loop_counter++;
+#if defined(USE_DRV_NFAULT)
+	{
+		/* nFAULT classify timebase must run during sine start too. The
+		 * PID 1 kHz block is inside !escInSineStart() and would freeze gd_ms.
+		 * >= PID_LOOP_DIVIDER is 20 ticks at 20 kHz = 1 kHz; the PID
+		 * block still uses `>` (21 ticks, ~952 Hz). */
+		static uint16_t gd_khz_div;
+		if (++gd_khz_div >= PID_LOOP_DIVIDER) {
+			gd_khz_div = 0;
+			faultGateDriverTick1kHz();
+		}
+	}
+#endif
 	if (!escIsArmed()) {
 		if (cell_count == 0) {
 			if (inputSet) {

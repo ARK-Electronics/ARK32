@@ -16,24 +16,33 @@ typedef enum {
 	FAULT_SIGNAL_TIMEOUT,
 	FAULT_BEMF_STALL,
 	/*
-	 * Gate-driver nFAULT classes (DRV8350H / DRV8328). The pin is a single
-	 * open-drain OR of UVLO/OCP/OTW/GDF — no SPI status on hardware-interface
-	 * parts — so these are ADC guesses at the latch edge (V / I / temp).
+	 * Gate-driver nFAULT classes. Not DRV status bits (H-interface has no
+	 * SPI). On DRV8350H they come from pin duration + bridge conduction;
+	 * on DRV8328 every nFAULT is a latched cut (UVLO vs other is a V hint).
 	 */
-	FAULT_GD_UVLO,	  /* low bus voltage guess */
-	FAULT_GD_OCP,	  /* high current / was-driving guess */
-	FAULT_GD_OTW,	  /* high temperature guess */
-	FAULT_GD_UNKNOWN, /* nFAULT with no clear ADC signature */
+	FAULT_GD_UVLO,	  /* bus below useful pack voltage */
+	FAULT_GD_OCP,	  /* VDS retry pulse, or retry budget exceeded */
+	FAULT_GD_OTW,	  /* nFAULT held, bridge still driving (DRV OTW) */
+	FAULT_GD_OTSD,	  /* held + dead, MCU die in thermal band (log label) */
+	FAULT_GD_UNKNOWN, /* held + dead, no UVLO/thermal signature (GDF etc.) */
 } fault_id_t;
 
 /*
- * Latched gate-driver fault cause while nFAULT is active or sticky.
+ * Classified cause while nFAULT warning/Hi-Z/latch is active.
  * FAULT_NONE when healthy. Best-effort only — not a DRV status register.
  */
 fault_id_t faultGateDriverCause(void);
 
-/* Short name for logs ("UVLO", "OCP", "OTW", "nFAULT", or ""). */
+/* Short name for logs ("UVLO", "OCP", "OTW", "OTSD", "nFAULT", or ""). */
 const char *faultGateDriverCauseName(fault_id_t cause);
+
+/* Consume a one-shot gate-driver log queued by faultPollGateDriver.
+ * Returns 0 if none, FAULT_GD_LOG_WARNING, or FAULT_GD_LOG_ERROR.
+ * *cause is FAULT_NONE when there is nothing pending. */
+#define FAULT_GD_LOG_NONE 0
+#define FAULT_GD_LOG_WARNING 1
+#define FAULT_GD_LOG_ERROR 2
+uint8_t faultGateDriverConsumeLog(fault_id_t *cause);
 
 /*
  * Stuck-rotor protection (was the top of setInput after throttle map).
@@ -205,23 +214,42 @@ uint32_t faultErrorCount(void);
 void faultErrorCountReset(void);
 
 /*
- * Gate-driver nFAULT poll (DRV8350H FAULT_N on ARK_G431_CAN, DRV8328 on
- * ARK_4IN1_F051 when the pin is defined).
+ * Gate-driver nFAULT poll. Two chip policies (see faults.c):
  *
- * The DRV pin is a single open-drain OR of VDS OCP, UVLO, OTW, and GDF —
- * hardware interface parts (…H) do not expose SPI status. On assert we
- * classify a best-effort cause from MCU bus voltage / current / temp
- * (faultGateDriverCause), cut PWM, latch ESC_FAULT_STUCK, log the specific
- * cause, and at zero throttle pulse DRV ENABLE (or clear the software latch
- * after ENABLE-low sleep) so latched trips can clear without reboot.
+ * DRV8350H (ARK 12S CAN): pin duration + bridge conducting *while driven*.
+ *   pulse ~8 ms     : VDS auto-retry — keep PWM, count pulses if seen
+ *   held + live     : OTW warning — keep PWM, log WARNING (rate-limited)
+ *   held + dead     : Hi-Z until pin releases; MCU temp is a log label only
+ *                     (not HIZ vs latch). Persistent pin-low at zero throttle
+ *                     ENABLE tRST (consecutive failed pulses; pin-high
+ *                     recovery resets), then latch.
+ *   held + commanded, never confirmed live, ~250 ms : Hi-Z (dwell backstop;
+ *                     commanded time accumulates across idle blips below
+ *                     the DRV sleep threshold; a sleep re-classifies)
+ *
+ * DRV8328 (ARK 4IN1): every nFAULT already Hi-Z's the FETs (no OTW-only,
+ * no 8 ms retry). Cut PWM, latch stuck until zero throttle; nSLEEP sleep
+ * clears the DRV latch.
  *
  * Call from the main loop (not the 20 kHz path). No-op without the pin.
  */
 void faultPollGateDriver(void);
 
-/* 1 while a real gate-driver trip is latched, or nFAULT is low while the
- * driver is awake and past post-wake settle. Sleep (ENABLE/nSLEEP low) does
- * not count — the pin is asserted by VCP UVLO then. */
+/* 1 kHz timebase for nFAULT duration (called from tenKhzRoutine's 1 kHz
+ * branch). No-op without the pin. */
+void faultGateDriverTick1kHz(void);
+
+/* 1 while PWM must stay off (DRV Hi-Z wait or latched trip). Not set for
+ * OTW warning or the classify window — those keep driving. Sleep
+ * (ENABLE/nSLEEP low) does not count: the pin is asserted by VCP UVLO then. */
 uint8_t faultGateDriverFaultActive(void);
+
+/* 1 while nFAULT is held and the bridge is still driving (OTW class). */
+uint8_t faultGateDriverWarningActive(void);
+
+/* 1 while a Hi-Z wait needs ENABLE high so the pin can auto-clear and so
+ * a zero-throttle ENABLE tRST can unlatch GDF. LATCH does not set this:
+ * sleep-on-idle is that state's reset. */
+uint8_t faultGateDriverKeepAwake(void);
 
 #endif /* FAULTS_H_ */

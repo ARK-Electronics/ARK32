@@ -43,6 +43,65 @@ hwci debug-uart --config rig.yaml
 # and aborts on fault: nFAULT / desync / stuck / stall / acq_desync.
 ```
 
+### G4 nFAULT current floor (`GD_LIVE_CA_MIN`)
+
+`Src/faults.c` treats smoothed `actual_current` ≥ 50 cA (0.50 A) as "bridge
+still conducting". That number is ~6 raw LSB on ARK_G431_CAN. Before shipping
+the nFAULT classifier, capture the distribution from a real run — not just
+warm idle:
+
+```bash
+.venv/bin/python -m hwci run --config rig.yaml --profile g431_current_floor \
+  --out runs/g431-current-floor
+```
+
+In `samples.csv` / `hwci_perf.current_ca`, compare p50/p95 of:
+
+* `idle` (armed, throttle 0, DRV may be asleep — offset / noise)
+* `hold05` / `hold08` (lowest nonzero throttle this ESC is actually commanded)
+
+If either straddles 50 cA, raise `GD_LIVE_CA_MIN`. A barely-spinning motor
+that never holds 40 ms consecutive live hits the 250 ms unconfirmed WARN
+ceiling and false-drops (Hi-Z / CRITICAL / FAULT_STUCK).
+
+### G4 nFAULT HIZ resume (high throttle)
+
+HIZ pin-high at throttle waits `GD_HIZ_SPINDOWN_MS` (3 s from
+`gd_enter_dead`, clock `gd_hiz_t0` — not the tRST `gd_t0`) before
+`startMotor()`; zero throttle may resume immediately. 3 s is a guess:
+a 5" prop may be down inside 1 s, a 15–18" prop takes several, and a
+windmilling disc may never reach the ~300 RPM `startMotor()` assumes.
+Same class of number as `GD_LIVE_CA_MIN` — measure it.
+
+Throttle-cut proxy (sizes the dwell; stop-then-punch, not nFAULT).
+`require_eeprom` aborts unless `brake_on_stop=0` and `rc_car_reverse=0`:
+HIZ does `allOff()` (no regen), so a braked coast would look too fast
+and silently under-size the dwell. The run asserts this against the
+live page rather than trusting whatever was last flashed.
+
+```bash
+.venv/bin/python -m hwci run --config rig.yaml --profile g431_hiz_spindown \
+  --out runs/g431-hiz-spindown
+```
+
+For each `re20_*` segment, time from throttle-up to `perf_running==1`
+with a stable RPM and no `fault: stall` burst. The shortest clean coast
+is a lower bound on `GD_HIZ_SPINDOWN_MS`. Pair with `g431_current_floor`
+on the same session.
+
+Props off is the conservative direction on the bench (bare rotor coasts
+longer than a loaded prop) but it is a floor, not an answer — it cannot
+see windmilling, which is what the 3 s dwell is hedging.
+
+nFAULT jumper (the real HIZ path — save the scope trace). This one is
+`allOff()` by construction, so `brake_on_stop` does not apply. If the
+proxy and the jumper disagree, believe the jumper.
+
+1. Hold ~20% DShot. Jumper nFAULT low past 12 ms (UART `fault: nFAULT`).
+2. Release nFAULT. Do not idle throttle between assert and release.
+3. Restart must not be on the pin edge — ~3 s of coast, then a cold
+   start (no pre-fault CCR spike). Save the 20% phase-current trace.
+
 ## SETUP A — Flight Stand throttle (no PX4 / no BDShot)
 
 ```
