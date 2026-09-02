@@ -40,6 +40,9 @@ SECTIONS
     KEEP(*(.px4_app_descriptor))
     . = ALIGN(4);
   } > FLASH1
+  /* Bootloader GetNodeInfo reads image_crc at this address. */
+  ASSERT(ADDR(.px4_app_descriptor) == ORIGIN(FLASH1) + 0x208,
+         "APDescriptor moved; update MAIN_FW_START_ADDR+0x208 in the bootloader")
 
   .fill_flash1 :
   {
