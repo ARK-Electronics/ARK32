@@ -32,3 +32,5 @@ or `make -C bootloader`. Output:
 ## CAN FD
 
 The FDCAN peripheral runs in FD mode (FDOE + BRSE). Driver source is the app file `Src/DroneCAN/sys_can_stm32_CANFD.c` (no bootloader copy). Nominal (arbitration) bit timing is 1 Mbps. Data-phase bit timing uses the 80 MHz Kvaser/ArduPilot table (1/2/4/5 Mbps, 70–75% sample point, TDC). EEPROM byte 185 (`CAN_FD_MBPS`) is 0 = auto-match the host data rate, or 1/2/4/5 to pin it. Classic DNA does not lock the data rate. TX FDF/BRS latches on the first received CAN FD frame.
+
+GetNodeInfo reports the app APDescriptor `image_crc` (FLASH1+0x208) when a signed image is present, so PX4 only sends BeginFirmwareUpdate when `/ufw/71.bin` differs. After a successful write the bootloader jumps to the app once (no RawCommand) so the app can embed a new bootloader. Normal power-on still waits for RawCommand.

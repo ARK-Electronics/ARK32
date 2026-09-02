@@ -325,8 +325,6 @@ static const struct bl_param {
    * the 16 KiB CAN FD image does not have room for the full table. */
   { "CAN_NODE",                  0,   127,    0, BL_T_UINT8,  176 },
   { "ESC_INDEX",                 0,    32,    0, BL_T_UINT8,  177 },
-  { "REQUIRE_ARMING",            0,     1,    1, BL_T_BOOL,   178 },
-  { "REQUIRE_ZERO_THROTTLE",     0,     1,    1, BL_T_BOOL,   180 },
   { "INPUT_SIGNAL_TYPE",         0,     5,    0, BL_T_UINT8,  46 },
 #ifdef CAN_TERM_PIN
   { "CAN_TERM_ENABLE",           0,     1,    0, BL_T_BOOL,   183 },
@@ -695,11 +693,21 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
   // not derived from the 71-minute-wrapping microsecond timer.
   pkt.status = node_status;
 
-  // fill in your major and minor firmware version
   pkt.software_version.major = BOOTLOADER_VERSION;
   pkt.software_version.minor = 0;
   pkt.software_version.optional_field_flags = 0;
-  pkt.software_version.vcs_commit = 0; // should put git hash in here
+  pkt.software_version.vcs_commit = 0;
+  /* App APDescriptor is at FLASH1+0x208 (ldscript_CAN.ld). CRC 0 => update needed. */
+  {
+    const uint32_t *d = (const uint32_t *)(MAIN_FW_START_ADDR + 0x208u);
+    if (d[0] == 0xf1e4a240u && d[1] == 0x06916864u) {
+      const uint64_t crc = ((uint64_t)d[3] << 32) | d[2];
+      if (crc != 0) {
+        pkt.software_version.optional_field_flags = UAVCAN_PROTOCOL_SOFTWAREVERSION_OPTIONAL_FIELD_FLAG_IMAGE_CRC;
+        pkt.software_version.image_crc = crc;
+      }
+    }
+  }
 
 #ifdef DRONECAN_HW_VERSION_MAJOR
   pkt.hardware_version.major = DRONECAN_HW_VERSION_MAJOR;
@@ -771,7 +779,6 @@ static void handle_begin_firmware_update(CanardInstance* ins, CanardRxTransfer* 
                          &buffer[0],
                          total_size);
 
-  can_print("Started firmware update");
 }
 
 /*
@@ -817,13 +824,11 @@ static void handle_file_read_response(CanardInstance* ins, CanardRxTransfer* tra
   if ((transfer->transfer_id+1)%32 != fwupdate.transfer_id ||
       transfer->source_node_id != fwupdate.node_id) {
     /* not for us */
-    can_print("Firmware update: not for us");
     return;
   }
   struct uavcan_protocol_file_ReadResponse pkt;
   if (uavcan_protocol_file_ReadResponse_decode(transfer, &pkt)) {
     /* bad packet */
-    can_print("Firmware update: bad packet");
     return;
   }
   if (pkt.error.value != UAVCAN_PROTOCOL_FILE_ERROR_OK) {
@@ -833,7 +838,6 @@ static void handle_file_read_response(CanardInstance* ins, CanardRxTransfer* tra
     }
     /* read failed */
     fwupdate.node_id = 0;
-    can_print("Firmware update read failure");
     return;
   }
 
@@ -845,9 +849,8 @@ static void handle_file_read_response(CanardInstance* ins, CanardRxTransfer* tra
 
   if (pkt.data.len < 256) {
     /* firmware updare done */
-    can_print("Firmwate update complete");
     fwupdate.node_id = 0;
-    set_rtc_backup_register(0, 0);
+    set_rtc_backup_register(0, RTC_BKUP0_FLASHED);
     NVIC_SystemReset();
     return;
   }
@@ -1214,7 +1217,12 @@ static void DroneCAN_Startup(void)
     register
    */
   uint8_t node_id = 0;
-  const uint32_t rtc0 = get_rtc_backup_register(0);
+  uint32_t rtc0 = get_rtc_backup_register(0);
+  if ((rtc0 & 0xFFFFU) == (RTC_BKUP0_FLASHED & 0xFFFFU)) {
+    have_raw_command = true;
+    set_rtc_backup_register(0, 0);
+    rtc0 = 0;
+  }
   if ((rtc0 & 0xFFFFU) == RTC_BKUP0_FWUPDATE) {
     node_id = rtc0 >> 24;
     uint8_t src_node = (rtc0 >> 16) & 0xFF;
@@ -1378,7 +1386,7 @@ static void set_reason(enum boot_code code, const char *reason)
   node_status.vendor_specific_status_code = code;
   // unsigned subtraction handles uint32 wrap
   const uint32_t now_us = micros32();
-  if (now_us - last_msg_us > 5000000U) {
+  if (reason && now_us - last_msg_us > 5000000U) {
     last_msg_us = now_us;
     can_print(reason);
   }
@@ -1406,15 +1414,15 @@ bool DroneCAN_boot_ok(void)
   const uint8_t *fw_base = (const uint8_t *)MAIN_FW_START_ADDR;
   struct app_signature *appsig = bl_memmem(fw_base, app_max_len, sig, sizeof(sig));
   if (appsig == NULL || (((uint32_t)appsig) & 3) != 0) {
-    set_reason(FAIL_REASON_NO_APP_SIG, "no app signature");
+    set_reason(FAIL_REASON_NO_APP_SIG, NULL);
     return false;
   }
   if (appsig->fwlen > app_max_len) {
-    set_reason(FAIL_REASON_BAD_LENGTH_APP, "bad app length");
+    set_reason(FAIL_REASON_BAD_LENGTH_APP, NULL);
     return false;
   }
   if (memcmp(AM32_MCU, appsig->mcu, strlen(AM32_MCU)) != 0) {
-    set_reason(FAIL_REASON_BAD_BOARD_ID, "bad board type");
+    set_reason(FAIL_REASON_BAD_BOARD_ID, NULL);
     return false;
   }
 
@@ -1424,7 +1432,7 @@ bool DroneCAN_boot_ok(void)
   const uint32_t crc2 = crc32(appsigend, appsig->fwlen - (uint32_t)(appsigend - fw_base));
   if (appsig->crc1 != crc1 ||
       appsig->crc2 != crc2) {
-    set_reason(FAIL_REASON_BAD_CRC, "bad firmware CRC");
+    set_reason(FAIL_REASON_BAD_CRC, NULL);
     return false;
   }
 #endif
@@ -1433,7 +1441,7 @@ bool DroneCAN_boot_ok(void)
   // re-check closes the late-frame race: a frame arriving after fallback armed
   // re-blocks the boot and reverts to CAN behaviour.
   if (!have_raw_command && !(noncan_fallback && !can_seen)) {
-    set_reason(FAIL_REASON_NO_SIGNAL, "no signal");
+    set_reason(FAIL_REASON_NO_SIGNAL, NULL);
     return false;
   }
 
@@ -1445,7 +1453,7 @@ bool DroneCAN_boot_ok(void)
       save_flash_nolib(default_settings, sizeof(default_settings), EEPROM_START_ADD);
   }
   if (eeprom_magic != 0x01) {
-    set_reason(FAIL_REASON_BAD_FIRMWARE_SIGNATURE, "bad eeprom header");
+    set_reason(FAIL_REASON_BAD_FIRMWARE_SIGNATURE, NULL);
   }
 
   return true;
