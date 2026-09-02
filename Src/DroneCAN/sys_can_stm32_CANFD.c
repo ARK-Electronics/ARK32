@@ -1,22 +1,39 @@
 /*
  * sys_can_stm32_CANFD.c - STM32G4 FDCAN, classic CAN and CAN FD.
+ * Shared by the app and the G431 CAN bootloader (compile with -DBOOTLOADER).
  *
  * Based on ArduPilot CANFDIface.cpp. Nominal (arbitration) bit timing is
  * 1 Mbps at 80 MHz. Data-phase timings are the Kvaser/ArduPilot 80 MHz table
  * (1/2/4/5 Mbps). EEPROM CAN_FD_MBPS 0 auto-matches the host data rate;
  * 1/2/4/5 pins it. Classic DNA is expected on an FD bus and does not
- * abort auto-hunt. TX FDF/BRS for Status/telemetry latches on once an
- * FD frame is received (or CAN_FD_MBPS is pinned).
+ * abort auto-hunt or count as a data-rate match. TX FDF/BRS for
+ * Status/telemetry latches on once an FD frame is received (or
+ * CAN_FD_MBPS is pinned). Data-phase errors retune the hunt; classic RX
+ * must not clear that streak.
  */
 
 #include "targets.h"
 
 #if DRONECAN_SUPPORT && defined(MCU_G431)
 
-#	include "eeprom.h"
-#	include "functions.h"
-#	include "sys_can.h"
-#	include <string.h>
+#	ifdef BOOTLOADER
+#		include "main.h"
+#		include "sys_can.h"
+#		include <blutil.h>
+#		include <string.h>
+#		ifndef MCU_FLASH_START
+#			define MCU_FLASH_START 0x08000000
+#		endif
+#		ifndef EEPROM_START_ADD
+#			define EEPROM_START_ADD (MCU_FLASH_START + 0x1f800)
+#		endif
+#		define EEPROM_FD_MBPS_OFF 185
+#	else
+#		include "eeprom.h"
+#		include "functions.h"
+#		include "sys_can.h"
+#		include <string.h>
+#	endif
 
 #	define FDCAN_FRAME_BUFFER_SIZE 18
 
@@ -38,6 +55,8 @@
 /* TDC offset 10 × 12.5 ns = 125 ns (MCP2557FD-class transceiver delay). */
 #	define FDCAN_TDCO_TICKS 10U
 #	define FD_ERR_STREAK_RETUNE 32U
+#	define FD_HUNT_MIN_MS 50U
+#	define FD_HUNT_DWELL_MS 250U
 
 typedef struct {
 	uint32_t id_flags;
@@ -84,6 +103,7 @@ static uint8_t fd_auto;
 static uint8_t fd_locked;
 static uint16_t fd_err_streak;
 static volatile uint8_t fd_need_retune;
+static uint32_t fd_hunt_start_ms;
 
 static uint8_t dlc_to_len(uint8_t dlc)
 {
@@ -259,8 +279,8 @@ static void handleRxInterrupt(uint8_t fifo_index)
 
 	*fifo_ack_reg = get_index;
 
-	fd_err_streak = 0;
 	if (is_fd) {
+		fd_err_streak = 0;
 		fd_locked = 1;
 	}
 
@@ -321,6 +341,12 @@ void FDCAN1_IT1_IRQHandler(void)
 		FDCAN1->IR = FDCAN_IR_BO;
 		FDCAN1->CCCR &= ~FDCAN_CCCR_INIT;
 	}
+
+#	ifndef BOOTLOADER
+	if (FDCAN1->IR & (FDCAN_IR_PED | FDCAN_IR_PEA)) {
+		FDCAN1->IR = FDCAN_IR_PED | FDCAN_IR_PEA;
+	}
+#	endif
 
 	pollErrorFlagsFromISR();
 }
@@ -407,7 +433,11 @@ static void can_init(void)
 
 	FDCAN1->IR = 0x3FFFFFFF;
 
-	FDCAN1->IE = FDCAN_IE_RF0NE | FDCAN_IE_RF0FE | FDCAN_IE_RF1NE | FDCAN_IE_RF1FE | FDCAN_IE_TCE | FDCAN_IE_BOE;
+	FDCAN1->IE = FDCAN_IE_RF0NE | FDCAN_IE_RF0FE | FDCAN_IE_RF1NE | FDCAN_IE_RF1FE | FDCAN_IE_TCE | FDCAN_IE_BOE
+#	ifndef BOOTLOADER
+		     | FDCAN_IE_PEDE | FDCAN_IE_PEAE
+#	endif
+		;
 
 	FDCAN1->ILS = FDCAN_ILS_PERR | FDCAN_ILS_SMSG;
 
@@ -422,7 +452,15 @@ static void can_init(void)
 
 static void fd_select_initial_rate(void)
 {
+#	ifdef BOOTLOADER
+	const uint8_t *eeprom = (const uint8_t *)EEPROM_START_ADD;
+	uint8_t want = eeprom[EEPROM_FD_MBPS_OFF];
+	if (eeprom[0] != 1) {
+		want = 0;
+	}
+#	else
 	const uint8_t want = eepromBuffer.can.fd_mbps;
+#	endif
 	const int8_t idx = fd_idx_for_mbps(want);
 	if (want == 0 || idx < 0) {
 		fd_auto = 1;
@@ -442,13 +480,24 @@ bool sys_can_prefer_canfd_tx(void)
 	return fd_locked != 0;
 }
 
-void sys_can_service(void)
+static uint32_t fd_now_ms(void)
 {
-	if (!fd_need_retune || !fd_auto || fd_locked) {
-		fd_need_retune = 0;
-		return;
+#	ifdef BOOTLOADER
+	return LL_TIM_GetCounter(BL_TIMER) / 1000u;
+#	else
+	static uint32_t base_us;
+	static uint16_t last;
+	const uint16_t cnt = get_timer_us16();
+	if (cnt < last) {
+		base_us += 0x10000u;
 	}
-	fd_need_retune = 0;
+	last = cnt;
+	return (base_us + cnt) / 1000u;
+#	endif
+}
+
+static void fd_retune_next(void)
+{
 	const uint8_t n = (uint8_t)(sizeof(fd_timings) / sizeof(fd_timings[0]));
 	const uint8_t next = (uint8_t)((fd_idx + 1) % n);
 
@@ -461,6 +510,21 @@ void sys_can_service(void)
 	FDCAN1->CCCR |= FDCAN_CCCR_FDOE | FDCAN_CCCR_BRSE;
 	FDCAN1->CCCR &= ~FDCAN_CCCR_INIT;
 	waitForBitState(&FDCAN1->CCCR, FDCAN_CCCR_INIT, false);
+	fd_err_streak = 0;
+	fd_need_retune = 0;
+	fd_hunt_start_ms = fd_now_ms();
+}
+
+void sys_can_service(void)
+{
+	if (!fd_auto || fd_locked) {
+		fd_need_retune = 0;
+		return;
+	}
+	const uint32_t elapsed = fd_now_ms() - fd_hunt_start_ms;
+	if ((fd_need_retune && elapsed >= FD_HUNT_MIN_MS) || elapsed >= FD_HUNT_DWELL_MS) {
+		fd_retune_next();
+	}
 }
 
 void sys_can_init(void)
@@ -483,6 +547,7 @@ void sys_can_init(void)
 
 	fd_select_initial_rate();
 	can_init();
+	fd_hunt_start_ms = fd_now_ms();
 
 	NVIC_SetPriority(FDCAN1_IT0_IRQn, 5);
 	NVIC_SetPriority(FDCAN1_IT1_IRQn, 5);

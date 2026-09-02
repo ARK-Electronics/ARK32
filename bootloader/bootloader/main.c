@@ -174,7 +174,7 @@ static void bl_led_update(void)
 
 #if DRONECAN_SUPPORT
 #include "DroneCAN/DroneCAN.h"
-#include "DroneCAN/sys_can.h"
+#include "sys_can.h"
 #endif
 
 #ifndef BOARD_FLASH_SIZE

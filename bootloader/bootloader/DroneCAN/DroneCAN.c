@@ -1175,7 +1175,7 @@ void DroneCAN_receiveFrame(void)
 /*
   handle a frame from interrupt context
 */
-void DroneCAN_handleFrame(CanardCANFrame *frame)
+void DroneCAN_handleFrame(const CanardCANFrame *frame)
 {
   can_seen = true;
   dc_note_rx_frame(frame);
