@@ -298,7 +298,9 @@ factory-image-check: factory-image
 		bash scripts/check-factory-image-ark.sh
 
 # Code formatting (clang-format ≈ PX4 astyle/Linux look; see .clang-format).
-# Same target names as PX4:
+# Same target names as PX4. Requires clang-format 22.1.5 (CI pin);
+# scripts/format.sh bootstraps tools/clang-format-venv if PATH is a
+# different version, and enables .githooks/pre-push (check_format).
 #   make format          — rewrite sources in place
 #   make check_format    — CI: fail if any file would change
 #   make format_changed  — rewrite only files changed vs origin/ark-release

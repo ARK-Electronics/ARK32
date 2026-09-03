@@ -144,7 +144,7 @@ make size-check-ark    # ARK F051 flash/RAM gate (HWCI+embed worst case, then re
 
 Style is **PX4-inspired** via clang-format (Linux braces, tab indent width 8, `int *p`, column 140) — same `make format` / `check_format` workflow as PX4, not astyle itself. See `.clang-format`.
 
-`make format` skips vendor trees (`Mcu/**/Drivers`, CMSIS, DroneCAN `dsdl_generated` / `libcanard`). Install clang-format with `pip install --user 'clang-format==22.1.5'` (version pinned to match CI) or your distro package.
+`make format` skips vendor trees (`Mcu/**/Drivers`, CMSIS, DroneCAN `dsdl_generated` / `libcanard`). It requires clang-format **22.1.5** (same pin as CI) and bootstraps that into `tools/clang-format-venv` if PATH has a different version — Ubuntu's 18.x will not pass CI. `make format` also enables a pre-push hook that runs `make check_format`.
 
 ---
 

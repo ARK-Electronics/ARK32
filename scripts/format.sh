@@ -9,10 +9,18 @@
 #
 # Style config: repo-root .clang-format
 # Excludes vendor HAL (Drivers), CMSIS, generated DroneCAN DSDL, libcanard, etc.
+#
+# Requires clang-format 22.1.5 (same pin as CI). Distro packages (Ubuntu 18.x)
+# produce a different AST and will fail the PR check. Override the binary with
+# CLANG_FORMAT=... if it reports that version; otherwise a repo-local venv is
+# bootstrapped under tools/clang-format-venv (gitignored).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+CLANG_FORMAT_PIN=22.1.5
+CF_VENV="$ROOT/tools/clang-format-venv"
 
 CHECK=0
 CHANGED_ONLY=0
@@ -21,7 +29,7 @@ for arg in "$@"; do
     --check) CHECK=1 ;;
     --changed|--diff-only) CHANGED_ONLY=1 ;;
     -h|--help)
-      sed -n '2,12p' "$0"
+      sed -n '2,16p' "$0"
       exit 0
       ;;
     *)
@@ -32,12 +40,46 @@ for arg in "$@"; do
   esac
 done
 
-if ! command -v clang-format >/dev/null 2>&1; then
-  echo "clang-format not found on PATH." >&2
-  echo "Install one of:" >&2
-  echo "  pip install --user 'clang-format==22.1.5'" >&2
-  echo "  sudo apt-get install clang-format" >&2
-  exit 1
+clang_format_version() {
+  "$1" --version 2>/dev/null | head -1 || true
+}
+
+clang_format_is_pin() {
+  [[ -x "$1" ]] && [[ "$(clang_format_version "$1")" == *"$CLANG_FORMAT_PIN"* ]]
+}
+
+ensure_clang_format() {
+  local c cf
+  if [[ -n "${CLANG_FORMAT:-}" ]]; then
+    if clang_format_is_pin "$CLANG_FORMAT"; then
+      printf '%s\n' "$CLANG_FORMAT"
+      return 0
+    fi
+    echo "CLANG_FORMAT=$CLANG_FORMAT is not clang-format $CLANG_FORMAT_PIN ($(clang_format_version "$CLANG_FORMAT"))." >&2
+    return 1
+  fi
+  for c in "$CF_VENV/bin/clang-format" "$HOME/.local/bin/clang-format" "$(command -v clang-format 2>/dev/null || true)"; do
+    if clang_format_is_pin "$c"; then
+      printf '%s\n' "$c"
+      return 0
+    fi
+  done
+  echo "clang-format $CLANG_FORMAT_PIN not found (CI pin). Bootstrapping $CF_VENV" >&2
+  python3 -m venv "$CF_VENV"
+  "$CF_VENV/bin/pip" install -q "clang-format==$CLANG_FORMAT_PIN"
+  cf="$CF_VENV/bin/clang-format"
+  if ! clang_format_is_pin "$cf"; then
+    echo "error: $cf is not clang-format $CLANG_FORMAT_PIN ($(clang_format_version "$cf"))" >&2
+    return 1
+  fi
+  printf '%s\n' "$cf"
+}
+
+CF="$(ensure_clang_format)" || exit 1
+
+# Enable the repo pre-push hook (check_format) for this clone.
+if git rev-parse --git-dir >/dev/null 2>&1 && [[ -d "$ROOT/.githooks" ]]; then
+  git config --local core.hooksPath .githooks
 fi
 
 # Collect sources under application and MCU trees, pruning third-party /
@@ -91,13 +133,13 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
   exit 0
 fi
 
-echo "clang-format $(clang-format --version | head -1)"
+echo "clang-format $(clang_format_version "$CF") ($CF)"
 echo "Files: ${#FILES[@]}  mode: $([[ $CHECK -eq 1 ]] && echo check || echo fix)"
 
 # Canonical form = clang-format, then drop trailing whitespace (clang-format
 # can leave spaces at EOL inside comments). Used by both check and fix.
 canonical_form() {
-  clang-format "$1" | sed 's/[[:space:]]*$//'
+  "$CF" "$1" | sed 's/[[:space:]]*$//'
 }
 
 if [[ "$CHECK" -eq 1 ]]; then
@@ -124,7 +166,7 @@ fi
 # Then strip trailing whitespace so on-disk form matches --check.
 format_batch() {
   printf '%s\0' "${FILES[@]}" | xargs -0 -n 32 -P "$(nproc 2>/dev/null || echo 4)" \
-    clang-format -i
+    "$CF" -i
 }
 format_batch
 format_batch
