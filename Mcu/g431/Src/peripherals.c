@@ -70,7 +70,7 @@ void SystemClock_Config(void)
 		;
 
 #ifdef USE_HSE
-	// setup to use HSE
+		// setup to use HSE
 #	if defined(USE_HSE_BYPASS) && (USE_HSE_BYPASS == 0)
 	LL_RCC_HSE_DisableBypass(); // Use crystal mode
 #	else

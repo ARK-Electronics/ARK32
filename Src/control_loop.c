@@ -333,7 +333,7 @@ void setInput()
 					input >= DSHOT_MAX_THROTTLE ? 2000
 					: input <= 137		    ? minimum_duty_cycle + 40
 								    : minimum_duty_cycle + 40 +
-									      (uint16_t)(((uint32_t)(input - 137) * sine_throttle_duty_slope_q16) >> 16);
+								 (uint16_t)(((uint32_t)(input - 137) * sine_throttle_duty_slope_q16) >> 16);
 			} else {
 				duty_cycle_setpoint =
 					input >= DSHOT_MAX_THROTTLE ? 2000
