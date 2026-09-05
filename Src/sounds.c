@@ -76,8 +76,8 @@ void playBlueJayTune(void)
 	for (int i = 4; i < 128; i += 2) {
 		RELOAD_WATCHDOG_COUNTER();
 		signaltimeout = 0;
-		t4 = eepromBuffer.tune[i];
-		t3 = eepromBuffer.tune[i + 1];
+		t4 = eepromBuffer.startup_melody[i];
+		t3 = eepromBuffer.startup_melody[i + 1];
 		if (t4 == 0 && t3 == 0) {
 			break;
 		}
@@ -100,9 +100,9 @@ void playBlueJayTune(void)
 			playBJNote(frequency, (uint16_t)duration);
 			full_time_count = 0;
 		}
-		if (eepromBuffer.tune[3] > 239) {
+		if (eepromBuffer.startup_melody[3] > 239) {
 			SET_DUTY_CYCLE_ALL(0);
-			delayMillis(10 * (255 - eepromBuffer.tune[3]));
+			delayMillis(10 * (255 - eepromBuffer.startup_melody[3]));
 		}
 	}
 
@@ -239,7 +239,7 @@ void playStartupTune()
 	}
 	__disable_irq();
 	comStep(3);
-	if (eepromBuffer.tune[0] != ERASED_FLASH_BYTE) {
+	if (eepromBuffer.startup_melody[0] != ERASED_FLASH_BYTE) {
 		playBlueJayTune();
 	} else {
 		playArkTune();

@@ -47,8 +47,8 @@
 
   eeprom access (cmd 5/6) lets a local tool read and edit the ESC
   settings directly, without the 4-way or DroneCAN parameter paths:
-    cmd 5: fetch, replies 0x5356-tagged image (u16 magic, u8 cmd=5,
-           u8 len_hi... see eeprom_reply below)
+    cmd 5: fetch, replies 0x5358-tagged image (u16 magic, u8 version=1,
+           u8 status, u16 length, u16 offset; see eeprom_fetch below)
     cmd 6: set, u16 offset, u16 length, bytes[]; writes the live
            eepromBuffer and the backing file
     u16 magic 0x5356, u8 version=1, u8 source, u64 t_ns (simulated),
@@ -59,7 +59,7 @@
         first sample), u32 sample_period_ns, count * float
         (physics audio samples, arbitrary linear units)
 
-  ZC_STATS (cmd 9) reply, magic 0x5356 (shared with tone/eeprom packet
+  ZC_STATS (cmd 9) reply, magic 0x5356 (shared with tone packet
   tags; distinguished by length + the poller asked for ZC_STATS):
     u16 magic 0x5356, u8 version=6, u8 pad, u32 zero_crosses,
       u32 commutation_interval, u32 dropped_edges, u32 desync_happened,

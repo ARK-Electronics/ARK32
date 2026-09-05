@@ -37,9 +37,9 @@ void runBrushedLoop(void)
 
 	brushed_duty_cycle = map(adjusted_input, DSHOT_MIN_THROTTLE, DSHOT_MAX_THROTTLE, 0, (TIMER1_MAX_ARR - (TIMER1_MAX_ARR / 20)));
 
-	if (degrees_celsius > eepromBuffer.limits.temperature) {
+	if (degrees_celsius > eepromBuffer.temperature_limit) {
 		duty_cycle_maximum =
-			map(degrees_celsius, eepromBuffer.limits.temperature, eepromBuffer.limits.temperature + 20, TIMER1_MAX_ARR / 2, 1);
+			map(degrees_celsius, eepromBuffer.temperature_limit, eepromBuffer.temperature_limit + 20, TIMER1_MAX_ARR / 2, 1);
 	} else {
 		duty_cycle_maximum = TIMER1_MAX_ARR - 50;
 	}

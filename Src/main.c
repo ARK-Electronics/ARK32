@@ -309,32 +309,32 @@ int main(void)
 	loadEEpromSettings();
 #endif
 
-	if (VERSION_MAJOR != eepromBuffer.version.major || VERSION_MINOR != eepromBuffer.version.minor ||
+	if (VERSION_MAJOR != eepromBuffer.firmware_major || VERSION_MINOR != eepromBuffer.firmware_minor ||
 	    EEPROM_VERSION > eepromBuffer.eeprom_version) {
-		eepromBuffer.version.major = VERSION_MAJOR;
-		eepromBuffer.version.minor = VERSION_MINOR;
+		eepromBuffer.firmware_major = VERSION_MAJOR;
+		eepromBuffer.firmware_minor = VERSION_MINOR;
 		eepromBuffer.eeprom_version = EEPROM_VERSION;
 		saveEEpromSettings();
 	}
 
-	if (eepromBuffer.dir_reversed == 1) {
+	if (eepromBuffer.direction_reversed == 1) {
 		forward = 0;
 	} else {
 		forward = 1;
 	}
 	tim1_arr = TIMER1_MAX_ARR;
-	if (!eepromBuffer.comp_pwm) {
-		eepromBuffer.use_sine_start = 0; // sine start requires complementary pwm.
+	if (!eepromBuffer.complementary_pwm) {
+		eepromBuffer.sine_startup = 0; // sine start requires complementary pwm.
 	}
 
-	if (eepromBuffer.rc_car_reverse) { // overrides a whole lot of things!
+	if (eepromBuffer.rc_car_reversing) { // overrides a whole lot of things!
 		throttle_max_at_low_rpm = 1000;
-		eepromBuffer.bi_direction = 1;
-		eepromBuffer.use_sine_start = 0;
+		eepromBuffer.bidirectional_mode = 1;
+		eepromBuffer.sine_startup = 0;
 		low_rpm_throttle_limit = 1;
-		eepromBuffer.variable_pwm = 0;
+		eepromBuffer.variable_pwm_freq = 0;
 		// eepromBuffer.stall_protection = 1;
-		eepromBuffer.comp_pwm = 0;
+		eepromBuffer.complementary_pwm = 0;
 		eepromBuffer.stuck_rotor_protection = 0;
 		minimum_duty_cycle = minimum_duty_cycle + 50;
 		stall_protect_minimum_duty = stall_protect_minimum_duty + 50;
@@ -374,16 +374,16 @@ int main(void)
 	comStep(2);
 #		ifdef FIXED_SPEED_MODE
 	use_speed_control_loop = 1;
-	eepromBuffer.use_sine_start = 0;
+	eepromBuffer.sine_startup = 0;
 	target_e_com_time = 60000000 / FIXED_SPEED_MODE_RPM / (eepromBuffer.motor_poles / 2);
 	input = 48;
 #		endif
 
 #	else
 #		ifdef BRUSHED_MODE
-	// bi_direction = 1;
+	// bidirectional_mode = 1;
 	commutation_interval = 5000;
-	eepromBuffer.use_sine_start = 0;
+	eepromBuffer.sine_startup = 0;
 	maskPhaseInterrupts();
 	playBrushedStartupTune();
 #		else
@@ -397,8 +397,8 @@ int main(void)
 	MX_IWDG_Init();
 	RELOAD_WATCHDOG_COUNTER();
 #		ifdef GIMBAL_MODE
-	eepromBuffer.bi_direction = 1;
-	eepromBuffer.use_sine_start = 1;
+	eepromBuffer.bidirectional_mode = 1;
+	eepromBuffer.sine_startup = 1;
 #		endif
 
 #		ifdef USE_ADC_INPUT
@@ -473,7 +473,7 @@ int main(void)
 #	endif
 #endif
 		if (zero_crosses < 5) {
-			if (eepromBuffer.bi_direction) {
+			if (eepromBuffer.bidirectional_mode) {
 				min_bemf_counts_up = TARGET_MIN_BEMF_COUNTS + 1;
 				min_bemf_counts_down = TARGET_MIN_BEMF_COUNTS + 1;
 			} else {

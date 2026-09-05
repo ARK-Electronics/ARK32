@@ -24,7 +24,6 @@ void setInputPullUp();
 void enableHalfTransferInt();
 void setInputPullNone();
 
-extern char bi_direction;
 extern volatile char inputSet;
 extern char dshot;
 extern volatile char servoPwm;

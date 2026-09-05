@@ -138,7 +138,7 @@ void faultUpdateBemfTimeoutPolicy(void)
 	if (zero_crosses > 100 && adjusted_input < 200) {
 		bemf_timeout_happened = 0;
 	}
-	if (eepromBuffer.use_sine_start && adjusted_input < 160) {
+	if (eepromBuffer.sine_startup && adjusted_input < 160) {
 		bemf_timeout_happened = 0;
 	}
 

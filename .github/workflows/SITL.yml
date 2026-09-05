@@ -2,9 +2,9 @@ name: SITL Tests
 
 on:
   push:
-    branches: ["main", "ark-release"]
+    branches: ["main", "ark-release", "dakejahl/version-32"]
   pull_request:
-    branches: ["main", "ark-release"]
+    branches: ["main", "ark-release", "dakejahl/version-32"]
   workflow_dispatch:
 
 jobs:
@@ -13,6 +13,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-eeprom
 
       - name: Build SITL
         run: make AM32_SITL_CAN
@@ -58,6 +60,8 @@ jobs:
       - name: Install Qt system libraries
         run: sudo apt-get update && sudo apt-get install -y libgl1 libegl1 libfontconfig1 libxkbcommon0
 
+      - uses: ./.github/actions/setup-eeprom
+
       - name: Build SITL
         run: make AM32_SITL_CAN
 
@@ -88,7 +92,7 @@ jobs:
       - name: Install Cygwin
         uses: cygwin/cygwin-install-action@v4
         with:
-          packages: gcc-core make
+          packages: gcc-core make python3 python3-jsonschema
 
       - name: Build SITL
         shell: C:\cygwin\bin\bash.exe --noprofile --norc -o igncr -eo pipefail '{0}'

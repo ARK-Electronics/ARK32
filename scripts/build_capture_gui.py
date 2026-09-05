@@ -36,6 +36,7 @@ EXCLUDES = [
 
 # imported dynamically, so PyInstaller cannot see them
 HIDDEN = [
+    'schema', 'jsonschema',
     'dronecan', 'serial', 'serial.tools.list_ports', 'pyqtgraph',
     # mavcan: URIs (an ArduPilot board used as the CAN adapter)
     'dronecan.driver.mavcan', 'pymavlink', 'pymavlink.mavutil',
@@ -65,6 +66,13 @@ def main():
            '--workpath', os.path.join(ROOT, 'build', 'pyinstaller'),
            '--specpath', os.path.join(ROOT, 'build')]
     cmd.append('--onedir' if args.onedir else '--onefile')
+    # Schema consumers run inside the frozen GUI as well as from a checkout.
+    sep = ';' if sys.platform.startswith('win') else ':'
+    cmd += ['--paths', os.path.join(ROOT, 'scripts', 'eeprom')]
+    for relative in ('schema/eeprom.json', 'schema/eeprom.schema.json', 'Inc/version.h'):
+        source = os.path.join(ROOT, relative)
+        destination = os.path.join('eeprom-schema', os.path.dirname(relative))
+        cmd += ['--add-data', '%s%s%s' % (source, sep, destination)]
     for h in HIDDEN:
         cmd += ['--hidden-import', h]
     for e in EXCLUDES:

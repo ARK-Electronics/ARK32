@@ -14,7 +14,7 @@ volatile uint8_t sitl_phase_mode[3];
 
 static void phasePWM(int p)
 {
-	if (!eepromBuffer.comp_pwm) {
+	if (!eepromBuffer.complementary_pwm) {
 		sitl_phase_mode[p] = SITL_PHASE_PWM_NOCOMP;
 	} else {
 		sitl_phase_mode[p] = SITL_PHASE_PWM;
