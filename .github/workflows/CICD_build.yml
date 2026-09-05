@@ -13,12 +13,12 @@ name: CI Build Linux
 
 on:
   push:
-    branches: ["ark-release"]
+    branches: ["ark-release", "dakejahl/version-32"]
     tags:
       # Matches v32.0, v32.1-rc1, etc. (glob, not full regex).
       - "v[0-9]*.[0-9]*"
   pull_request:
-    branches: ["ark-release"]
+    branches: ["ark-release", "dakejahl/version-32"]
   schedule:
     # Rolling nightly at 06:00 UTC on the default branch (ark-release).
     - cron: "0 6 * * *"
@@ -112,6 +112,7 @@ jobs:
           name: ARK32-binaries
           path: |
             obj/*.hex
+            schema/eeprom.json
           retention-days: 60
           if-no-files-found: error
 
@@ -122,7 +123,9 @@ jobs:
           github.repository == 'ARK-Electronics/ARK32'
         uses: softprops/action-gh-release@v2
         with:
-          files: obj/*.hex
+          files: |
+            obj/*.hex
+            schema/eeprom.json
           fail_on_unmatched_files: true
           generate_release_notes: true
         env:
@@ -155,7 +158,9 @@ jobs:
           prerelease: true
           make_latest: false
           target_commitish: ${{ github.sha }}
-          files: obj/*.hex
+          files: |
+            obj/*.hex
+            schema/eeprom.json
           fail_on_unmatched_files: true
           body: |
             Rolling nightly firmware build for the ARK32 configurator and production line.

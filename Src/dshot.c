@@ -195,22 +195,22 @@ void computeDshotDMA()
 							send_esc_info_flag = 1;
 							break;
 						case DSHOT_CMD_SPIN_DIRECTION_1:
-							eepromBuffer.dir_reversed = 0;
-							forward = 1 - eepromBuffer.dir_reversed;
+							eepromBuffer.direction_reversed = 0;
+							forward = 1 - eepromBuffer.direction_reversed;
 							break;
 						case DSHOT_CMD_SPIN_DIRECTION_2:
-							eepromBuffer.dir_reversed = 1;
-							forward = 1 - eepromBuffer.dir_reversed;
+							eepromBuffer.direction_reversed = 1;
+							forward = 1 - eepromBuffer.direction_reversed;
 							break;
 						case DSHOT_CMD_3D_MODE_OFF:
-							eepromBuffer.bi_direction = 0;
+							eepromBuffer.bidirectional_mode = 0;
 							break;
 						case DSHOT_CMD_3D_MODE_ON:
-							eepromBuffer.bi_direction = 1;
+							eepromBuffer.bidirectional_mode = 1;
 							break;
 						case DSHOT_CMD_SAVE_SETTINGS:
 							saveEEpromSettings();
-							play_tone_flag = 1 + eepromBuffer.dir_reversed;
+							play_tone_flag = 1 + eepromBuffer.direction_reversed;
 							break;
 						case DSHOT_CMD_EXTENDED_TELEMETRY_ENABLE:
 							dshot_extended_telemetry = 1;
@@ -230,10 +230,10 @@ void computeDshotDMA()
 #endif
 							break;
 						case DSHOT_CMD_SPIN_DIRECTION_NORMAL:
-							forward = 1 - eepromBuffer.dir_reversed;
+							forward = 1 - eepromBuffer.direction_reversed;
 							break;
 						case DSHOT_CMD_SPIN_DIRECTION_REVERSED:
-							forward = eepromBuffer.dir_reversed;
+							forward = eepromBuffer.direction_reversed;
 							break;
 						case DSHOT_CMD_ENTER_PROGRAMMING_MODE:
 							programming_mode = DSHOT_PROG_WAIT_ADDRESS;

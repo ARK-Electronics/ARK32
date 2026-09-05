@@ -329,7 +329,7 @@ void setInputPullNone()
 //		if(((dma_buffer[j] - lastnumber) >900 ) && ((dma_buffer[j] -
 // lastnumber) < 2150)){ // blank space
 //
-//			if(bi_direction){
+//			if(bidirectional_mode){
 //				if(dma_buffer[j] - lastnumber <=
 // servo_neutral){ 				servorawinput = map((dma_buffer[j] -
 // lastnumber), servo_low_threshold, servo_neutral, 0, 1000); }else{

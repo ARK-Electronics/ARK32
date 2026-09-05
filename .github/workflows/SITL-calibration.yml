@@ -47,6 +47,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: ./.github/actions/setup-eeprom
+
       - name: Build SITL
         run: make AM32_SITL_CAN
 

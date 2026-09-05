@@ -7,6 +7,7 @@
  */
 
 #include "eeprom.h"
+#include "main.h"
 #include <string.h>
 #include <targets.h>
 

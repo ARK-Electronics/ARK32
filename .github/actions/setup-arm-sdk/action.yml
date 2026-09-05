@@ -4,6 +4,8 @@ description: Restore or install the xPack GNU Arm Embedded GCC pin from make/too
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/setup-eeprom
+
     - name: Read toolchain pin
       id: pin
       shell: bash

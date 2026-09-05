@@ -8,6 +8,7 @@
 #include "common.h"
 #include "motor_runtime.h"
 #include "eeprom.h"
+#include "eeprom_onload.h"
 #include "functions.h"
 #include "peripherals.h"
 #include "sounds.h"
@@ -21,29 +22,29 @@ void loadEEpromSettings(void)
 {
 	read_flash_bin(eepromBuffer.buffer, eeprom_address, sizeof(eepromBuffer.buffer));
 	if (eepromBuffer.eeprom_version < EEPROM_VERSION) {
-		eepromBuffer.max_ramp = TARGET_DEFAULT_MAX_RAMP; // 0.1% per ms steps (see targets.h)
-		eepromBuffer.minimum_duty_cycle = 1;		 // 0.2% to 51 percent
-		eepromBuffer.disable_stick_calibration = 0;	 //
-		eepromBuffer.absolute_voltage_cutoff = 10;	 // voltage level 1 to 100 in 0.5v increments
-		eepromBuffer.current_P = 100;			 // 0-255
-		eepromBuffer.current_I = 0;			 // 0-255
-		eepromBuffer.current_D = 100;			 // 0-255
-		eepromBuffer.active_brake_power = 0;		 // 1-5 percent duty cycle
-		eepromBuffer.reserved_eeprom_3[0] = 0;		 //14-16  for crsf input
-		eepromBuffer.reserved_eeprom_3[1] = 0;
-		eepromBuffer.reserved_eeprom_3[2] = 0;
-		eepromBuffer.reserved_eeprom_3[3] = 0;
+		eepromBuffer.max_ramp_speed = TARGET_DEFAULT_MAX_RAMP; // 0.1% per ms steps (see targets.h)
+		eepromBuffer.min_duty_cycle = 1;		       // 0.2% to 51 percent
+		eepromBuffer.disable_stick_calibration = 0;	       //
+		eepromBuffer.absolute_voltage_cutoff = 10;	       // voltage level 1 to 100 in 0.5v increments
+		eepromBuffer.current_pid_p = 100;		       // 0-255
+		eepromBuffer.current_pid_i = 0;			       // 0-255
+		eepromBuffer.current_pid_d = 100;		       // 0-255
+		eepromBuffer.active_brake_power = 0;		       // 1-5 percent duty cycle
+		eepromBuffer.reserved0[0] = 0;			       //14-16  for crsf input
+		eepromBuffer.reserved0[1] = 0;
+		eepromBuffer.reserved0[2] = 0;
+		eepromBuffer.reserved0[3] = 0;
 	}
-	// eepromBuffer.advance_level can either be set to 0-3 with config tools less than 1.90 or 10-42 with 1.90 or above
-	if (eepromBuffer.advance_level > 42 || (eepromBuffer.advance_level < 10 && eepromBuffer.advance_level > 3)) {
+	// eepromBuffer.timing_advance can either be set to 0-3 with config tools less than 1.90 or 10-42 with 1.90 or above
+	if (eepromBuffer.timing_advance > 42 || (eepromBuffer.timing_advance < 10 && eepromBuffer.timing_advance > 3)) {
 		temp_advance = 16;
 	}
-	if (eepromBuffer.advance_level < 4) { // old format needs to be converted to 0-32 range
-		temp_advance = (eepromBuffer.advance_level << 3);
-		eepromBuffer.advance_level = temp_advance + 10;
+	if (eepromBuffer.timing_advance < 4) { // old format needs to be converted to 0-32 range
+		temp_advance = (eepromBuffer.timing_advance << 3);
+		eepromBuffer.timing_advance = temp_advance + 10;
 	}
-	if (eepromBuffer.advance_level < 43 && eepromBuffer.advance_level > 9) { // new format subtract 10 from advance
-		temp_advance = eepromBuffer.advance_level - 10;
+	if (eepromBuffer.timing_advance < 43 && eepromBuffer.timing_advance > 9) { // new format subtract 10 from advance
+		temp_advance = eepromBuffer.timing_advance - 10;
 	}
 
 	if (eepromBuffer.pwm_frequency < 145 && eepromBuffer.pwm_frequency > 7) {
@@ -54,8 +55,8 @@ void loadEEpromSettings(void)
 		tim1_arr = TIM1_AUTORELOAD;
 		SET_AUTO_RELOAD_PWM(tim1_arr);
 	}
-	if (eepromBuffer.minimum_duty_cycle < 51 && eepromBuffer.minimum_duty_cycle > 0) {
-		minimum_duty_cycle = eepromBuffer.minimum_duty_cycle * 10;
+	if (eepromBuffer.min_duty_cycle < 51 && eepromBuffer.min_duty_cycle > 0) {
+		minimum_duty_cycle = eepromBuffer.min_duty_cycle * 10;
 	} else {
 		minimum_duty_cycle = 0;
 	}
@@ -84,31 +85,21 @@ void loadEEpromSettings(void)
 			setVolume(eepromBuffer.beep_volume);
 		}
 #endif
-		servo_low_threshold = (eepromBuffer.servo.low_threshold * 2) + 750;    // anything below this point considered 0
-		servo_high_threshold = (eepromBuffer.servo.high_threshold * 2) + 1750; // anything above this point considered 2000 (max)
-		servo_neutral = (eepromBuffer.servo.neutral) + 1374;
-		servo_dead_band = eepromBuffer.servo.dead_band;
+		servo_low_threshold = (eepromBuffer.servo_low_threshold * 2) + 750;    // anything below this point considered 0
+		servo_high_threshold = (eepromBuffer.servo_high_threshold * 2) + 1750; // anything above this point considered 2000 (max)
+		servo_neutral = (eepromBuffer.servo_neutral) + 1374;
+		servo_dead_band = eepromBuffer.servo_deadband;
 
-		low_cell_volt_cutoff = eepromBuffer.low_cell_volt_cutoff + 250; // 2.5 to 3.5 volts per cell range
+		low_cell_volt_cutoff = eepromBuffer.low_voltage_threshold + 250; // 2.5 to 3.5 volts per cell range
 
 #ifndef HAS_HALL_SENSORS
-		eepromBuffer.use_hall_sensors = 0;
+		eepromBuffer.hall_sensors = 0;
 #endif
 
-		if (eepromBuffer.sine_mode_changeover_thottle_level < 5 ||
-		    eepromBuffer.sine_mode_changeover_thottle_level > 25) { // sine mode changeover 5-25 percent throttle
-			eepromBuffer.sine_mode_changeover_thottle_level = 5;
-		}
-		if (eepromBuffer.drag_brake_strength == 0 || eepromBuffer.drag_brake_strength > 10) { // drag brake 1-10
-			eepromBuffer.drag_brake_strength = 10;
-		}
+		eeprom_apply_on_load(&eepromBuffer);
 
-		if (eepromBuffer.driving_brake_strength == 0 || eepromBuffer.driving_brake_strength > 9) { // motor brake 1-9
-			eepromBuffer.driving_brake_strength = 10;
-		}
-
-		if (eepromBuffer.driving_brake_strength < 10) {
-			dead_time_override = DEAD_TIME + (150 - (eepromBuffer.driving_brake_strength * 10));
+		if (eepromBuffer.running_brake_level < 10) {
+			dead_time_override = DEAD_TIME + (150 - (eepromBuffer.running_brake_level * 10));
 			if (dead_time_override > 200) {
 				dead_time_override = 200;
 			}
@@ -118,21 +109,14 @@ void loadEEpromSettings(void)
 			startup_max_duty_cycle = startup_max_duty_cycle + dead_time_override;
 			setPwmDeadTime(dead_time_override);
 		}
-		if (eepromBuffer.limits.temperature < 70 || eepromBuffer.limits.temperature > 140) {
-			eepromBuffer.limits.temperature = 255;
-		}
 
-		if (eepromBuffer.limits.current > 0 && eepromBuffer.limits.current <= 100) {
+		if (eepromBuffer.current_limit > 0 && eepromBuffer.current_limit <= 100) {
 			use_current_limit = 1;
 		}
 
-		currentPid.Kp = eepromBuffer.current_P * 2;
-		currentPid.Ki = eepromBuffer.current_I;
-		currentPid.Kd = eepromBuffer.current_D * 2;
-
-		if (eepromBuffer.sine_mode_power == 0 || eepromBuffer.sine_mode_power > 10) {
-			eepromBuffer.sine_mode_power = 5;
-		}
+		currentPid.Kp = eepromBuffer.current_pid_p * 2;
+		currentPid.Ki = eepromBuffer.current_pid_i;
+		currentPid.Kd = eepromBuffer.current_pid_d * 2;
 
 		// unsinged int cant be less than 0
 		if (eepromBuffer.input_type < 10) {
@@ -177,21 +161,21 @@ void loadEEpromSettings(void)
 		max_ramp_startup = RAMP_SPEED_STARTUP;
 		max_ramp_low_rpm = RAMP_SPEED_LOW_RPM;
 		max_ramp_high_rpm = RAMP_SPEED_HIGH_RPM;
-		if (eepromBuffer.max_ramp < 10) {
+		if (eepromBuffer.max_ramp_speed < 10) {
 			ramp_divider = 9;
-			max_ramp_startup = eepromBuffer.max_ramp;
-			max_ramp_low_rpm = eepromBuffer.max_ramp;
-			max_ramp_high_rpm = eepromBuffer.max_ramp;
+			max_ramp_startup = eepromBuffer.max_ramp_speed;
+			max_ramp_low_rpm = eepromBuffer.max_ramp_speed;
+			max_ramp_high_rpm = eepromBuffer.max_ramp_speed;
 		} else {
 			ramp_divider = 0;
-			if ((eepromBuffer.max_ramp / 10) < max_ramp_startup) {
-				max_ramp_startup = eepromBuffer.max_ramp / 10;
+			if ((eepromBuffer.max_ramp_speed / 10) < max_ramp_startup) {
+				max_ramp_startup = eepromBuffer.max_ramp_speed / 10;
 			}
-			if ((eepromBuffer.max_ramp / 10) < max_ramp_low_rpm) {
-				max_ramp_low_rpm = eepromBuffer.max_ramp / 10;
+			if ((eepromBuffer.max_ramp_speed / 10) < max_ramp_low_rpm) {
+				max_ramp_low_rpm = eepromBuffer.max_ramp_speed / 10;
 			}
-			if ((eepromBuffer.max_ramp / 10) < max_ramp_high_rpm) {
-				max_ramp_high_rpm = eepromBuffer.max_ramp / 10;
+			if ((eepromBuffer.max_ramp_speed / 10) < max_ramp_high_rpm) {
+				max_ramp_high_rpm = eepromBuffer.max_ramp_speed / 10;
 			}
 		}
 
@@ -264,7 +248,7 @@ void loadEEpromSettings(void)
 	}
 
 	reverse_speed_threshold = map(motor_kv, 300, 3000, 1000, 500);
-	if (eepromBuffer.bi_direction) {
+	if (eepromBuffer.bidirectional_mode) {
 		polling_mode_changeover = POLLING_MODE_THRESHOLD / 2;
 	} else {
 		polling_mode_changeover = POLLING_MODE_THRESHOLD;
