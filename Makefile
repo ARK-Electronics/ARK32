@@ -15,6 +15,9 @@ IDENTIFIER := ARK32
 HAL_FOLDER := Mcu
 MAIN_SRC_DIR := Src
 MAIN_INC_DIR := Inc
+OBJ := obj
+GENERATED_DIR := $(OBJ)/generated
+GENERATED_EEPROM := $(GENERATED_DIR)/eeprom_layout.h $(GENERATED_DIR)/eeprom_defaults.h $(GENERATED_DIR)/eeprom_params.c $(GENERATED_DIR)/eeprom_onload.h
 
 SRC_DIRS_COMMON := $(MAIN_SRC_DIR)
 
@@ -59,7 +62,7 @@ FIRMWARE_VERSION := $(VERSION_MAJOR).$(VERSION_MINOR)$(if $(VERSION_TAG),-$(VERS
 # (armed/input drop near ~97% throttle on ARK F051); keep -Os + selective -O3.
 
 CFLAGS_BASE := -fsingle-precision-constant -fomit-frame-pointer -ffast-math
-CFLAGS_BASE += -I$(MAIN_INC_DIR) -g3 -Os -ffunction-sections --specs=nosys.specs
+CFLAGS_BASE += -I$(MAIN_INC_DIR) -I$(GENERATED_DIR) -g3 -Os -ffunction-sections --specs=nosys.specs
 CFLAGS_BASE += -Wall -Wundef -Wextra -Werror -Wno-unused-parameter -Wno-stringop-truncation
 
 CFLAGS_COMMON := $(CFLAGS_BASE)
@@ -137,7 +140,6 @@ BL_REGION_SIZE_F051 := 4096
 EMBED_BOOTLOADER ?= 1
 
 # configure some directories that are relative to wherever ROOT_DIR is located
-OBJ := obj
 BIN_DIR := $(ROOT)/$(OBJ)
 
 # Function to check for _CAN / _BRUSHED product suffixes in the target name
@@ -214,7 +216,7 @@ LDFLAGS_$(2) = $(xLDFLAGS_COMMON) $(LDFLAGS_$(1)) $(if $(xLDSCRIPT),-T$(xLDSCRIP
 # The bootloader .bin is listed explicitly: .incbin happens in the assembler, so
 # it never shows up in the -MMD depfile and swapping the image would otherwise
 # not rebuild anything.
-$$($(2)_BASENAME).elf: $(if $(NATIVE_$(1)),,arm_sdk_check) $$(SRC_APP_$(2)) $$(SRC_$(1)) $(xSRC) $(if $(xEMBED_BL),$(BL_IMAGE_F051))
+$$($(2)_BASENAME).elf: $(GENERATED_EEPROM) $(if $(NATIVE_$(1)),,arm_sdk_check) $$(SRC_APP_$(2)) $$(SRC_$(1)) $(xSRC) $(if $(xEMBED_BL),$(BL_IMAGE_F051))
 	@$(ECHO) Compiling $$(notdir $$@)
 	$(QUIET)$(MKDIR) -p $(OBJ)
 	$(QUIET)$(xCC) $$(CFLAGS_$(2)) $$(LDFLAGS_$(2)) -MMD -MP -MF $$(@:.elf=.d) -o $$(@) $$(SRC_APP_$(2)) $$(SRC_$(1)) $(xSRC) $(LDLIBS_$(1))
@@ -246,7 +248,7 @@ targets:
 # error/warning; style findings are printed but advisory. See
 # scripts/cppcheck-ark.sh and scripts/cppcheck-suppressions.txt.
 .PHONY : cppcheck
-cppcheck:
+cppcheck: $(GENERATED_EEPROM)
 	$(QUIET)bash scripts/cppcheck-ark.sh
 
 # Assert the codegen invariants LTO can break silently: F051 hot ISR entry
@@ -314,3 +316,11 @@ check_format:
 format_changed:
 	$(QUIET)bash scripts/format.sh --changed
 
+
+# Grouped outputs ensure parallel one-shot links cannot race the generator.
+$(GENERATED_EEPROM) &: schema/eeprom.json schema/eeprom.schema.json Inc/version.h $(wildcard scripts/eeprom/*.py)
+	$(QUIET)python3 scripts/eeprom/eeprom_tool.py generate --out $(GENERATED_DIR)
+
+.PHONY: eeprom-check
+eeprom-check:
+	$(QUIET)python3 scripts/eeprom/eeprom_tool.py check

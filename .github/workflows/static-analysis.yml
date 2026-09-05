@@ -7,6 +7,15 @@ on:
   workflow_dispatch:
 
 jobs:
+  eeprom-schema:
+    name: EEPROM schema and generators
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-eeprom
+      - run: make eeprom-check
+      - run: python3 -m unittest discover -s scripts/eeprom/tests -v
+
   format:
     name: clang-format (check_format)
     runs-on: ubuntu-latest
@@ -33,6 +42,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cppcheck
           cppcheck --version
+
+      - uses: ./.github/actions/setup-eeprom
 
       - name: Run cppcheck
         run: make cppcheck

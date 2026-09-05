@@ -72,6 +72,7 @@ jobs:
           python3 -m venv .venv
           . .venv/bin/activate
           pip install -e '.[plot,flightstand]'
+          pip install -r ../scripts/eeprom/requirements.txt
 
       - name: Run hardware CI
         id: hil

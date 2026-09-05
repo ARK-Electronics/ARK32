@@ -53,7 +53,7 @@ void proportionalBrake()
 
 void phaseBPWM()
 {
-	if (!eepromBuffer.comp_pwm) { // for future
+	if (!eepromBuffer.complementary_pwm) { // for future
 		LL_GPIO_SetPinMode(PHASE_B_GPIO_PORT_LOW, PHASE_B_GPIO_LOW, LL_GPIO_MODE_OUTPUT);
 		PHASE_B_GPIO_PORT_LOW->LOW_BITREG_OFF = PHASE_B_GPIO_LOW;
 	} else {
@@ -86,7 +86,7 @@ void phaseBLOW()
 
 void phaseCPWM()
 {
-	if (!eepromBuffer.comp_pwm) {
+	if (!eepromBuffer.complementary_pwm) {
 		LL_GPIO_SetPinMode(PHASE_C_GPIO_PORT_LOW, PHASE_C_GPIO_LOW, LL_GPIO_MODE_OUTPUT);
 		PHASE_C_GPIO_PORT_LOW->LOW_BITREG_OFF = PHASE_C_GPIO_LOW;
 	} else {
@@ -117,7 +117,7 @@ void phaseCLOW()
 
 void phaseAPWM()
 {
-	if (!eepromBuffer.comp_pwm) {
+	if (!eepromBuffer.complementary_pwm) {
 		LL_GPIO_SetPinMode(PHASE_A_GPIO_PORT_LOW, PHASE_A_GPIO_LOW, LL_GPIO_MODE_OUTPUT);
 		PHASE_A_GPIO_PORT_LOW->LOW_BITREG_OFF = PHASE_A_GPIO_LOW;
 	} else {
@@ -147,10 +147,10 @@ void phaseALOW()
 //////////////////////////////////PHASE 1//////////////////////
 void phaseBPWM()
 {
-	if (!eepromBuffer.comp_pwm) { // for future
-				      // LL_GPIO_SetPinMode(PHASE_B_GPIO_PORT_LOW,
-				      // PHASE_B_GPIO_LOW, LL_GPIO_MODE_OUTPUT);
-				      // PHASE_B_GPIO_PORT_LOW->LOW_BITREG_OFF = PHASE_B_GPIO_LOW;
+	if (!eepromBuffer.complementary_pwm) { // for future
+					       // LL_GPIO_SetPinMode(PHASE_B_GPIO_PORT_LOW,
+					       // PHASE_B_GPIO_LOW, LL_GPIO_MODE_OUTPUT);
+					       // PHASE_B_GPIO_PORT_LOW->LOW_BITREG_OFF = PHASE_B_GPIO_LOW;
 	} else {
 		LL_GPIO_SetPinMode(PHASE_B_GPIO_PORT_ENABLE, PHASE_B_GPIO_ENABLE,
 				   LL_GPIO_MODE_OUTPUT); // enable on
@@ -186,7 +186,7 @@ void phaseBLOW()
 
 void phaseCPWM()
 {
-	if (!eepromBuffer.comp_pwm) {
+	if (!eepromBuffer.complementary_pwm) {
 		//	LL_GPIO_SetPinMode(PHASE_C_GPIO_PORT_LOW, PHASE_C_GPIO_LOW,
 		// LL_GPIO_MODE_OUTPUT); PHASE_C_GPIO_PORT_LOW->LOW_BITREG_OFF =
 		// PHASE_C_GPIO_LOW;
@@ -222,7 +222,7 @@ void phaseCLOW()
 
 void phaseAPWM()
 {
-	if (!eepromBuffer.comp_pwm) {
+	if (!eepromBuffer.complementary_pwm) {
 		//	LL_GPIO_SetPinMode(PHASE_A_GPIO_PORT_LOW, PHASE_A_GPIO_LOW,
 		// LL_GPIO_MODE_OUTPUT); PHASE_A_GPIO_PORT_LOW->LOW_BITREG_OFF =
 		// PHASE_A_GPIO_LOW;

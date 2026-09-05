@@ -26,7 +26,7 @@ void comStep(char newStep)
 				    PWM_DTSRCSEL_SM0SEL23(1) | PWM_DTSRCSEL_SM1SEL23(2) | PWM_DTSRCSEL_SM2SEL23(0));
 #endif
 
-			if (eepromBuffer.comp_pwm) {
+			if (eepromBuffer.complementary_pwm) {
 				//Mask phase C to float
 				modifyReg16(&FLEXPWM0->MASK, 0x777, 0x440);
 			} else {
@@ -49,7 +49,7 @@ void comStep(char newStep)
 				    PWM_DTSRCSEL_SM0SEL23(0) | PWM_DTSRCSEL_SM1SEL23(2) | PWM_DTSRCSEL_SM2SEL23(1));
 #endif
 
-			if (eepromBuffer.comp_pwm) {
+			if (eepromBuffer.complementary_pwm) {
 				//Mask phase A to float
 				modifyReg16(&FLEXPWM0->MASK, 0x777, 0x110);
 			} else {
@@ -72,7 +72,7 @@ void comStep(char newStep)
 				    PWM_DTSRCSEL_SM0SEL23(2) | PWM_DTSRCSEL_SM1SEL23(0) | PWM_DTSRCSEL_SM2SEL23(1));
 #endif
 
-			if (eepromBuffer.comp_pwm) {
+			if (eepromBuffer.complementary_pwm) {
 				//Mask phase B to float
 				modifyReg16(&FLEXPWM0->MASK, 0x777, 0x220);
 			} else {
@@ -95,7 +95,7 @@ void comStep(char newStep)
 				    PWM_DTSRCSEL_SM0SEL23(2) | PWM_DTSRCSEL_SM1SEL23(1) | PWM_DTSRCSEL_SM2SEL23(0));
 #endif
 
-			if (eepromBuffer.comp_pwm) {
+			if (eepromBuffer.complementary_pwm) {
 				//Mask phase C to float
 				modifyReg16(&FLEXPWM0->MASK, 0x777, 0x440);
 			} else {
@@ -118,7 +118,7 @@ void comStep(char newStep)
 				    PWM_DTSRCSEL_SM0SEL23(0) | PWM_DTSRCSEL_SM1SEL23(1) | PWM_DTSRCSEL_SM2SEL23(2));
 #endif
 
-			if (eepromBuffer.comp_pwm) {
+			if (eepromBuffer.complementary_pwm) {
 				//Mask phase A to float
 				modifyReg16(&FLEXPWM0->MASK, 0x777, 0x110);
 			} else {
@@ -142,7 +142,7 @@ void comStep(char newStep)
 #endif
 
 			//Mask phase to float
-			if (eepromBuffer.comp_pwm) {
+			if (eepromBuffer.complementary_pwm) {
 				//Mask phase B to float
 				modifyReg16(&FLEXPWM0->MASK, 0x777, 0x220);
 			} else {

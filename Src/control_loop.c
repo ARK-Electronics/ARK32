@@ -82,16 +82,16 @@ uint16_t getSmoothedCurrent()
 
 void setInput()
 {
-	if (eepromBuffer.bi_direction) {
+	if (eepromBuffer.bidirectional_mode) {
 		if (dshot == 0) {
-			if (eepromBuffer.rc_car_reverse) {
+			if (eepromBuffer.rc_car_reversing) {
 				if (newinput > (1000 + (servo_dead_band << 1))) {
-					if (forward == eepromBuffer.dir_reversed) {
+					if (forward == eepromBuffer.direction_reversed) {
 						adjusted_input = 0;
 						//               if (running) {
 						prop_brake_active = 1;
 						if (return_to_center) {
-							forward = 1 - eepromBuffer.dir_reversed;
+							forward = 1 - eepromBuffer.direction_reversed;
 							prop_brake_active = 0;
 							return_to_center = 0;
 						}
@@ -103,11 +103,11 @@ void setInput()
 					}
 				}
 				if (newinput < (1000 - (servo_dead_band << 1))) {
-					if (forward == (1 - eepromBuffer.dir_reversed)) {
+					if (forward == (1 - eepromBuffer.direction_reversed)) {
 						adjusted_input = 0;
 						prop_brake_active = 1;
 						if (return_to_center) {
-							forward = eepromBuffer.dir_reversed;
+							forward = eepromBuffer.direction_reversed;
 							prop_brake_active = 0;
 							return_to_center = 0;
 						}
@@ -127,10 +127,10 @@ void setInput()
 				}
 			} else {
 				if (newinput > (1000 + (servo_dead_band << 1))) {
-					if (forward == eepromBuffer.dir_reversed) {
+					if (forward == eepromBuffer.direction_reversed) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
-							forward = 1 - eepromBuffer.dir_reversed;
+							forward = 1 - eepromBuffer.direction_reversed;
 							zero_crosses = 0;
 							bemfZcResetTrend();
 							old_routine = 1;
@@ -144,13 +144,13 @@ void setInput()
 						map(newinput, 1000 + (servo_dead_band << 1), 2000, DSHOT_CMD_MAX, DSHOT_MAX_THROTTLE);
 				}
 				if (newinput < (1000 - (servo_dead_band << 1))) {
-					if (forward == (1 - eepromBuffer.dir_reversed)) {
+					if (forward == (1 - eepromBuffer.direction_reversed)) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
 							zero_crosses = 0;
 							bemfZcResetTrend();
 							old_routine = 1;
-							forward = eepromBuffer.dir_reversed;
+							forward = eepromBuffer.direction_reversed;
 							maskPhaseInterrupts();
 							brushed_direction_set = 0;
 						} else {
@@ -167,13 +167,13 @@ void setInput()
 			}
 		}
 		if (dshot) {
-			if (eepromBuffer.rc_car_reverse) {
+			if (eepromBuffer.rc_car_reversing) {
 				if (newinput > DSHOT_3D_REVERSE_MAX) {
-					if (forward == eepromBuffer.dir_reversed) {
+					if (forward == eepromBuffer.direction_reversed) {
 						adjusted_input = 0;
 						prop_brake_active = 1;
 						if (return_to_center) {
-							forward = 1 - eepromBuffer.dir_reversed;
+							forward = 1 - eepromBuffer.direction_reversed;
 							prop_brake_active = 0;
 							return_to_center = 0;
 						}
@@ -185,11 +185,11 @@ void setInput()
 					}
 				}
 				if (newinput <= DSHOT_3D_REVERSE_MAX && newinput > DSHOT_CMD_MAX) {
-					if (forward == (1 - eepromBuffer.dir_reversed)) {
+					if (forward == (1 - eepromBuffer.direction_reversed)) {
 						adjusted_input = 0;
 						prop_brake_active = 1;
 						if (return_to_center) {
-							forward = eepromBuffer.dir_reversed;
+							forward = eepromBuffer.direction_reversed;
 							prop_brake_active = 0;
 							return_to_center = 0;
 						}
@@ -209,10 +209,10 @@ void setInput()
 				}
 			} else {
 				if (newinput > DSHOT_3D_REVERSE_MAX) {
-					if (forward == eepromBuffer.dir_reversed) {
+					if (forward == eepromBuffer.direction_reversed) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
-							forward = 1 - eepromBuffer.dir_reversed;
+							forward = 1 - eepromBuffer.direction_reversed;
 							zero_crosses = 0;
 							bemfZcResetTrend();
 							old_routine = 1;
@@ -226,13 +226,13 @@ void setInput()
 						((newinput - DSHOT_3D_FORWARD_MIN_THROTTLE) * 2 + DSHOT_CMD_MAX) - reversing_dead_band;
 				}
 				if (newinput <= DSHOT_3D_REVERSE_MAX && newinput > DSHOT_CMD_MAX) {
-					if (forward == (1 - eepromBuffer.dir_reversed)) {
+					if (forward == (1 - eepromBuffer.direction_reversed)) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
 							zero_crosses = 0;
 							bemfZcResetTrend();
 							old_routine = 1;
-							forward = eepromBuffer.dir_reversed;
+							forward = eepromBuffer.direction_reversed;
 							maskPhaseInterrupts();
 							brushed_direction_set = 0;
 						} else {
@@ -257,15 +257,15 @@ void setInput()
 #	ifdef FIXED_DUTY_MODE
 		input = FIXED_DUTY_MODE_POWER * 20 + DSHOT_CMD_MAX;
 #	else
-		if (eepromBuffer.use_sine_start) {
+		if (eepromBuffer.sine_startup) {
 			if (adjusted_input < 30) { // dead band ?
 				input = 0;
 			}
-			if (adjusted_input > 30 && adjusted_input < (eepromBuffer.sine_mode_changeover_thottle_level * 20)) {
-				input = map(adjusted_input, 30, (eepromBuffer.sine_mode_changeover_thottle_level * 20), DSHOT_CMD_MAX, 160);
+			if (adjusted_input > 30 && adjusted_input < (eepromBuffer.sine_mode_range * 20)) {
+				input = map(adjusted_input, 30, (eepromBuffer.sine_mode_range * 20), DSHOT_CMD_MAX, 160);
 			}
-			if (adjusted_input >= (eepromBuffer.sine_mode_changeover_thottle_level * 20)) {
-				input = map(adjusted_input, (eepromBuffer.sine_mode_changeover_thottle_level * 20), DSHOT_MAX_THROTTLE, 160,
+			if (adjusted_input >= (eepromBuffer.sine_mode_range * 20)) {
+				input = map(adjusted_input, (eepromBuffer.sine_mode_range * 20), DSHOT_MAX_THROTTLE, 160,
 					    DSHOT_MAX_THROTTLE);
 			}
 		} else {
@@ -306,7 +306,7 @@ void setInput()
 #endif
 #ifndef BRUSHED_MODE
 	if (escMaySixStepThrottle()) {
-		if (input >= DSHOT_CMD_MAX + (80 * eepromBuffer.use_sine_start)) {
+		if (input >= DSHOT_CMD_MAX + (80 * eepromBuffer.sine_startup)) {
 			// Re-entry into six-step happens HERE, at input-frame rate -
 			// not in runtimeMotorModeTick. The episode-rail coast (holdoff
 			// or latched fault) must gate this branch or the mode tick's
@@ -328,7 +328,7 @@ void setInput()
 
 			// straight line from (in_min, out_min) to (DSHOT_MAX_THROTTLE, 2000) using a
 			// startup computed Q16 slope, avoids calling map() at input rate
-			if (eepromBuffer.use_sine_start) {
+			if (eepromBuffer.sine_startup) {
 				duty_cycle_setpoint =
 					input >= DSHOT_MAX_THROTTLE ? 2000
 					: input <= 137		    ? minimum_duty_cycle + 40
@@ -343,12 +343,12 @@ void setInput()
 							  (uint16_t)(((uint32_t)(input - DSHOT_CMD_MAX) * throttle_duty_slope_q16) >> 16);
 			}
 
-			if (!eepromBuffer.rc_car_reverse) {
+			if (!eepromBuffer.rc_car_reversing) {
 				prop_brake_active = 0;
 			}
 		}
 
-		if (input < DSHOT_CMD_MAX + (80 * eepromBuffer.use_sine_start)) {
+		if (input < DSHOT_CMD_MAX + (80 * eepromBuffer.sine_startup)) {
 			if (play_tone_flag != 0) {
 				switch (play_tone_flag) {
 					case 1:
@@ -370,7 +370,7 @@ void setInput()
 				play_tone_flag = 0;
 			}
 
-			if (!eepromBuffer.comp_pwm) {
+			if (!eepromBuffer.complementary_pwm) {
 				duty_cycle_setpoint = 0;
 				if (!escIsDriving()) {
 					old_routine = 1;
@@ -384,7 +384,7 @@ void setInput()
 						}
 					}
 				}
-				if (eepromBuffer.rc_car_reverse && prop_brake_active) {
+				if (eepromBuffer.rc_car_reversing && prop_brake_active) {
 #	ifndef PWM_ENABLE_BRIDGE
 
 					if (dshot == 0)
@@ -412,7 +412,7 @@ void setInput()
 					bemfZcResetTrend();
 					bad_count = 0;
 					if (eepromBuffer.brake_on_stop > 0) {
-						if (!eepromBuffer.use_sine_start) {
+						if (!eepromBuffer.sine_startup) {
 #	ifndef PWM_ENABLE_BRIDGE
 							if (eepromBuffer.brake_on_stop == 1) {
 								prop_brake_duty_cycle = eepromBuffer.drag_brake_strength * 200;
@@ -447,7 +447,7 @@ void setInput()
 					phase_C_position -= 360;
 				}
 
-				if (eepromBuffer.use_sine_start == 1) {
+				if (eepromBuffer.sine_startup == 1) {
 					escToSineStart();
 				}
 				duty_cycle_setpoint = 0;
@@ -589,7 +589,7 @@ RAM_FUNC void tenKhzRoutine()
 #ifdef USE_RGB_LED
 							setIndividualRGBLed(0, 1, 0);
 #endif
-							if ((cell_count == 0) && eepromBuffer.low_voltage_cut_off == 1) {
+							if ((cell_count == 0) && eepromBuffer.low_voltage_cutoff == 1) {
 								cell_count = battery_voltage / 370;
 								for (int i = 0; i < cell_count; i++) {
 									playInputTune();
@@ -604,7 +604,7 @@ RAM_FUNC void tenKhzRoutine()
 #endif
 							}
 							if (!servoPwm && !dshot) {
-								eepromBuffer.rc_car_reverse = 0;
+								eepromBuffer.rc_car_reversing = 0;
 							}
 						} else {
 							inputSet = 0;
@@ -619,9 +619,9 @@ RAM_FUNC void tenKhzRoutine()
 		}
 	}
 
-	if (eepromBuffer.telemetry_on_interval) {
+	if (eepromBuffer.telemetry30ms) {
 		telem_ms_count++;
-		if (telem_ms_count > ((telemetry_interval_ms - 1 + eepromBuffer.telemetry_on_interval) * 20)) {
+		if (telem_ms_count > ((telemetry_interval_ms - 1 + eepromBuffer.telemetry30ms) * 20)) {
 			// telemetry_on_interval = 1 is a boolean, but it can also be 2 or more to indicate an identifier
 			// by making the interval just slightly different with an unique identifier, we can guarantee that many ESCs can communicate on just one signal
 			// there will be some collisions but not as many as if two ESCs always tried to talk at once.
@@ -659,7 +659,7 @@ RAM_FUNC void tenKhzRoutine()
 			faultDesyncEpisodeTick1kHz();
 			if (use_current_limit && escIsDriving()) {
 				use_current_limit_adjust -=
-					(int16_t)(doPidCalculations(&currentPid, actual_current, eepromBuffer.limits.current * 2 * 100) /
+					(int16_t)(doPidCalculations(&currentPid, actual_current, eepromBuffer.current_limit * 2 * 100) /
 						  10000);
 				if (use_current_limit_adjust < minimum_duty_cycle) {
 					use_current_limit_adjust = minimum_duty_cycle;
@@ -740,7 +740,7 @@ RAM_FUNC void tenKhzRoutine()
 
 		/* Inside !escInSineStart(): escIsDriving() ≡ running. */
 		if (escIsDriving() && input > DSHOT_CMD_MAX) {
-			if (eepromBuffer.variable_pwm) {}
+			if (eepromBuffer.variable_pwm_freq) {}
 			adjusted_duty_cycle = (((uint32_t)duty_cycle * pwm_to_arr_scale_q16) >> 16) + 1;
 
 		} else {

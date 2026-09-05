@@ -88,11 +88,11 @@ uint8_t adv_kerpm_hold_ms;
 
 void runtimeUpdateVariablePwm(uint16_t *last_tim1_arr)
 {
-	uint16_t next_tim1_arr = tim1_arr;    // unchanged unless variable_pwm recomputes it below
-	if (eepromBuffer.variable_pwm == 1) { // uses range defined by pwm frequency setting
+	uint16_t next_tim1_arr = tim1_arr;	   // unchanged unless variable_pwm recomputes it below
+	if (eepromBuffer.variable_pwm_freq == 1) { // uses range defined by pwm frequency setting
 		next_tim1_arr = map(commutation_interval, 96, 200, TIMER1_MAX_ARR / 2, TIMER1_MAX_ARR);
 	}
-	if (eepromBuffer.variable_pwm == 2) { // uses automatic range
+	if (eepromBuffer.variable_pwm_freq == 2) { // uses automatic range
 		if (average_interval < 250 && average_interval > 100) {
 			next_tim1_arr = average_interval * (CPU_FREQUENCY_MHZ / 9);
 		}
@@ -203,7 +203,7 @@ void runtimeProcessDesyncCheck(void)
 				// counter reading zero. See faultNoteEarlyDesync.
 				faultNoteEarlyDesync();
 			}
-			if ((!eepromBuffer.bi_direction && (input > DSHOT_CMD_MAX)) || commutation_interval > 1000) {
+			if ((!eepromBuffer.bidirectional_mode && (input > DSHOT_CMD_MAX)) || commutation_interval > 1000) {
 				running = 0;
 			}
 			/* Always fall back to poll-ZC path after a desync event. */
@@ -538,7 +538,7 @@ void runtimeProcessAdcAndProtections(void)
 #ifndef BRUSHED_MODE
 		runtimeTransientGovernorTick();
 #endif
-		if (eepromBuffer.low_voltage_cut_off == 1) {
+		if (eepromBuffer.low_voltage_cutoff == 1) {
 			if (battery_voltage < (cell_count * low_cell_volt_cutoff)) {
 				low_voltage_count++;
 			} else {
@@ -547,7 +547,7 @@ void runtimeProcessAdcAndProtections(void)
 				}
 			}
 		}
-		if (eepromBuffer.low_voltage_cut_off == 2) { // absolute cut off
+		if (eepromBuffer.low_voltage_cutoff == 2) { // absolute cut off
 			if (battery_voltage < (eepromBuffer.absolute_voltage_cutoff * 50)) {
 				low_voltage_count++;
 			} else {
@@ -660,9 +660,9 @@ void runtimeMotorModeTick(void)
 			duty_cycle_maximum = 2000;
 		}
 
-		if (degrees_celsius > eepromBuffer.limits.temperature) {
-			duty_cycle_maximum = map(degrees_celsius, eepromBuffer.limits.temperature - 10,
-						 eepromBuffer.limits.temperature + 10, throttle_max_at_high_rpm / 2, 1);
+		if (degrees_celsius > eepromBuffer.temperature_limit) {
+			duty_cycle_maximum = map(degrees_celsius, eepromBuffer.temperature_limit - 10, eepromBuffer.temperature_limit + 10,
+						 throttle_max_at_high_rpm / 2, 1);
 		}
 		if (zero_crosses < 100 && commutation_interval > 500) {
 			filter_level = ZC_FILTER_MAX;
@@ -673,7 +673,7 @@ void runtimeMotorModeTick(void)
 			filter_level = ZC_FILTER_FAST;
 		}
 
-		if (eepromBuffer.auto_advance) {
+		if (eepromBuffer.auto_timing) {
 			/*
 			 * Commutation lag is dominated by the phase lag of current behind
 			 * applied voltage, atan(w*L/R), so what the advance schedule

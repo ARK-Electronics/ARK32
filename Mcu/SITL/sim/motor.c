@@ -1094,8 +1094,8 @@ void motor_print_state(uint64_t now_ns, float time_ratio)
 	if (!printed_settings) {
 		printed_settings = true;
 		fprintf(stderr, "SITL settings: bidir=%u dir_rev=%u comp_pwm=%u poles=%u input_type=%u sine=%u brake_on_stop=%u\n",
-			eepromBuffer.bi_direction, eepromBuffer.dir_reversed, eepromBuffer.comp_pwm, eepromBuffer.motor_poles,
-			eepromBuffer.input_type, eepromBuffer.use_sine_start, eepromBuffer.brake_on_stop);
+			eepromBuffer.bidirectional_mode, eepromBuffer.direction_reversed, eepromBuffer.complementary_pwm,
+			eepromBuffer.motor_poles, eepromBuffer.input_type, eepromBuffer.sine_startup, eepromBuffer.brake_on_stop);
 	}
 
 	extern void sitl_can_stats(uint32_t stats[4]);
