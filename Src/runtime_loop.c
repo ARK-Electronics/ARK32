@@ -368,7 +368,10 @@ static void runtimeGovClearState(void)
 	gov_duty_ceiling = 2000;
 }
 
-__attribute__((optimize("Os"))) static void runtimeTransientGovernorTick(void)
+#	if defined(__GNUC__) && !defined(__clang__)
+__attribute__((optimize("Os")))
+#	endif
+static void runtimeTransientGovernorTick(void)
 {
 	// gov_slope_q10: duty units per e_rpm unit, Q10 (duty<<10/e_rpm at
 	// steady state). Pack voltage folds into the slope at estimation time

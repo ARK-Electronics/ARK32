@@ -2517,7 +2517,7 @@
 #		define RAM_FUNC __attribute__((section(".ramfunc"), optimize("O3")))
 #	endif
 #else
-#	if defined(__GNUC__)
+#	if defined(__GNUC__) && !defined(__clang__)
 #		define RAM_FUNC __attribute__((optimize("O3")))
 #	else
 #		define RAM_FUNC
