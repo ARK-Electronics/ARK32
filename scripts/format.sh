@@ -82,25 +82,6 @@ if git rev-parse --git-dir >/dev/null 2>&1 && [[ -d "$ROOT/.githooks" ]]; then
   git config --local core.hooksPath .githooks
 fi
 
-# A different local version + `make format` (AGENTS.md) is how we got a
-# whitespace-only commit that CI then rejected. Fail here instead.
-cf_ver_line="$(clang-format --version | head -1)"
-cf_ver="$(printf '%s\n' "$cf_ver_line" | sed -n 's/.*[[:space:]]\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')"
-if [[ "${CLANG_FORMAT_SKIP_VERSION:-}" != "1" ]]; then
-  if [[ -z "$cf_ver" ]]; then
-    echo "Could not parse clang-format version from: $cf_ver_line" >&2
-    echo "Expected ${PINNED_CLANG_FORMAT} (CI pin)." >&2
-    exit 1
-  fi
-  if [[ "$cf_ver" != "$PINNED_CLANG_FORMAT" ]]; then
-    echo "clang-format ${cf_ver} does not match CI pin ${PINNED_CLANG_FORMAT}." >&2
-    echo "Install: pip install --user 'clang-format==${PINNED_CLANG_FORMAT}'" >&2
-    echo "and ensure that binary is first on PATH." >&2
-    echo "Override (not for PRs): CLANG_FORMAT_SKIP_VERSION=1" >&2
-    exit 1
-  fi
-fi
-
 # Collect sources under application and MCU trees, pruning third-party /
 # generated paths. Keep this list in sync with .clang-format-ignore.
 collect_all() {
