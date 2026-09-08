@@ -63,6 +63,7 @@ uint16_t halfpulsetime = 0;
 uint8_t programming_mode;
 uint16_t position;
 uint8_t new_byte;
+volatile uint16_t dshot_programming_ticks;
 
 void computeDshotDMA()
 {
@@ -117,22 +118,37 @@ void computeDshotDMA()
 				send_telemetry = 1;
 			}
 			if (programming_mode > DSHOT_PROG_IDLE) {
+				/* Expiry discards the late frame instead of interpreting it as throttle.
+				 * PX4 sets the telemetry bit on nonzero programming data, but sends
+				 * zero without it. Zero data and MOTOR_STOP are indistinguishable. */
+				if (!dshot_programming_ticks || !armed || running || (tocheck != 0 && !(frame & DSHOT_TELEMETRY_BIT))) {
+					programming_mode = DSHOT_PROG_IDLE;
+					return;
+				}
 				if (programming_mode == DSHOT_PROG_WAIT_ADDRESS) {
+					if (tocheck >= (int)sizeof(eepromBuffer.buffer)) {
+						programming_mode = DSHOT_PROG_IDLE;
+						return;
+					}
 					position = tocheck; /* eepromBuffer index */
 					programming_mode = DSHOT_PROG_WAIT_VALUE;
 					return;
 				}
 				if (programming_mode == DSHOT_PROG_WAIT_VALUE) {
+					if (tocheck > UINT8_MAX) {
+						programming_mode = DSHOT_PROG_IDLE;
+						return;
+					}
 					new_byte = tocheck;
 					programming_mode = DSHOT_PROG_WAIT_COMMIT;
 					return;
 				}
 				if (programming_mode == DSHOT_PROG_WAIT_COMMIT) {
 					/* RAM only; DSHOT_CMD_SAVE_SETTINGS makes it permanent. */
-					if (tocheck == DSHOT_CMD_EXIT_PROGRAMMING_MODE) {
+					if (tocheck == DSHOT_CMD_EXIT_PROGRAMMING_MODE && position < sizeof(eepromBuffer.buffer)) {
 						eepromBuffer.buffer[position] = new_byte;
-						programming_mode = DSHOT_PROG_IDLE;
 					}
+					programming_mode = DSHOT_PROG_IDLE;
 				}
 				return; /* ignore throttle / other commands while programming */
 			}
@@ -236,7 +252,11 @@ void computeDshotDMA()
 							forward = eepromBuffer.dir_reversed;
 							break;
 						case DSHOT_CMD_ENTER_PROGRAMMING_MODE:
-							programming_mode = DSHOT_PROG_WAIT_ADDRESS;
+							if (frame & DSHOT_TELEMETRY_BIT) {
+								dshot_programming_ticks =
+									LOOP_FREQUENCY_HZ / 10; /* 100 ms total, not renewed by traffic */
+								programming_mode = DSHOT_PROG_WAIT_ADDRESS;
+							}
 							break;
 					}
 					last_dshot_command = dshotcommand;
