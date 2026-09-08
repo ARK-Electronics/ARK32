@@ -22,9 +22,16 @@ Local adaptations to the upstream runner are deliberately small:
 - ARK32 artifact prefix and ports below the Windows ephemeral range.
 - ARK Morse startup signature and 1047 Hz physics-audio expectation, from
   `Src/sounds.c`, replacing upstream AM32's three-note tune.
+- Short contiguous audio windows preserve the Morse dots and avoid treating
+  dropped UDP batches as continuous samples. Parameter tests send zero-throttle
+  CAN input so ARK's no-input reset does not discard the RAM write.
 - Existing ARK calibration pairs plus the three upstream reference pairs.
 - Required CAN prerequisites in dedicated CI and fatal sanitizer diagnostics.
 - A missing binary produces a useful error instead of a `None` path exception.
+
+Native portability fixes guard GCC-only optimization attributes from Clang and
+keep the startup-sound cookie in ordinary storage for SITL; embedded targets
+retain their existing optimization attributes and `.noinit` placement.
 
 CI runs the upstream suite on Linux, Linux ASan/UBSan, and macOS with its
 multicast loopback route. Existing ARK pytest, GUI and Windows smoke jobs remain.
