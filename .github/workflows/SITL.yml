@@ -24,6 +24,8 @@ jobs:
           sitl-venv/bin/pip install -r Mcu/SITL/requirements-ci.txt
 
       - name: Run SITL pytest suite
+        env:
+          SITL_REQUIRE_CAN: "1"
         run: |
           mkdir sitl_test_run && cd sitl_test_run
           ../sitl-venv/bin/python ../Mcu/SITL/run_ci_tests.py \

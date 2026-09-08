@@ -299,3 +299,15 @@ current, and battery voltage sag from internal resistance. The
 comparator compares the floating phase against the virtual neutral with
 configurable noise and hysteresis, so the firmware's blanking and
 filtering logic is genuinely exercised at PWM switching level.
+
+### Required CAN tests in CI
+
+The Linux pytest job sets `SITL_REQUIRE_CAN=1`. Missing DroneCAN dependencies,
+failed multicast startup, absent state streams, and undiscovered ESC nodes
+fail that job instead of silently skipping protocol and safety coverage.
+Local hosts without multicast can omit the variable to retain optional skips.
+Run the strict suite locally with:
+
+```sh
+SITL_REQUIRE_CAN=1 python3 Mcu/SITL/run_ci_tests.py --sitl obj/ARK32_AM32_SITL_CAN_*.elf
+```
