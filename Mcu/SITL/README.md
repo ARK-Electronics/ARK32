@@ -311,3 +311,8 @@ Run the strict suite locally with:
 ```sh
 SITL_REQUIRE_CAN=1 python3 Mcu/SITL/run_ci_tests.py --sitl obj/ARK32_AM32_SITL_CAN_*.elf
 ```
+
+### Upstream compatibility
+
+See [UPSTREAM.md](UPSTREAM.md) for the pinned merged AM32 baseline, local
+adaptations, reference models, and cross-platform/sanitizer test commands.

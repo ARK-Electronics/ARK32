@@ -52,6 +52,50 @@ jobs:
           path: sitl_test_run/sitl-results.xml
           if-no-files-found: ignore
 
+  upstream-compatibility:
+    name: upstream SITL (${{ matrix.os }}, ${{ matrix.sanitizer || 'normal' }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            sanitizer: ''
+          - os: ubuntu-latest
+            sanitizer: address
+          - os: ubuntu-latest
+            sanitizer: undefined
+          - os: macos-latest
+            sanitizer: ''
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build upstream-compatible SITL
+        run: make AM32_SITL_CAN SITL_SANITIZE="${{ matrix.sanitizer }}"
+      - name: Install test dependencies
+        run: |
+          python3 -m venv upstream-venv
+          upstream-venv/bin/pip install -r Mcu/SITL/requirements-ci.txt
+      - name: Route macOS multicast to loopback
+        if: runner.os == 'macOS'
+        run: sudo route -n add -net 239.65.82.0/24 -interface lo0
+      - name: Run upstream behavioral suite
+        env:
+          SITL_REQUIRE_CAN: '1'
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          mkdir upstream_test_run && cd upstream_test_run
+          ../upstream-venv/bin/python ../Mcu/SITL/run_upstream_tests.py \
+            --sitl ../obj/ARK32_AM32_SITL_CAN_*.elf
+      - name: Upload upstream test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-sitl-${{ matrix.os }}-${{ matrix.sanitizer || 'normal' }}
+          path: upstream_test_run/sitl_ci.log
+          if-no-files-found: warn
+
   gui-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
