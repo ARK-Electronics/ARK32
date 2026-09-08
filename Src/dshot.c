@@ -69,7 +69,7 @@ void computeDshotDMA()
 	dshot_frametime = dma_buffer[31] - dma_buffer[0];
 	halfpulsetime = dshot_frametime >> 5;
 	if ((dshot_frametime > dshot_frametime_low) && (dshot_frametime < dshot_frametime_high)) {
-		signaltimeout = 0;
+		/* Only a CRC-valid frame below may refresh the signal-loss timer. */
 		// Shift the 16 decoded pulses straight into one register-resident word,
 		// msb first: bit (15 - i) is pulse i. The frame layout is then
 		// [11 bit value][telem req][4 bit crc], so every field below is a
