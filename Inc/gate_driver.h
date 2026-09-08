@@ -21,7 +21,12 @@ extern volatile uint8_t gate_driver_awake;
 void gateDriverInit(void);
 void gateDriverWakeBlocking(void);
 void gateDriverSleep(void);
+#	if defined(USE_DRV_ENABLE)
 void gateDriverFaultResetPulse(void);
+#	else
+/* DRV8328 never calls this (nSLEEP sleep-on-idle is the latch reset). */
+static inline void gateDriverFaultResetPulse(void) {}
+#	endif
 void gateDriverPoll(void);
 /* 1 when ENABLE/nSLEEP is high and nFAULT is past the post-wake settle.
  * Pin is asserted in sleep (VCP UVLO) and can glitch on the first PWM. */

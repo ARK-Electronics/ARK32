@@ -164,6 +164,10 @@ static const char *evt_name(uint8_t e)
 			return "nFAULT OCP";
 		case DBG_EVT_NFAULT_OTW:
 			return "nFAULT OTW";
+		case DBG_EVT_NFAULT_OTSD:
+			return "nFAULT OTSD";
+		case DBG_EVT_NFAULT_RETRY:
+			return "nFAULT retry";
 		case DBG_EVT_STUCK:
 			return "stuck";
 		case DBG_EVT_LVC:
@@ -202,7 +206,9 @@ void debugUartService(void)
 			const char *to = escStateName((esc_state_t)rec.b);
 			debugUartPrintf("esc: %s -> %s\r\n", from, to);
 		} else if (rec.kind == 2) {
-			debugUartPrintf("fault: %s\r\n", evt_name(rec.a));
+			/* OTW / VDS-retry are warnings: HWCI aborts on "fault: nFAULT". */
+			const char *pfx = (rec.a == DBG_EVT_NFAULT_OTW || rec.a == DBG_EVT_NFAULT_RETRY) ? "warn" : "fault";
+			debugUartPrintf("%s: %s\r\n", pfx, evt_name(rec.a));
 		}
 	}
 }

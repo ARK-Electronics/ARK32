@@ -584,21 +584,24 @@ static void can_printf(const char *fmt, ...)
 }
 
 /*
- * One-shot fault LogMessages: rising edge of nFAULT latch or stuck-rotor
- * latch. nFAULT also forces ESC_FAULT_STUCK — prefer the classified
- * gate-driver cause ("UVLO"/"OCP"/"OTW"/"nFAULT") when both rise together.
+ * One-shot fault LogMessages: gate-driver consume queue, or stuck-rotor
+ * latch. Prefer the gate-driver line when both rise together — nFAULT
+ * latch also forces ESC_FAULT_STUCK.
  */
 static void DroneCAN_pollFaultLogMessages(void)
 {
-	static uint8_t prev_nfault;
 	static uint8_t prev_stuck;
-
-	const uint8_t nfault = faultGateDriverFaultActive();
+	fault_id_t cause = FAULT_NONE;
+	const uint8_t gd_level = faultGateDriverConsumeLog(&cause);
 	const uint8_t stuck = (uint8_t)(escGetState() == ESC_FAULT_STUCK);
 
-	if (nfault && !prev_nfault) {
-		/* ADC-guessed class (DRV pin is OR-only on hardware-interface parts). */
-		const fault_id_t cause = faultGateDriverCause();
+	if (gd_level == FAULT_GD_LOG_WARNING) {
+		if (cause == FAULT_GD_OCP) {
+			can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_WARNING, "nFAULT retry");
+		} else {
+			can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_WARNING, "nFAULT OTW");
+		}
+	} else if (gd_level == FAULT_GD_LOG_ERROR) {
 		switch (cause) {
 			case FAULT_GD_UVLO:
 				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT UVLO");
@@ -606,8 +609,8 @@ static void DroneCAN_pollFaultLogMessages(void)
 			case FAULT_GD_OCP:
 				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT OCP");
 				break;
-			case FAULT_GD_OTW:
-				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT OTW");
+			case FAULT_GD_OTSD:
+				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT OTSD");
 				break;
 			default:
 				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT");
@@ -617,7 +620,6 @@ static void DroneCAN_pollFaultLogMessages(void)
 		can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "stuck");
 	}
 
-	prev_nfault = nfault;
 	prev_stuck = stuck;
 }
 
@@ -626,7 +628,7 @@ static uint8_t DroneCAN_nodeHealth(void)
 {
 	const esc_state_t st = escGetState();
 
-	/* Cannot drive: stuck latch, gate-driver trip, or LVC. */
+	/* Cannot drive: stuck latch, gate-driver Hi-Z/latch, or LVC. */
 	if (st == ESC_FAULT_STUCK || faultGateDriverFaultActive() || st == ESC_FAULT_LVC) {
 		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_CRITICAL;
 	}
@@ -635,11 +637,11 @@ static uint8_t DroneCAN_nodeHealth(void)
 		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_ERROR;
 	}
 	/*
-	 * WARNING only for established hard trips (faultErrorCount: stall +
-	 * established jump desync) or active post-desync holdoff. Acquisition
-	 * roughness and commanded-stop coast (PX4 disarm) must stay OK.
+	 * WARNING: nFAULT OTW (bridge still driving), established hard trips
+	 * (faultErrorCount: stall + established jump desync), or post-desync
+	 * holdoff. Acquisition roughness and commanded-stop coast stay OK.
 	 */
-	if (faultErrorCount() > 0 || faultDesyncRestartHoldoffActive()) {
+	if (faultGateDriverWarningActive() || faultErrorCount() > 0 || faultDesyncRestartHoldoffActive()) {
 		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_WARNING;
 	}
 	return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_OK;

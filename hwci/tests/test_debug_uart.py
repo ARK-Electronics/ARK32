@@ -8,6 +8,18 @@ def test_classify_fault():
     assert r.fault == "nFAULT"
 
 
+def test_classify_warn_nfault_otw_is_not_fault():
+    r = _classify("warn: nFAULT OTW", 1.0)
+    assert r.kind == "raw"
+    assert r.fault is None
+
+
+def test_classify_warn_nfault_retry_is_not_fault():
+    r = _classify("warn: nFAULT retry", 1.5)
+    assert r.kind == "raw"
+    assert r.fault is None
+
+
 def test_classify_desync():
     r = _classify("fault: desync", 2.0)
     assert r.kind == "fault"

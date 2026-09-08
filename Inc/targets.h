@@ -217,9 +217,11 @@
 	 *             awake for beeps, drive, and brake. Wake: PWM inactive →
 	 *             ENABLE high → ~3 ms settle (charge pump) → then PWM.
 	 *   nFAULT  = PA12 (FAULT_N) — open-drain, external 20k to 3.3V;
-	 *             asserts on VDS OCP (resistor-set on VDS pin), UVLO, OTW, GDF
-	 *             (single wire OR — no SPI status). Firmware guesses cause
-	 *             from bus V / current / temp ADC at latch (faults.c).
+	 *             asserts on VDS OCP (resistor-set on VDS pin), UVLO, OTW,
+	 *             OTSD, GDF (single wire OR — no SPI status). Firmware
+	 *             classifies from pin duration + whether the bridge is
+	 *             still conducting (faults.c): OTW and 8 ms VDS retries
+	 *             keep PWM; Hi-Z faults cut drive.
 	 * Mode / IDRIVE / VDS thresholds are hardwired on the board; firmware
 	 * only enables the driver and reacts to FAULT_N.
 	 */
@@ -252,7 +254,10 @@
 #	define CURRENT_ADC_CHANNEL LL_ADC_CHANNEL_3
 #	define CURRENT_ADC_PIN LL_GPIO_PIN_3
 #	define USE_SERIAL_TELEMETRY
-/* DRV8328 nSLEEP (PA15): high = awake. Sleep when idle via gate_driver.c. */
+/* DRV8328 nSLEEP (PA15): high = awake. Sleep when idle via gate_driver.c.
+	 * nFAULT (PB5): every assert Hi-Z's the FETs (no OTW-only / no VDS
+	 * auto-retry). Firmware cuts PWM and latches until zero throttle;
+	 * nSLEEP-low sleep is the fault reset. */
 #	define USE_DRV8328_NSLEEP
 #	define NSLEEP_PORT GPIOA
 #	define NSLEEP_PIN LL_GPIO_PIN_15
