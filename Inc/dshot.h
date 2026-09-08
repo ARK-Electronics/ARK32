@@ -96,6 +96,9 @@ enum {
 void computeDshotDMA(void);
 void make_dshot_package(uint16_t com_time);
 
+/* Decremented by the control tick; only the decoder starts a transaction. */
+extern volatile uint16_t dshot_programming_ticks;
+
 extern void playInputTune(void);
 extern void playInputTune2(void);
 extern void playBeaconTune3(void);
