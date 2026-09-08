@@ -1,0 +1,11 @@
+name: Setup EEPROM schema tools
+description: Install the Python dependency required by firmware and SITL generation
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install EEPROM schema validation
+      shell: bash
+      run: python3 -m pip install -r scripts/eeprom/requirements.txt

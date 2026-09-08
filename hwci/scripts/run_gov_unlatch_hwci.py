@@ -6,7 +6,7 @@ not fight the ST-Link. Timing: poke starts after arm_settle+ramp+seed head.
 
   cd hwci
   python3 scripts/run_gov_unlatch_hwci.py \\
-      --elf ../obj/ARK32_ARK_4IN1_F051_3.0.3.elf \\
+      --elf ../obj/ARK32_ARK_4IN1_F051_32.0.elf \\
       --out runs/pr65-gov-unlatch-$(date +%Y%m%d_%H%M%S)
 """
 from __future__ import annotations

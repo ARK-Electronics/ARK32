@@ -13,12 +13,12 @@ name: CI Build Linux
 
 on:
   push:
-    branches: ["ark-release"]
+    branches: ["ark-release", "dakejahl/version-32"]
     tags:
-      # Matches v3.0, v3.0.1, v3.0.3, v3.0.3-rc1, etc. (glob, not full regex).
+      # Matches v32.0, v32.1-rc1, etc. (glob, not full regex).
       - "v[0-9]*.[0-9]*"
   pull_request:
-    branches: ["ark-release"]
+    branches: ["ark-release", "dakejahl/version-32"]
   schedule:
     # Rolling nightly at 06:00 UTC on the default branch (ark-release).
     - cron: "0 6 * * *"
@@ -94,9 +94,9 @@ jobs:
             case "$base" in
               ARK32_*_*.hex)
                 # Reject empty target/version segments (ARK32__.hex, ARK32_x_.hex).
-                # MAJOR.MINOR[.PATCH][-optional-tag], e.g. 3.0.3, 3.0.3-rc1
-                if [[ ! "$base" =~ ^ARK32_[A-Za-z0-9][A-Za-z0-9_]*_[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9._-]+)?\.hex$ ]]; then
-                  echo "error: hex name does not match ARK32_<target>_<MAJOR.MINOR[.PATCH][-tag]>.hex: $base" >&2
+                # MAJOR.MINOR[-optional-tag], e.g. 32.0, 32.0-rc1
+                if [[ ! "$base" =~ ^ARK32_[A-Za-z0-9][A-Za-z0-9_]*_[0-9]+\.[0-9]+(-[A-Za-z0-9._-]+)?\.hex$ ]]; then
+                  echo "error: hex name does not match ARK32_<target>_<MAJOR.MINOR[-tag]>.hex: $base" >&2
                   bad=1
                 else
                   echo "ok: $base"
@@ -155,6 +155,7 @@ jobs:
             obj/*.bin
             obj/release-manifest.json
             obj/SHA256SUMS
+            schema/eeprom.json
           retention-days: 60
           if-no-files-found: error
 
@@ -189,6 +190,7 @@ jobs:
             obj/*.bin
             obj/release-manifest.json
             obj/SHA256SUMS
+            schema/eeprom.json
           fail_on_unmatched_files: true
           generate_release_notes: true
         env:
@@ -227,6 +229,7 @@ jobs:
             obj/*.bin
             obj/release-manifest.json
             obj/SHA256SUMS
+            schema/eeprom.json
           fail_on_unmatched_files: true
           body: |
             Rolling nightly firmware build for the ARK32 configurator and production line.

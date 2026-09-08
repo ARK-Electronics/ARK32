@@ -1,5 +1,5 @@
 {
-  "_comment": "ARK 4IN1 F051 production EEPROM defaults. Encoded by scripts/build_factory_image.py into the 192-byte EEprom_t page (Inc/eeprom.h). Human units are documented; the script writes the eeprom storage encoding.",
+  "_comment": "ARK 4IN1 F051 production EEPROM defaults in schema display units. Historical temperature 141 and current 102 are raw disabled sentinels preserved verbatim; all other values must round-trip exactly through schema/eeprom.json.",
   "product": "ARK_4IN1_F051",
   "eeprom_version": 3,
   "firmware_version": {
@@ -19,7 +19,7 @@
     "pwm_input_max_us": 1980,
     "pwm_input_neutral_us": 1500,
     "pwm_input_deadband": 50,
-    "minimum_duty_cycle": 4,
+    "minimum_duty_cycle": 2,
     "comp_pwm": 1,
     "stuck_rotor_protection": 1,
     "pwm_frequency_khz": 24,
@@ -34,18 +34,18 @@
     "stall_protection": 0,
     "telemetry_on_interval": 0,
     "low_voltage_cut_off": 0,
-    "low_cell_volt_cutoff_offset": 50,
     "sine_mode_changeover_throttle_level": 15,
     "drag_brake_strength": 10,
     "driving_brake_strength": 10,
     "temperature_limit": 141,
     "current_limit": 102,
     "sine_mode_power": 6,
-    "absolute_voltage_cutoff": 10,
+    "absolute_voltage_cutoff": 5,
     "current_P": 100,
     "current_I": 0,
     "current_D": 50,
     "active_brake_power": 2,
-    "disable_stick_calibration": 0
+    "disable_stick_calibration": 0,
+    "low_cell_voltage_v": 3
   }
 }

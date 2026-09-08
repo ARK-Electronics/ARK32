@@ -47,7 +47,7 @@ void computeServoInput()
 					servo_high_threshold = ((7 * servo_high_threshold + (dma_buffer[1] - dma_buffer[0])) >> 3);
 					if (high_calibration_counts > 50) {
 						servo_high_threshold = servo_high_threshold - 25;
-						eepromBuffer.servo.high_threshold = (servo_high_threshold - 1750) / 2;
+						eepromBuffer.servo_high_threshold = (servo_high_threshold - 1750) / 2;
 						high_calibration_set = 1;
 						playDefaultTone();
 					}
@@ -61,7 +61,7 @@ void computeServoInput()
 				}
 				if (low_calibration_counts > 75) {
 					servo_low_threshold = servo_low_threshold + 25;
-					eepromBuffer.servo.low_threshold = (servo_low_threshold - 750) / 2;
+					eepromBuffer.servo_low_threshold = (servo_low_threshold - 750) / 2;
 					calibration_required = 0;
 					saveEEpromSettings();
 					low_calibration_counts = 0;
@@ -70,7 +70,7 @@ void computeServoInput()
 			}
 			signaltimeout = 0;
 		} else {
-			if (eepromBuffer.bi_direction) {
+			if (eepromBuffer.bidirectional_mode) {
 				if (dma_buffer[1] - dma_buffer[0] <= servo_neutral) {
 					servorawinput = map((dma_buffer[1] - dma_buffer[0]), servo_low_threshold, servo_neutral, 0, 1000);
 				} else {

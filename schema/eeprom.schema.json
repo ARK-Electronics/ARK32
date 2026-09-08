@@ -1,0 +1,590 @@
+{
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+\\.\\d+$"
+    },
+    "bufferSize": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "eepromVersions": {
+      "type": "object",
+      "patternProperties": {
+        "^[0-9]+$": {
+          "type": "object",
+          "properties": {
+            "bufferSize": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minSize": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "bufferSize"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "fields": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "type": {
+            "enum": [
+              "uint8",
+              "int8",
+              "uint16",
+              "int16",
+              "uint32",
+              "int32",
+              "bool",
+              "enum",
+              "number",
+              "reserved",
+              "bluejay"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "readOnly": {
+            "type": "boolean"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "preserveOnDefaults": {
+            "type": "boolean"
+          },
+          "alias": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]*$"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "raw": {
+            "type": "object",
+            "properties": {
+              "min": {
+                "type": "integer"
+              },
+              "max": {
+                "type": "integer"
+              }
+            }
+          },
+          "display": {
+            "type": "object",
+            "properties": {
+              "min": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              },
+              "factor": {
+                "type": "number"
+              },
+              "offset": {
+                "type": "number"
+              },
+              "decimals": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "raw": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "raw",
+                "name"
+              ]
+            }
+          },
+          "disabledValue": {
+            "type": "object",
+            "properties": {
+              "raw": {
+                "type": "integer"
+              },
+              "display": {
+                "type": [
+                  "string",
+                  "number"
+                ]
+              }
+            },
+            "required": [
+              "raw",
+              "display"
+            ]
+          },
+          "ui": {
+            "type": "object",
+            "properties": {
+              "widget": {
+                "enum": [
+                  "checkbox",
+                  "radio",
+                  "select",
+                  "slider",
+                  "rtttl"
+                ]
+              },
+              "visibleWhen": {
+                "$ref": "#/definitions/predicate"
+              },
+              "disabledWhen": {
+                "$ref": "#/definitions/predicate"
+              }
+            }
+          },
+          "onLoad": {
+            "enum": [
+              "keep",
+              "clamp",
+              "disable"
+            ]
+          },
+          "onLoadFallbackRaw": {
+            "type": "integer"
+          },
+          "default": {
+            "type": "object",
+            "properties": {
+              "raw": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 255
+                    }
+                  }
+                ]
+              }
+            },
+            "required": [
+              "raw"
+            ]
+          },
+          "versions": {
+            "type": "object",
+            "patternProperties": {
+              "^(default|eeprom:\\d+\\+|firmware:\\d+\\.\\d+\\+)$": {
+                "type": "object",
+                "properties": {
+                  "raw": {
+                    "type": "object",
+                    "properties": {
+                      "min": {
+                        "type": "integer"
+                      },
+                      "max": {
+                        "type": "integer"
+                      }
+                    }
+                  },
+                  "display": {
+                    "type": "object",
+                    "properties": {
+                      "min": {
+                        "type": "number"
+                      },
+                      "max": {
+                        "type": "number"
+                      },
+                      "factor": {
+                        "type": "number"
+                      },
+                      "offset": {
+                        "type": "number"
+                      },
+                      "decimals": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  },
+                  "values": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "raw": {
+                          "type": "integer"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "raw",
+                        "name"
+                      ]
+                    }
+                  },
+                  "disabledValue": {
+                    "type": "object",
+                    "properties": {
+                      "raw": {
+                        "type": "integer"
+                      },
+                      "display": {
+                        "type": [
+                          "string",
+                          "number"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "raw",
+                      "display"
+                    ]
+                  },
+                  "ui": {
+                    "type": "object",
+                    "properties": {
+                      "widget": {
+                        "enum": [
+                          "checkbox",
+                          "radio",
+                          "select",
+                          "slider",
+                          "rtttl"
+                        ]
+                      },
+                      "visibleWhen": {
+                        "$ref": "#/definitions/predicate"
+                      },
+                      "disabledWhen": {
+                        "$ref": "#/definitions/predicate"
+                      }
+                    }
+                  }
+                },
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "offset"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "size"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "type"
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "dronecan": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]*$"
+              },
+              "vtype": {
+                "enum": [
+                  "uint8",
+                  "uint16",
+                  "bool",
+                  "string"
+                ]
+              },
+              "order": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "default": {
+                "type": "integer"
+              },
+              "min": {
+                "type": "integer"
+              },
+              "max": {
+                "type": "integer"
+              },
+              "ptr": {
+                "enum": [
+                  "eeprom",
+                  "runtime:motor_kv",
+                  "runtime:low_cell_volt_cutoff"
+                ]
+              },
+              "ifdef": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Z0-9_]*$"
+              }
+            },
+            "required": [
+              "name",
+              "vtype",
+              "order",
+              "default"
+            ]
+          },
+          "factory": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key"
+            ]
+          },
+          "sitl": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ]
+          },
+          "minEepromVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxEepromVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "minFirmwareVersion": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+$"
+          },
+          "maxFirmwareVersion": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+$"
+          }
+        },
+        "required": [
+          "offset",
+          "size",
+          "type",
+          "name"
+        ],
+        "not": {
+          "required": [
+            "cName"
+          ]
+        }
+      }
+    },
+    "groups": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "panel": {
+            "enum": [
+              "settings",
+              "tune",
+              "esc",
+              "none"
+            ]
+          },
+          "ui": {
+            "type": "object",
+            "properties": {
+              "widget": {
+                "enum": [
+                  "checkbox",
+                  "radio",
+                  "select",
+                  "slider",
+                  "rtttl"
+                ]
+              },
+              "visibleWhen": {
+                "$ref": "#/definitions/predicate"
+              },
+              "disabledWhen": {
+                "$ref": "#/definitions/predicate"
+              }
+            }
+          },
+          "minEepromVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maxEepromVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "minFirmwareVersion": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+$"
+          },
+          "maxFirmwareVersion": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+$"
+          }
+        },
+        "required": [
+          "name",
+          "fields",
+          "panel"
+        ]
+      }
+    },
+    "groupOrder": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "meta": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "version",
+    "bufferSize",
+    "eepromVersions",
+    "fields",
+    "groups",
+    "meta"
+  ],
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ARK-Electronics/ARK32/schema/eeprom.schema.json",
+  "title": "ARK32 EEPROM schema language 1.1",
+  "definitions": {
+    "predicate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "op": {
+              "enum": [
+                "eq",
+                "ne",
+                "gt",
+                "lt"
+              ]
+            },
+            "raw": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "field",
+            "op",
+            "raw"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "all": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/predicate"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "all"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "any": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/predicate"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "any"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

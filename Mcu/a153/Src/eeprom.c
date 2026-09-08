@@ -8,6 +8,7 @@
 
 #include "eeprom.h"
 #include "main.h"
+#include "main.h"
 #include <string.h>
 
 //8192 bytes sector size, 128 bytes page, 16 bytes phrase for MXCA133

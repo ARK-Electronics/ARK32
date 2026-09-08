@@ -191,7 +191,7 @@ void zcfoundroutine()
 		enableCompInterrupts(); // enable interrupt
 	}
 #else
-	if (eepromBuffer.stall_protection || eepromBuffer.rc_car_reverse) {
+	if (eepromBuffer.stall_protection || eepromBuffer.rc_car_reversing) {
 		if (zero_crosses >= 20 && commutation_interval <= 2000) {
 			old_routine = 0;
 			enableCompInterrupts(); // enable interrupt

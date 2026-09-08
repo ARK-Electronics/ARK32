@@ -38,8 +38,8 @@ static void apply_eeprom_overrides(void)
 	EEprom_t buf;
 	read_flash_bin(buf.buffer, EEPROM_START_ADD, sizeof(buf.buffer));
 	bool changed = false;
-	if (sitl_cfg.node_id >= 0 && buf.can.can_node != (uint8_t)sitl_cfg.node_id) {
-		buf.can.can_node = (uint8_t)sitl_cfg.node_id;
+	if (sitl_cfg.node_id >= 0 && buf.can_node != (uint8_t)sitl_cfg.node_id) {
+		buf.can_node = (uint8_t)sitl_cfg.node_id;
 		changed = true;
 	}
 	if (sitl_cfg.input_type >= 0 && buf.input_type != (uint8_t)sitl_cfg.input_type) {
