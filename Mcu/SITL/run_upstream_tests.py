@@ -268,7 +268,7 @@ def test_beacon_tone(sitl_path):
 
 
 def test_physics_audio(sitl_path):
-    '''the physics audio stream must carry the boot tune: some 100ms
+    '''the physics audio stream must carry the boot tune: some 21ms
     sim-time window has the first note frequency (1047Hz) dominant'''
     audio = AudioStream('127.0.0.1', STATE_PORT)
     try:
@@ -279,18 +279,28 @@ def test_physics_audio(sitl_path):
             while time.time() < deadline and not ok:
                 time.sleep(0.5)
                 batches += audio.take_batches()
-                buckets = {}
+                runs = [[]]
+                expected_t = None
                 for t0, vals in batches:
-                    for i, v in enumerate(vals):
-                        t = t0 + i * 20833
-                        buckets.setdefault(t // 100000000, []).append(v)
-                for vals in buckets.values():
-                    if len(vals) < 2000:
-                        continue
-                    g1 = sitl_tones.goertzel(vals, 1047.0)
-                    g2 = sitl_tones.goertzel(vals, 700.0)
-                    if g1 > 1e-3 and g1 > 5 * g2:
-                        ok = True
+                    # Never concatenate samples across dropped UDP batches:
+                    # that changes their phase and creates false frequencies.
+                    # The scheduler rounds each sample to its next tick;
+                    # allow that drift, but split at half a missing batch.
+                    if expected_t is not None and abs(t0 - expected_t) > len(vals) * 20833 // 2:
+                        runs.append([])
+                    runs[-1].extend(vals)
+                    expected_t = t0 + len(vals) * 20833
+                for run in runs:
+                    # ARK dots last only 50 ms. Short overlapping windows also
+                    # avoid mixing a dot with silence at fixed bucket edges.
+                    for start in range(0, len(run) - 1023, 512):
+                        vals = run[start:start + 1024]
+                        g1 = sitl_tones.goertzel(vals, 1047.0)
+                        g2 = sitl_tones.goertzel(vals, 700.0)
+                        if g1 > 1e-3 and g1 > 5 * g2:
+                            ok = True
+                            break
+                    if ok:
                         break
             check('physics audio boot tune', ok,
                   '%d batches captured' % len(batches))
@@ -586,7 +596,15 @@ def test_dronecan_params(sitl_path):
         sim.close()
         node = dronecan.make_node('mcast:4', node_id=101)
         try:
-            time.sleep(2.0)
+            # ARK resets on input timeout. Keep the motor stopped with valid
+            # CAN input so a reset cannot discard the in-RAM parameter write.
+            def spin_stopped():
+                node.broadcast(dronecan.uavcan.equipment.esc.RawCommand(cmd=[0]))
+                node.spin(0.05)
+
+            ready_at = time.time() + 2.0
+            while time.time() < ready_at:
+                spin_stopped()
             got = {}
 
             def getset(req, key):
@@ -597,7 +615,7 @@ def test_dronecan_params(sitl_path):
                 t0 = time.time()
                 while 'e' not in done and time.time() - t0 < 3:
                     try:
-                        node.spin(0.05)
+                        spin_stopped()
                     except Exception:
                         pass
                 got[key] = done.get('e')
