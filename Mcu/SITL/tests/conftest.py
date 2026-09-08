@@ -11,6 +11,7 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 SITL_DIR = os.path.normpath(os.path.join(HERE, '..'))
 sys.path.insert(0, SITL_DIR)
+from sitl_test_requirements import unavailable_can
 
 from sitl_harness import (  # noqa: E402
     Sitl,
@@ -89,7 +90,7 @@ def sitl_can_factory(sitl_factory):
             return sitl_factory(extra_args=extra_args, can_uri=can_uri, **kw)
         except SitlStartError as e:
             if e.looks_like_mcast_failure:
-                pytest.skip('SITL multicast CAN unavailable on this host:\n%s'
+                unavailable_can('SITL multicast CAN unavailable on this host:\n%s'
                             % e)
             raise
 
