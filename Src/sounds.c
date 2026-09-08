@@ -130,7 +130,12 @@ void playBlueJayTune(void)
 #define BOOT_SOUND_SIGNAL_LOST 1u
 #define BOOT_SOUND_BL_UPDATED 2u
 
+#ifdef MCU_SITL
+// Native SITL resets restart the process; MCU linker sections do not apply.
+static volatile uint32_t boot_sound_cookie[2];
+#else
 static volatile uint32_t boot_sound_cookie[2] __attribute__((section(".noinit")));
+#endif
 
 void bootSoundMarkSignalLost(void)
 {
