@@ -50,15 +50,18 @@ def test_can_checks_poles_before_narrowing(sitl_can_factory, mcast_uri, poles):
     sitl = sitl_can_factory(extra_args=['--node-id', '10'], can_uri=mcast_uri, wait_s=1.0)
     node = dronecan.make_node(mcast_uri, node_id=115, bitrate=1000000)
     try:
-        req = dronecan.uavcan.protocol.param.GetSet.Request()
-        req.name = 'MOTOR_POLES'
-        req.value = dronecan.uavcan.protocol.param.Value(integer_value=poles)
-        rsp = None
-        for _ in range(5):
-            rsp = _request_wait(node, 10, req)
-            if rsp is not None:
-                break
-        assert rsp is not None, sitl.log_tail()
-        assert int(rsp.value.integer_value) == (poles if 2 <= poles <= 128 else 14)
+        def set_poles(value):
+            req = dronecan.uavcan.protocol.param.GetSet.Request()
+            req.name = 'MOTOR_POLES'
+            req.value = dronecan.uavcan.protocol.param.Value(integer_value=value)
+            for _ in range(5):
+                rsp = _request_wait(node, 10, req)
+                if rsp is not None:
+                    return int(rsp.value.integer_value)
+            assert False, sitl.log_tail()
+
+        # A distinct valid value first, so a rejected write is told apart from a reset to the default.
+        assert set_poles(22) == 22
+        assert set_poles(poles) == (poles if 2 <= poles <= 128 else 22)
     finally:
         node.close()
