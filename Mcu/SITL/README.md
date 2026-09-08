@@ -299,3 +299,8 @@ current, and battery voltage sag from internal resistance. The
 comparator compares the floating phase against the virtual neutral with
 configurable noise and hysteresis, so the firmware's blanking and
 filtering logic is genuinely exercised at PWM switching level.
+
+### Upstream compatibility
+
+See [UPSTREAM.md](UPSTREAM.md) for the pinned merged AM32 baseline, local
+adaptations, reference models, and cross-platform/sanitizer test commands.

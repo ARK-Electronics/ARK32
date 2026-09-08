@@ -1,3 +1,4 @@
 # Headless SITL CI dependencies (no GUI)
 dronecan
 pytest>=7.0
+pyserial
