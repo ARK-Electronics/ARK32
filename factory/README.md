@@ -86,3 +86,7 @@ make factory-image-check   # build + scripts/check-factory-image-ark.sh
 ```
 
 The job fails if the 32 KiB layout is wrong or the EEPROM page drifts from `ARK_4IN1_F051_eeprom_defaults.json`. Artifacts (`*.factory.bin` / `.hex` / `.eeprom.bin`) are uploaded as `ark-4in1-factory-image`.
+
+## Release qualification
+
+EEPROM/version migrations and new gate-driver targets attach the [release qualification record](../doc/development/release-qualification.md) to the final candidate commit.
