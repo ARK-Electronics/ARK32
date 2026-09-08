@@ -100,3 +100,7 @@ compiler version, bootloader hash, defaults hash, EEPROM layout, addresses,
 and each binary hash. The packager rejects missing, empty, or stale binaries.
 It currently supports the shipped ARK_4IN1_F051 product; adding a product must
 extend the manifest and its checks alongside the factory-image build.
+
+## Release qualification
+
+EEPROM/version migrations and new gate-driver targets attach the [release qualification record](../doc/development/release-qualification.md) to the final candidate commit.
