@@ -382,14 +382,13 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 			case T_UINT8: {
 				uint8_t *ptr8 = (uint8_t *)p->ptr;
 				if (ptr8 == &eepromBuffer.motor_poles) {
-					/* Validate the wire integer before narrowing to a byte; 256
-					 * must not wrap to zero between IRQ consumers. */
-					if (req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE) {
+					/* Range-check the wire integer before narrowing: 256 would
+					 * wrap to zero. A rejected write leaves the stored value. */
+					if (req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE ||
+					    req.value.integer_value < MOTOR_POLES_MIN || req.value.integer_value > MOTOR_POLES_MAX) {
 						break;
 					}
-					*ptr8 = req.value.integer_value >= MOTOR_POLES_MIN && req.value.integer_value <= MOTOR_POLES_MAX
-							? sanitizeMotorPoles((uint8_t)req.value.integer_value)
-							: sanitizeMotorPoles(0);
+					*ptr8 = (uint8_t)req.value.integer_value;
 				} else if (ptr8 == &eepromBuffer.limits.current) {
 					*ptr8 = req.value.integer_value / 2;
 				} else {
