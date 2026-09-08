@@ -33,8 +33,10 @@ on:
 permissions:
   contents: read
 
+# Serialize publication per ref. The event name keeps a queued nightly from
+# being replaced by a later ark-release push (one pending run per group).
 concurrency:
-  group: firmware-release-${{ github.ref }}
+  group: firmware-release-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -139,8 +141,9 @@ jobs:
 
       - name: Package release provenance and checksums
         run: |
-          sdk=$(find tools/linux -path '*/bin/arm-none-eabi-gcc' -type f -print -quit)
-          test -n "$sdk"
+          ver=$(sed -n 's/^XPACK_GCC_VER := //p' make/tools.mk)
+          sdk="tools/linux/xpack-arm-none-eabi-gcc-${ver}/bin/arm-none-eabi-gcc"
+          test -x "$sdk"
           python3 scripts/release_manifest.py --compiler "$sdk"
 
       - name: Archive build

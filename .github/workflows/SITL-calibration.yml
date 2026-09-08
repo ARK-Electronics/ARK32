@@ -4,7 +4,8 @@ name: SITL Calibration Tests
 # steady sweep, square amplitude sweep and 120s chirp per calibrated
 # model, checked against Mcu/SITL/data/*/expected.json. Heavier than
 # the functional SITL tests (~25 min), so it runs only when the
-# physics, models or measurement tools change, plus nightly.
+# physics, models or measurement tools change, plus the nightly release
+# validation call from CICD_build.yml.
 #
 # All measurements are paced against SITL simulation time, so a slow
 # runner simply takes longer in wall time and measures the same
@@ -32,8 +33,6 @@ on:
       - "Src/motor_runtime.c"
       - "Src/runtime_loop.c"
       - "Src/settings.c"
-  schedule:
-    - cron: "17 2 * * *"
   workflow_call:
   workflow_dispatch:
 
