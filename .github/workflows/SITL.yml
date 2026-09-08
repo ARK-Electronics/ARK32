@@ -5,6 +5,7 @@ on:
     branches: ["main", "dakejahl/version-32"]
   pull_request:
     branches: ["main", "dakejahl/version-32"]
+  workflow_call:
   workflow_dispatch:
 
 jobs:
