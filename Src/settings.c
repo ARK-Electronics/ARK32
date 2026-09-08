@@ -20,6 +20,9 @@
 void loadEEpromSettings(void)
 {
 	read_flash_bin(eepromBuffer.buffer, eeprom_address, sizeof(eepromBuffer.buffer));
+	/* All consumers, including sine startup and RPM control, need nonzero
+	 * poles and pole pairs. Do not merely guard the derived schedules. */
+	eepromBuffer.motor_poles = sanitizeMotorPoles(eepromBuffer.motor_poles);
 	if (eepromBuffer.eeprom_version < EEPROM_VERSION) {
 		eepromBuffer.max_ramp = TARGET_DEFAULT_MAX_RAMP; // 0.1% per ms steps (see targets.h)
 		eepromBuffer.minimum_duty_cycle = 1;		 // 0.2% to 51 percent
@@ -273,6 +276,7 @@ void loadEEpromSettings(void)
 
 void saveEEpromSettings(void)
 {
+	eepromBuffer.motor_poles = sanitizeMotorPoles(eepromBuffer.motor_poles);
 	save_flash_nolib(eepromBuffer.buffer, sizeof(eepromBuffer.buffer), eeprom_address);
 }
 
