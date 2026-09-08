@@ -34,6 +34,7 @@ on:
       - "Src/settings.c"
   schedule:
     - cron: "17 2 * * *"
+  workflow_call:
   workflow_dispatch:
 
 jobs:

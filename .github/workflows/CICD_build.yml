@@ -1,6 +1,6 @@
 name: CI Build Linux
 
-# Build all MCU targets and publish .hex assets for the ARK32 configurator
+# Build supported products and publish validated release assets for the ARK32 configurator
 # and production line (see ARK-Electronics/ARK32#67).
 #
 # Ubuntu-only: release assets and size-gated firmware builds are produced with
@@ -8,7 +8,7 @@ name: CI Build Linux
 # FLASH; native SITL on Windows is covered by the SITL workflow.)
 #
 # - Push/PR on ark-release: build + artifact.
-# - Version tags (vMAJOR.MINOR[.PATCH][-suffix]): GitHub Release with obj/*.hex.
+# - Version tags: publish app/factory/EEPROM images after all validation jobs pass.
 # - schedule / optional dispatch: rolling `nightly` prerelease (assets replaced).
 
 on:
@@ -31,9 +31,34 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: firmware-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  validate-static:
+    if: >
+      github.repository == 'ARK-Electronics/ARK32' &&
+      (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && inputs.publish_nightly))
+    uses: ./.github/workflows/static-analysis.yml
+
+  validate-sitl:
+    if: >
+      github.repository == 'ARK-Electronics/ARK32' &&
+      (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && inputs.publish_nightly))
+    uses: ./.github/workflows/SITL.yml
+
+  validate-calibration:
+    if: >
+      github.repository == 'ARK-Electronics/ARK32' &&
+      (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && inputs.publish_nightly))
+    uses: ./.github/workflows/SITL-calibration.yml
+
   build:
     runs-on: ubuntu-latest
 
@@ -106,14 +131,48 @@ jobs:
           fi
           echo "Asserted ${#hexes[@]} hex asset(s)"
 
+      - name: Build and verify factory images
+        run: make factory-image-check
+
+      - name: Test release packaging
+        run: python3 -m unittest discover -s scripts/tests -p 'test_release_manifest.py'
+
+      - name: Package release provenance and checksums
+        run: |
+          sdk=$(find tools/linux -path '*/bin/arm-none-eabi-gcc' -type f -print -quit)
+          test -n "$sdk"
+          python3 scripts/release_manifest.py --compiler "$sdk"
+
       - name: Archive build
         uses: actions/upload-artifact@v4
         with:
           name: ARK32-binaries
           path: |
             obj/*.hex
+            obj/*.bin
+            obj/release-manifest.json
+            obj/SHA256SUMS
           retention-days: 60
           if-no-files-found: error
+
+  publish:
+    needs: [build, validate-static, validate-sitl, validate-calibration]
+    if: >
+      github.repository == 'ARK-Electronics/ARK32' &&
+      (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && inputs.publish_nightly))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ARK32-binaries
+          path: obj
+
+      - name: Verify downloaded assets
+        working-directory: obj
+        run: sha256sum --check SHA256SUMS
 
       - name: Upload version-tag release assets
         if: >
@@ -122,7 +181,11 @@ jobs:
           github.repository == 'ARK-Electronics/ARK32'
         uses: softprops/action-gh-release@v2
         with:
-          files: obj/*.hex
+          files: |
+            obj/*.hex
+            obj/*.bin
+            obj/release-manifest.json
+            obj/SHA256SUMS
           fail_on_unmatched_files: true
           generate_release_notes: true
         env:
@@ -137,6 +200,7 @@ jobs:
           )
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           # Rolling prerelease: replace assets and retarget the tag each run.
           gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
@@ -155,7 +219,11 @@ jobs:
           prerelease: true
           make_latest: false
           target_commitish: ${{ github.sha }}
-          files: obj/*.hex
+          files: |
+            obj/*.hex
+            obj/*.bin
+            obj/release-manifest.json
+            obj/SHA256SUMS
           fail_on_unmatched_files: true
           body: |
             Rolling nightly firmware build for the ARK32 configurator and production line.
