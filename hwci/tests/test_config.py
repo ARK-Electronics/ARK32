@@ -1,8 +1,10 @@
 """Tests for strict rig-config validation and profile (de)serialization."""
 import pytest
 
-from hwci.config import (RigConfig, load_profile, load_rig,
+from hwci.config import (RigConfig, apply_target_preset, load_profile, load_rig,
                          profile_from_dict, profile_to_dict)
+from hwci.debugger.openocd import (APP_LOAD_ADDR, DEFAULT_CONFIGS,
+                                   G4_APP_LOAD_ADDR, G4_CONFIGS)
 
 VALID_RIG = """\
 target: ARK_4IN1_F051
@@ -24,6 +26,9 @@ def test_valid_rig_loads(tmp_path):
     rig = load_rig(_write(tmp_path, VALID_RIG))
     assert rig.debugger_backend == "openocd"
     assert rig.pole_pairs == 11
+    # F051 preset fills SWD settings when omitted from YAML.
+    assert rig.app_load_addr == APP_LOAD_ADDR
+    assert list(rig.openocd_configs) == list(DEFAULT_CONFIGS)
 
 
 def test_unknown_key_rejected(tmp_path):
@@ -68,6 +73,48 @@ def test_no_config_gives_sim_defaults():
     rig = load_rig(None)
     assert rig.stand_backend == "sim"
     rig.validate()  # sim allowed for the built-in default
+
+
+def test_g431_preset_fills_swd_settings(tmp_path):
+    text = """\
+target: ARK_G431_CAN
+debugger_backend: openocd
+telem_backend: none
+debug_uart_backend: serial
+debug_uart_port: /dev/esc-debug-uart
+throttle_backend: flightstand
+stand_backend: grpc
+stand_host: 127.0.0.1
+pole_pairs: 7
+"""
+    rig = load_rig(_write(tmp_path, text))
+    assert rig.app_load_addr == G4_APP_LOAD_ADDR
+    assert list(rig.openocd_configs) == list(G4_CONFIGS)
+    assert rig.adapter_speed_khz == 8000
+    assert rig.debug_uart_backend == "serial"
+    assert rig.debug_uart_baud == 115200
+
+
+def test_g431_explicit_app_load_not_overwritten(tmp_path):
+    text = """\
+target: ARK_G431_CAN
+debugger_backend: openocd
+telem_backend: none
+throttle_backend: external
+stand_backend: none
+app_load_addr: 0x08005000
+"""
+    rig = load_rig(_write(tmp_path, text))
+    assert rig.app_load_addr == 0x08005000
+    # openocd still comes from preset
+    assert list(rig.openocd_configs) == list(G4_CONFIGS)
+
+
+def test_apply_target_preset_manual():
+    cfg = RigConfig(target="ARK_G431_CAN")
+    apply_target_preset(cfg, explicit_keys=set())
+    assert cfg.app_load_addr == G4_APP_LOAD_ADDR
+    assert list(cfg.openocd_configs) == list(G4_CONFIGS)
 
 
 def test_profile_roundtrips_through_dict():

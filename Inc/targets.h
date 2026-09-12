@@ -53,6 +53,192 @@
 #	define TARGET_MIN_BEMF_COUNTS 3
 #endif
 
+#ifdef ARK_G431_CAN
+#	define FIRMWARE_NAME "ARK_G431_CAN"
+#	define FILE_NAME "ARK_G431_CAN"
+#	define DRONECAN_SUPPORT 1
+#	define DRONECAN_NODE_NAME "com.ark_12s.esc"
+/* UAVCAN hw version: PX4 board_id = (major << 8) | minor.
+ * 0.71 → 71. Away from stock AM32 2.3 (515), ARK cannode 0.80-0.93,
+ * and ArduPilot/AP_Periph's reserved 1000-19999 block. */
+#	define DRONECAN_HW_VERSION_MAJOR 0
+#	define DRONECAN_HW_VERSION_MINOR 71
+#	define DEAD_TIME 80 /* 500 ns @ 160 MHz TIM1 (CKD=1) */
+
+#	define HARDWARE_GROUP_G4_E
+#	define TARGET_STALL_PROTECTION_INTERVAL 20000
+/*
+ * Comparator output blanking window, in TIM1 ticks (6.25 ns @ 160 MHz).
+ * The G4 COMP can gate its own output from TIM1 OC5 while OC5REF is high;
+ * the F051's COMP cannot, so this has no 4IN1 equivalent. Armed per
+ * commutation step in changeCompInput() — ST force-low blanking is only
+ * safe on falling-BEMF steps (see doc/g431-comp-blanking.md).
+ *
+ * Sizing. OC5 with CCR5=N holds OC5REF high for CNT < N, so the window is
+ * the first N ticks of every PWM period, and the question is where the
+ * switching transient actually sits inside that period:
+ *
+ *   CNT == 0            OCxREF rises; the low side turns OFF immediately.
+ *   CNT == DEAD_TIME    the high side turns ON. This is the hard event —
+ *                       the phase node slews a 50 V bus in 55-81 ns
+ *                       (measured), ~500 ns to settle including the gate
+ *                       transition, into low-side body-diode recovery.
+ *
+ * So the transient is at 500 ns, not at 0. The original 80 ticks blanked
+ * [0, 500 ns) — the quiet dead-time interval — and un-gated the comparator
+ * at the exact instant of the edge it was meant to reject. 160 ticks =
+ * 1.0 us = DEAD_TIME plus the ~500 ns edge-and-settle, which is the
+ * smallest window that actually covers it.
+ *
+ * Upper bound. Crossings that physically occur in the PWM off-window are
+ * invisible to the comparator and are registered after turn-on (see the
+ * turn-on-pileup compensation in bemf_zc.c); bench puts that detection
+ * peak at 1.3-2.6 us, so 1.0 us clears it. On the steps that blank at all,
+ * a crossing inside the window is not suppressed anyway — it is delayed to
+ * the window close, at most 1.0 us late.
+ *
+ * Duty headroom. At the target's default 24 kHz (arr 6665) the 6% startup
+ * tier is 400 ticks of on-time, so the window is 40% of it and the
+ * comparator is live over [1.0, 2.5] us — which only just contains the
+ * pile-up peak. That tier is the first thing to check on the bench, and
+ * this is the single knob to sweep.
+ */
+#	define COMP_BLANK_TICKS 160
+/*
+ * Post-commutation search blank, in 64ths of the commutation interval. An
+ * edge before this is the freewheel demag clamp on the phase that was just
+ * released, not a crossing, so COMP1_2_3_IRQHandler discards it.
+ *
+ * 32 (= interval/2) is the historical value and the default; this exists to
+ * make it sweepable, because a longer software blank is the closest thing G4
+ * offers to the "run the comparator slow during startup" trick that other
+ * families get from a COMP power mode. G4 comparators are fixed ultra-fast
+ * and there is no speed/consumption field to trade away, so rejecting noise
+ * in TIME is the only remaining axis.
+ *
+ * There is a hard ceiling and it is worth knowing before turning this up.
+ * The schedule commutates waitTime = interval/2 - advance after a crossing,
+ * so the NEXT crossing is due at interval/2 + advance, i.e. (32 + advance)
+ * 64ths after commutation. auto_advance runs 13..23, putting the expected
+ * crossing at 45..55/64. A blank past ~40 starts eating the margin at the
+ * low-advance end, and past 45 it rejects the crossing it is waiting for.
+ * Raise this only with bench data, and only against the advance schedule
+ * actually in use.
+ *
+ * #ifndef so an A/B sweep can override it with -DZC_SEARCH_BLANK_64THS=N
+ * the same way the ZC_FILTER_* tiers are overridden (runtime_loop.c). The
+ * bare #define collided with -Werror on redefinition, which is why the
+ * knob this comment calls sweepable was not actually sweepable.
+ *
+ * A 32/36/40 sweep was attempted on the RCINPOWER GTS 4715-360KV + 14x5.5
+ * at 12S and its result was WITHDRAWN as invalid - see below - so this
+ * stays at the long-standing 32 until someone re-runs it properly.
+ *
+ * How it went wrong, because the trap is easy to repeat: the override was
+ * applied with `make ARK_G431_CAN EXTRA_CFLAGS=-DZC_SEARCH_BLANK_64THS=N`
+ * and the board was then programmed with `hwci flash`, which calls
+ * build_firmware() -> plain `make <target>`. That recompiles WITHOUT the
+ * override (verified: the .bin md5 reverts), so all three "different"
+ * builds were the same default binary and the differences between runs
+ * were run-to-run variance. Flash a swept build with
+ *   hwci flash --bin obj/AM32_ARK_G431_CAN_<ver>.bin
+ * which skips the rebuild, and confirm the value actually took before
+ * trusting any comparison.
+ *
+ * Still valid from that session, measured on the default build: 13 cold
+ * starts at 10/12/15/20% all acquired in 10-30 ms, and a 25% cold start
+ * stalls (rotor reaches ~370 rpm, loses sync, 29-37 A while barely
+ * turning). That stall is torque-vs-inertia at the open-loop handoff, not
+ * crossing detection - the lever is startup_power / the startup duty
+ * ceiling, and no blank value was ever shown to change it.
+ */
+#	ifndef ZC_SEARCH_BLANK_64THS
+#		define ZC_SEARCH_BLANK_64THS 32
+#	endif
+/* USART2 TX on PB3 @ 115200 — matches bootloader USE_DEBUG_UART (AM32-bootloader#60). */
+#	define USE_DEBUG_UART
+#	define USE_SERIAL_TELEMETRY
+#	define VOLTAGE_ADC_PIN LL_GPIO_PIN_11
+#	define VOLTAGE_ADC_CHANNEL LL_ADC_CHANNEL_14
+#	define CURRENT_ADC_PIN LL_GPIO_PIN_3
+#	define CURRENT_ADC_PORT GPIOC
+#	define CURRENT_ADC_CHANNEL LL_ADC_CHANNEL_9
+#	define VOLTAGE_ADC_PORT GPIOB
+#	define USE_CURRENT_SENSE
+#	define MILLIVOLT_PER_AMP 10
+/* No CURRENT_OFFSET: idle sense is ~0 V (uses global default 0). */
+#	define TARGET_VOLTAGE_DIVIDER 310
+/* Match ARK_4IN1_F051 vehicle policy (voltage-comp ramp + eeprom max_ramp
+ * can only lower these ceilings). Was 1/1 (SLO-style) before the F051
+ * ramp/governor work was ported to this target. */
+#	define RAMP_SPEED_LOW_RPM 3
+#	define RAMP_SPEED_HIGH_RPM 8
+/* Unconfigured-eeprom max_ramp default; matches the factory JSON. 5 = fine
+	 * mode, 0.5 %/ms, full scale in 200 ms - what larger 12S ESCs ship
+	 * (APD/Hargrave default 50 % per 100 ms) rather than the 4IN1's 2.0 %/ms.
+	 * Fine mode (<10) applies to every regime including startup, so spool-up
+	 * slews at this rate too; that is the part to watch on the bench. */
+#	define TARGET_DEFAULT_MAX_RAMP 5
+/* Protection envelope a DroneCAN "restore defaults" must land on. Same
+	 * values as factory/ARK_G431_CAN_eeprom_defaults.json, enforced by
+	 * scripts/check-erase-defaults.py: an erase has to leave the ESC with the
+	 * protection it shipped with, not the AM32 configurator's disabled pair.
+	 * 105 C foldback onset over a 15 C band, 100 = 200 A. */
+#	define TARGET_DEFAULT_TEMPERATURE_LIMIT 105
+#	define TARGET_DEFAULT_CURRENT_LIMIT 100
+#	define TARGET_DEFAULT_TEMP_DERATE_BAND 15
+/* Closed-loop earlier at low RPM (same bench rationale as ARK_4IN1_F051). */
+#	ifndef POLLING_MODE_THRESHOLD
+#		define POLLING_MODE_THRESHOLD 5000
+#	endif
+// #define NO_POLLING_START
+#	define USE_RGB_LED
+#	define RED_PORT GPIOC
+#	define RED_PIN LL_GPIO_PIN_6
+#	define GREEN_PORT GPIOC
+#	define GREEN_PIN LL_GPIO_PIN_7
+#	define BLUE_PORT GPIOC
+#	define BLUE_PIN LL_GPIO_PIN_8
+
+#	define CAN_TERM_PIN GPIO_PORT_PIN(2, 12) // PC12
+#	define CAN_TERM_POLARITY 1		  // active high
+
+#	define EEPROM_START_ADD (uint32_t)0x0801F800
+
+#	define CAN_TX_PIN LL_GPIO_PIN_9
+#	define CAN_TX_PORT GPIOB
+#	define CAN_RX_PIN LL_GPIO_PIN_11
+#	define CAN_RX_PORT GPIOA
+
+/*
+	 * DRV8350H (hardware interface):
+	 *   ENABLE  = PC9  (DRV_ENABLE) — high = awake, low = sleep (~µA on VM).
+	 *             Gated by gate_driver.c: asleep when disarmed / armed-idle,
+	 *             awake for beeps, drive, and brake. Wake: PWM inactive →
+	 *             ENABLE high → ~3 ms settle (charge pump) → then PWM.
+	 *   nFAULT  = PA12 (FAULT_N) — open-drain, external 20k to 3.3V;
+	 *             asserts on VDS OCP (resistor-set on VDS pin), UVLO, OTW, GDF
+	 *             (single wire OR — no SPI status). Firmware guesses cause
+	 *             from bus V / current / temp ADC at latch (faults.c).
+	 * Mode / IDRIVE / VDS thresholds are hardwired on the board; firmware
+	 * only enables the driver and reacts to FAULT_N.
+	 */
+#	define USE_DRV_ENABLE
+#	define DRV_ENABLE_PORT GPIOC
+#	define DRV_ENABLE_PIN LL_GPIO_PIN_9
+#	define USE_DRV_NFAULT
+#	define NFAULT_PORT GPIOA
+#	define NFAULT_PIN LL_GPIO_PIN_12
+
+#	define COM_TIMER TIM7
+#	define COM_TIMER_IRQ TIM7_IRQn
+
+#	define USE_HSE
+#	undef HSE_VALUE
+#	define HSE_VALUE 8000000
+#	define USE_HSE_BYPASS 0
+#endif
+
 #ifdef ARK_4IN1_F051
 #	define FILE_NAME "ARK_4IN1_F051"
 #	define FIRMWARE_NAME "ARK 4IN1"
@@ -145,6 +331,56 @@
 #ifndef TARGET_DEFAULT_MAX_RAMP
 #	define TARGET_DEFAULT_MAX_RAMP 160
 #endif
+
+/*
+ * Protection defaults restored by a DroneCAN param ERASE, and the single
+ * source of truth for default_settings[] bytes 43/44 plus the
+ * post-skeleton band byte (184). These must equal what the product's
+ * factory eeprom defaults JSON ships, or "restore defaults" in the field
+ * silently changes a shipped ESC's protection envelope - the one config
+ * change nobody re-checks afterwards. check-factory-image-ark.sh gates the
+ * JSON against the built image; scripts/check-erase-defaults.py gates
+ * these macros against the JSON.
+ *
+ * Values are the eeprom storage encoding: temperature in C, current in
+ * 2 A counts (so 100 = 200 A, the largest settings.c will arm), band in C.
+ * 255 in the temperature slot means "no thermal derate".
+ */
+#ifndef TARGET_DEFAULT_TEMPERATURE_LIMIT
+#	define TARGET_DEFAULT_TEMPERATURE_LIMIT 255
+#endif
+#ifndef TARGET_DEFAULT_CURRENT_LIMIT
+#	define TARGET_DEFAULT_CURRENT_LIMIT 0
+#endif
+#ifndef TARGET_DEFAULT_TEMP_DERATE_BAND
+#	define TARGET_DEFAULT_TEMP_DERATE_BAND THERMAL_DERATE_BAND_DEFAULT
+#endif
+
+/*
+ * Lowest thermal ceiling the firmware will arm. TWO independent places
+ * enforce this and they must agree, or the one you did not change silently
+ * wins: settings.c coerces an out-of-range limits.temperature to 255
+ * (disabled), and the DroneCAN parameter table re-validates the same byte
+ * at boot and substitutes TEMPERATURE_LIMIT's default (105) instead. A
+ * bench that lowered only settings.c saw its 30 C write come back as 105.
+ *
+ * Build-time override for bench verification ONLY - the derate runs from
+ * limits.temperature upward to +temp_derate_band_c, so exercising it at
+ * the shipped 70 C floor needs the die driven past 70, which a propped ESC
+ * in its own slipstream may never reach:
+ *   make ARK_G431_CAN HWCI_PERF=1 EXTRA_CFLAGS=-DTHERMAL_LIMIT_MIN_C=30
+ * Never lower it in a shipping build.
+ */
+#ifndef THERMAL_LIMIT_MIN_C
+#	define THERMAL_LIMIT_MIN_C 70
+#endif
+/* Upper end of the same window. 255 is NOT part of it - that is the
+ * explicit "no thermal derate" sentinel and is preserved on purpose. */
+#ifndef THERMAL_LIMIT_MAX_C
+#	define THERMAL_LIMIT_MAX_C 140
+#endif
+/* Value the temperature slot is disabled with. */
+#define THERMAL_LIMIT_DISABLED 255
 
 #ifndef RAMP_SPEED_STARTUP
 #	define RAMP_SPEED_STARTUP 2 // adjusted 2.14 to match duty cycle change between mcu targets.
@@ -1172,6 +1408,59 @@
 #	define PHASE_B_COMP LL_COMP_INPUT_MINUS_IO1 // pa4
 #	define PHASE_A_COMP LL_COMP_INPUT_MINUS_IO1 // pa5
 
+#	define PHASE_C_INPUT_PLUS LL_COMP_INPUT_PLUS_IO1 //pa1
+#	define PHASE_B_INPUT_PLUS LL_COMP_INPUT_PLUS_IO1 //pa1
+#	define PHASE_A_INPUT_PLUS LL_COMP_INPUT_PLUS_IO2 //pa3
+
+#	define PHASE_C_EXTI_LINE LL_EXTI_LINE_21
+#	define PHASE_C_COMP_NUMBER COMP1
+
+#	define PHASE_B_EXTI_LINE LL_EXTI_LINE_21
+#	define PHASE_B_COMP_NUMBER COMP1
+
+#	define PHASE_A_EXTI_LINE LL_EXTI_LINE_22
+#	define PHASE_A_COMP_NUMBER COMP2
+
+#endif
+
+#ifdef HARDWARE_GROUP_G4_E
+
+#	define MCU_G431
+#	define USE_TIMER_16_CHANNEL_1
+#	define INPUT_PIN LL_GPIO_PIN_4
+#	define INPUT_PIN_PORT GPIOB
+#	define IC_TIMER_CHANNEL LL_TIM_CHANNEL_CH1
+#	define IC_TIMER_REGISTER TIM16
+#	define IC_TIMER_POINTER htim16
+
+#	define INPUT_DMA_CHANNEL LL_DMA_CHANNEL_1
+#	define DMA_HANDLE_TYPE_DEF hdma_tim16_ch1
+#	define IC_DMA_IRQ_NAME DMA1_Channel1_IRQn
+
+#	define PHASE_A_GPIO_LOW LL_GPIO_PIN_15
+#	define PHASE_A_GPIO_PORT_LOW GPIOB
+#	define AF_A_LOW LL_GPIO_AF_4
+#	define PHASE_A_GPIO_HIGH LL_GPIO_PIN_10
+#	define PHASE_A_GPIO_PORT_HIGH GPIOA
+
+#	define PHASE_B_GPIO_LOW LL_GPIO_PIN_14
+#	define PHASE_B_GPIO_PORT_LOW GPIOB
+#	define PHASE_B_GPIO_HIGH LL_GPIO_PIN_9
+#	define PHASE_B_GPIO_PORT_HIGH GPIOA
+
+#	define PHASE_C_GPIO_LOW LL_GPIO_PIN_13
+#	define PHASE_C_GPIO_PORT_LOW GPIOB
+#	define PHASE_C_GPIO_HIGH LL_GPIO_PIN_8
+#	define PHASE_C_GPIO_PORT_HIGH GPIOA
+
+#	define PHASE_C_COMP LL_COMP_INPUT_MINUS_IO2 // pa0
+#	define PHASE_B_COMP LL_COMP_INPUT_MINUS_IO1 // pa4
+#	define PHASE_A_COMP LL_COMP_INPUT_MINUS_IO1 // pa5
+
+/* Virtual neutral. B and C are on COMP1 and take it from PA1; A is on COMP2,
+ * whose IO1 is not PA1, so it takes it from PA3. PA1 and PA3 are the same
+ * SENS_COMMON net on the board, so all three phases share one reference -
+ * the differing IO index is a pin-mux artifact, not a second divider. */
 #	define PHASE_C_INPUT_PLUS LL_COMP_INPUT_PLUS_IO1 //pa1
 #	define PHASE_B_INPUT_PLUS LL_COMP_INPUT_PLUS_IO1 //pa1
 #	define PHASE_A_INPUT_PLUS LL_COMP_INPUT_PLUS_IO2 //pa3
@@ -2243,7 +2532,9 @@
 #	define INTERVAL_TIMER TIM2
 #	define TEN_KHZ_TIMER TIM6
 #	define UTILITY_TIMER TIM17
-#	define COM_TIMER TIM16
+#	ifndef COM_TIMER
+#		define COM_TIMER TIM16
+#	endif
 #	define APPLICATION_ADDRESS 0x08001000
 #	define MAIN_COMP COMP2
 #	define EXTI_LINE LL_EXTI_LINE_22
@@ -2265,9 +2556,25 @@
 #	ifndef AF_C_LOW
 #		define AF_C_LOW LL_GPIO_AF_6
 #	endif
+#	ifndef CAN_TX_PIN
+#		define CAN_TX_PIN LL_GPIO_PIN_12
+#		define CAN_TX_PORT GPIOA
+#	endif
+#	ifndef CAN_RX_PIN
+#		define CAN_RX_PIN LL_GPIO_PIN_11
+#		define CAN_RX_PORT GPIOA
+#	endif
+#	ifndef VOLTAGE_ADC_PORT
+#		define VOLTAGE_ADC_PORT GPIOA
+#	endif
+#	ifndef CURRENT_ADC_PORT
+#		define CURRENT_ADC_PORT GPIOA
+#	endif
 
 #	define DSHOT_PRIORITY_THRESHOLD 60
-#	define COM_TIMER_IRQ TIM1_UP_TIM16_IRQn
+#	ifndef COM_TIMER_IRQ
+#		define COM_TIMER_IRQ TIM1_UP_TIM16_IRQn
+#	endif
 #endif
 
 #ifdef MCU_GDE23
@@ -2489,6 +2796,19 @@
 #ifndef NOMINAL_PWM
 // use a nominal PWM for commutation via TIM1 of 24kHz
 #	define NOMINAL_PWM 24000U
+#endif
+
+#ifndef ZC_SEARCH_BLANK_64THS
+// half the commutation interval - the long-standing post-commutation blank
+#	define ZC_SEARCH_BLANK_64THS 32
+#endif
+// 64ths of the interval. The default is spelled as the shift it replaces so
+// that leaving the knob alone is provably a no-op - and so the general form's
+// intermediate product cannot overflow on an interval it never sees anyway.
+#if ZC_SEARCH_BLANK_64THS == 32
+#	define ZC_SEARCH_BLANK(interval) ((interval) >> 1)
+#else
+#	define ZC_SEARCH_BLANK(interval) (((uint32_t)(interval) * ZC_SEARCH_BLANK_64THS) >> 6)
 #endif
 
 #ifndef TIM1_AUTORELOAD

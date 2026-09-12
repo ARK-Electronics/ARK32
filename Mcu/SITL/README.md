@@ -191,16 +191,12 @@ obj/ARK32_AM32_SITL_CAN_*.elf --can-uri none --input-type 1
 python3 Mcu/SITL/dshot_test.py --type dshot600 --bidir --edt --throttle 800
 ```
 
-Note that the eeprom default `INPUT_SIGNAL_TYPE` is DRONECAN_IN, which
-disables the PWM/DShot input interrupts at startup — set it to 0/1/2
-first (via `--input-type`, the GUI parameter panel, or
-`dshot_test.py --input-type`). Also be aware of the current firmware
-input arbitration: once any `esc.RawCommand` has been received, the 1kHz
-DroneCAN input keep-alive overrides the `dshot`/`inputSet` flags and
-PWM/DShot input is dead until a reboot (signal timeout after the CAN
-stream stops) followed by zero-throttle re-arming. Running both inputs
-at once exercises exactly this behaviour, which is what the input
-priority/failover parameter work is developing against.
+Default `INPUT_SIGNAL_TYPE` is **AUTO (0)**: wire protocols (DShot/PWM)
+are auto-detected; DroneCAN may run in parallel. While `esc.RawCommand`
+is live (~250 ms failsafe window), CAN owns throttle; when the stream
+stops, wire input can take over without a reboot. Exclusive
+`DRONECAN_IN` (5) still disables PWM/DShot IRQs at startup — use
+`--input-type 5` (or the parameter panel) only when you want CAN-only.
 
 ## macOS
 

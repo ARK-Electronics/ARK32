@@ -74,6 +74,10 @@
       u8 ramp_divider, u8 max_ramp_startup_vcomp, u8 acq_resist,
       u8 desync_episode_bucket                    (v6 ramp settings +
                                                    episode observability)
+      u16 thermal_duty_ceiling, u16 current_duty_ceiling,
+      u16 duty_limit_ceiling, i16 degrees_celsius,
+      i16 degrees_celsius_filtered, i16 actual_current  (v7 protection
+                                                   ceilings)
       Fields are only ever APPENDED and the version is bumped; clients
       that unpack a shorter prefix keep working unchanged (they
       length-check with >=).
@@ -608,9 +612,19 @@ void sitl_state_poll(void)
 			uint8_t max_ramp_startup_vcomp_v;
 			uint8_t acq_resist_v;
 			uint8_t desync_episode_bucket_v;
+			/* v7: protection ceilings. Both are smooth derates that
+			 * only ever LOWER duty, so a test cannot tell them from a
+			 * weak plant by watching rpm alone - it has to read the
+			 * ceiling that produced the derate. */
+			uint16_t thermal_duty_ceiling_v;
+			uint16_t current_duty_ceiling_v;
+			uint16_t duty_limit_ceiling_v;
+			int16_t degrees_celsius_v;
+			int16_t degrees_celsius_filt_v;
+			int16_t actual_current_v;
 		} reply = {
 			.magic = 0x5356,
-			.version = 6,
+			.version = 7,
 			.zero_crosses = zero_crosses,
 			.commutation_interval = commutation_interval,
 			.dropped_edges = motor_zc_dropped(),
@@ -643,6 +657,14 @@ void sitl_state_poll(void)
 			.max_ramp_startup_vcomp_v = max_ramp_startup_vcomp,
 			.acq_resist_v = fault_acq_resist_events,
 			.desync_episode_bucket_v = desync_episode_bucket,
+			.thermal_duty_ceiling_v = thermal_duty_ceiling,
+			/* 2000 when the limiter is disabled, so the field reads as
+			 * "no cap" rather than as a stale integrator value. */
+			.current_duty_ceiling_v = use_current_limit ? (uint16_t)use_current_limit_adjust : 2000u,
+			.duty_limit_ceiling_v = duty_limit_ceiling,
+			.degrees_celsius_v = degrees_celsius,
+			.degrees_celsius_filt_v = degrees_celsius_filtered,
+			.actual_current_v = actual_current,
 		};
 		sendto(fd, &reply, sizeof(reply), 0, (struct sockaddr *)&src, sizeof(src));
 	} else if (cmd == 10 && ret >= 8) {

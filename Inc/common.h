@@ -79,7 +79,12 @@ typedef struct fastPID {
 } fastPID;
 
 /*
-  input signal types
+ * input signal types (eeprom input_type / DroneCAN INPUT_SIGNAL_TYPE)
+ *
+ * AUTO_IN: detect first wire protocol (DShot or PWM). DroneCAN may run in
+ * parallel; while a RawCommand stream is live it owns throttle, otherwise
+ * the detected wire input is used.
+ * DRONECAN_IN: exclusive CAN — DShot/PWM capture IRQs disabled at init.
  */
 enum inputType {
 	AUTO_IN = 0,

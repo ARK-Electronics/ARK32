@@ -82,7 +82,6 @@ def test_racer_hard_spool_cannot_desync_forever_below_acquisition(
         # ~20 desyncs/s, 20 early events per JUMP charge) would either get
         # ramp-backoff help past acquisition, or pile enough charges to latch.
         max_zc = 0
-        max_desync = 0
         saw_running = False
         end = None
         t0 = time.time()
@@ -93,7 +92,6 @@ def test_racer_hard_spool_cannot_desync_forever_below_acquisition(
                 time.sleep(0.05)
                 continue
             max_zc = max(max_zc, s['zero_crosses'])
-            max_desync = max(max_desync, s['desync_happened'])
             if s['running']:
                 saw_running = True
             end = s
@@ -106,13 +104,15 @@ def test_racer_hard_spool_cannot_desync_forever_below_acquisition(
         assert end is not None
 
         acquired = max_zc > 100
-        # Stuck latch / fault path: drive no longer running after many desyncs
-        latched_off = (max_desync >= 20 and end['running'] == 0)
+        # Acq desyncs no longer increment desync_happened (established-only
+        # error_count). Success is acquire past zc 100, or drive stopped by
+        # the acq-rail episode latch — not free-running forever below acq.
+        latched_off = (end['running'] == 0 and not acquired)
 
         assert acquired or latched_off, (
             'acquisition rail did not break free-desync-below-zc100: '
-            'max_zc=%d max_desync=%d end=%r\n%s'
-            % (max_zc, max_desync, end, sitl.log_tail()))
+            'max_zc=%d end=%r\n%s'
+            % (max_zc, end, sitl.log_tail()))
     finally:
         tx.value = 0
         time.sleep(0.5)

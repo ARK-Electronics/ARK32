@@ -1,26 +1,42 @@
 /*
-  sys_can_stm32_CANFD.c - MCU specific CAN FD code for STM32 FDCAN
-
-  based on ArduPilot CANFDIface.cpp driver
+ * sys_can_stm32_CANFD.c - STM32G4 FDCAN, classic CAN and CAN FD.
+ * Shared by the app and the G431 CAN bootloader (compile with -DBOOTLOADER).
+ *
+ * Based on ArduPilot CANFDIface.cpp. Nominal (arbitration) bit timing is
+ * 1 Mbps at 80 MHz. Data-phase timings are the Kvaser/ArduPilot 80 MHz table
+ * (1/2/4/5 Mbps). EEPROM CAN_FD_MBPS 0 auto-matches the host data rate;
+ * 1/2/4/5 pins it. Classic DNA is expected on an FD bus and does not
+ * abort auto-hunt or count as a data-rate match. TX FDF/BRS for
+ * Status/telemetry latches on once an FD frame is received (or
+ * CAN_FD_MBPS is pinned). Data-phase errors retune the hunt; classic RX
+ * must not clear that streak.
  */
 
 #include "targets.h"
 
 #if DRONECAN_SUPPORT && defined(MCU_G431)
 
-// #pragma GCC optimize("O0")
+#	ifdef BOOTLOADER
+#		include "main.h"
+#		include "sys_can.h"
+#		include <blutil.h>
+#		include <string.h>
+#		ifndef MCU_FLASH_START
+#			define MCU_FLASH_START 0x08000000
+#		endif
+#		ifndef EEPROM_START_ADD
+#			define EEPROM_START_ADD (MCU_FLASH_START + 0x1f800)
+#		endif
+#		define EEPROM_FD_MBPS_OFF 185
+#	else
+#		include "eeprom.h"
+#		include "functions.h"
+#		include "sys_can.h"
+#		include <string.h>
+#	endif
 
-#	include "sys_can.h"
-#	include "functions.h"
-#	include <string.h>
-
-// FDCAN Frame buffer - 18 words per frame
 #	define FDCAN_FRAME_BUFFER_SIZE 18
 
-// Message RAM Allocations for STM32G4
-#	define MAX_FILTER_LIST_SIZE 80U
-#	define FDCAN_NUM_RXFIFO0_SIZE 104U
-#	define FDCAN_TX_FIFO_BUFFER_SIZE 128U
 #	define FDCAN_MESSAGERAM_STRIDE 0x350
 #	define FDCAN_EXFILTER_OFFSET 0x70
 #	define FDCAN_RXFIFO0_OFFSET 0xB0
@@ -29,30 +45,35 @@
 
 #	define FDCAN_RXF0S_F0GI_SHIFT 8
 #	define FDCAN_RXF1S_F1GI_SHIFT 8
-#	define FDCAN_TXFQS_TFGI_SHIFT 8
 
-// CAN ID masks (used for frame parsing)
 #	define MaskStdID 0x7FFU
 #	define MaskExtID 0x1FFFFFFFU
 
-// Message RAM element structures
+#	define FDCAN_ELMT_FDF (1U << 21)
+#	define FDCAN_ELMT_BRS (1U << 20)
+
+/* TDC offset 10 × 12.5 ns = 125 ns (MCP2557FD-class transceiver delay). */
+#	define FDCAN_TDCO_TICKS 10U
+#	define FD_ERR_STREAK_RETUNE 32U
+#	define FD_HUNT_MIN_MS 50U
+#	define FD_HUNT_DWELL_MS 250U
+
 typedef struct {
 	uint32_t id_flags;
 	uint32_t dlc_timestamp;
-	uint32_t data[16]; // Up to 64 bytes for CANFD
+	uint32_t data[16];
 } RxMessageRAM;
 
 typedef struct {
 	uint32_t id_flags;
 	uint32_t dlc_flags;
-	uint32_t data[16]; // Up to 64 bytes for CANFD
+	uint32_t data[16];
 } TxMessageRAM;
 
 volatile struct {
 	uint32_t rx_overflow;
 } can_stats;
 
-// Message RAM addresses (for STM32G4, these are at fixed offsets)
 static uint32_t MessageRam_StandardFilterSA;
 static uint32_t MessageRam_ExtendedFilterSA;
 static uint32_t MessageRam_RxFIFO0SA;
@@ -60,48 +81,118 @@ static uint32_t MessageRam_RxFIFO1SA;
 static uint32_t MessageRam_TxFIFOQSA;
 
 /*
-  setup message RAM for FDCAN1 on STM32G4
-*/
+ * Data-phase timings at 80 MHz FDCAN kernel clock.
+ * Values are real (prescaler, bs1, bs2, sjw); registers store minus one.
+ * Auto-scan order: 5 Mbps (product max) then 4, 2, 1.
+ */
+static const struct {
+	uint8_t mbps;
+	uint8_t prescaler;
+	uint8_t bs1;
+	uint8_t bs2;
+	uint8_t sjw;
+} fd_timings[] = {
+	{5, 1, 11, 4, 4},
+	{4, 1, 14, 5, 5},
+	{2, 2, 14, 5, 5},
+	{1, 4, 14, 5, 5},
+};
+
+static uint8_t fd_idx;
+static uint8_t fd_auto;
+static uint8_t fd_locked;
+static uint16_t fd_err_streak;
+static volatile uint8_t fd_need_retune;
+static uint32_t fd_hunt_start_ms;
+
+static uint8_t dlc_to_len(uint8_t dlc)
+{
+	static const uint8_t map[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64};
+	return map[dlc & 0xF];
+}
+
+static uint8_t len_to_dlc(uint8_t len)
+{
+	if (len <= 8) {
+		return len;
+	}
+	if (len <= 12) {
+		return 9;
+	}
+	if (len <= 16) {
+		return 10;
+	}
+	if (len <= 20) {
+		return 11;
+	}
+	if (len <= 24) {
+		return 12;
+	}
+	if (len <= 32) {
+		return 13;
+	}
+	if (len <= 48) {
+		return 14;
+	}
+	return 15;
+}
+
+static int8_t fd_idx_for_mbps(uint8_t mbps)
+{
+	for (uint8_t i = 0; i < (uint8_t)(sizeof(fd_timings) / sizeof(fd_timings[0])); i++) {
+		if (fd_timings[i].mbps == mbps) {
+			return (int8_t)i;
+		}
+	}
+	return -1;
+}
+
+static void apply_fd_timings(uint8_t idx)
+{
+	const uint8_t n = (uint8_t)(sizeof(fd_timings) / sizeof(fd_timings[0]));
+	if (idx >= n) {
+		idx = 0;
+	}
+	const uint8_t presc = fd_timings[idx].prescaler;
+	const uint8_t bs1 = fd_timings[idx].bs1;
+	const uint8_t bs2 = fd_timings[idx].bs2;
+	const uint8_t sjw = fd_timings[idx].sjw;
+	FDCAN1->DBTP = (((uint32_t)(sjw - 1) << FDCAN_DBTP_DSJW_Pos) | ((uint32_t)(bs1 - 1) << FDCAN_DBTP_DTSEG1_Pos) |
+			((uint32_t)(bs2 - 1) << FDCAN_DBTP_DTSEG2_Pos) | ((uint32_t)(presc - 1) << FDCAN_DBTP_DBRP_Pos) | FDCAN_DBTP_TDC);
+	FDCAN1->TDCR = (FDCAN_TDCO_TICKS << FDCAN_TDCR_TDCO_Pos);
+	fd_idx = idx;
+}
+
 static void setupMessageRam(void)
 {
-	// For FDCAN1, self_index = 0, so base = SRAMCAN_BASE + 0
 	const uint32_t base = SRAMCAN_BASE + FDCAN_MESSAGERAM_STRIDE * 0;
 
-	// Clear message RAM for this interface
 	memset((void *)base, 0, FDCAN_MESSAGERAM_STRIDE);
 
-	// Store message RAM addresses at fixed offsets
 	MessageRam_StandardFilterSA = base;
 	MessageRam_ExtendedFilterSA = base + FDCAN_EXFILTER_OFFSET;
 	MessageRam_RxFIFO0SA = base + FDCAN_RXFIFO0_OFFSET;
 	MessageRam_RxFIFO1SA = base + FDCAN_RXFIFO1_OFFSET;
 	MessageRam_TxFIFOQSA = base + FDCAN_TXFIFO_OFFSET;
 
-	// Set TXBC to 0 for FIFO mode (STM32G4 specific)
 	FDCAN1->TXBC = 0;
+	(void)MessageRam_StandardFilterSA;
+	(void)MessageRam_ExtendedFilterSA;
 }
 
-/*
-  send a CAN frame
-*/
 static bool can_send(const CanardCANFrame *frame)
 {
-	// Check if Tx FIFO is full
 	if ((FDCAN1->TXFQS & FDCAN_TXFQS_TFQF) != 0) {
-		return false; // No space
+		return false;
 	}
 
-	// Get put index
 	uint32_t put_index = (FDCAN1->TXFQS & FDCAN_TXFQS_TFQPI) >> FDCAN_TXFQS_TFQPI_Pos;
 
-	// Calculate address in message RAM using stored base address
 	volatile TxMessageRAM *tx_mailbox = (volatile TxMessageRAM *)(MessageRam_TxFIFOQSA + (put_index * FDCAN_FRAME_BUFFER_SIZE * 4));
 
-	// Setup ID and flags
 	if (frame->id & CANARD_CAN_FRAME_EFF) {
 		tx_mailbox->id_flags = (frame->id & MaskExtID) | (1U << 30);
 	} else {
-		// Standard ID
 		tx_mailbox->id_flags = (frame->id & MaskStdID) << 18;
 	}
 
@@ -109,16 +200,25 @@ static bool can_send(const CanardCANFrame *frame)
 		tx_mailbox->id_flags |= (1U << 29);
 	}
 
-	// Setup DLC
-	tx_mailbox->dlc_flags = (frame->data_len << 16);
+	const uint8_t dlc = len_to_dlc(frame->data_len);
+	uint32_t dlc_flags = ((uint32_t)dlc << 16);
+#	if CANARD_ENABLE_CANFD
+	if (frame->canfd) {
+		dlc_flags |= FDCAN_ELMT_FDF | FDCAN_ELMT_BRS;
+	}
+#	endif
+	tx_mailbox->dlc_flags = dlc_flags;
 
-	// Copy data
+	uint8_t nbytes = frame->data_len;
+	if (nbytes > 64) {
+		nbytes = 64;
+	}
+	const uint8_t nwords = (uint8_t)((nbytes + 3) / 4);
 	const uint32_t *data_ptr = (const uint32_t *)frame->data;
-	for (int i = 0; i < 2; i++) {
+	for (uint8_t i = 0; i < nwords; i++) {
 		tx_mailbox->data[i] = data_ptr[i];
 	}
 
-	// Request transmission
 	FDCAN1->TXBAR = (1U << put_index);
 
 	return true;
@@ -133,19 +233,15 @@ static void handleRxInterrupt(uint8_t fifo_index)
 	uint32_t get_index_mask = (fifo_index == 0) ? FDCAN_RXF0S_F0GI : FDCAN_RXF1S_F1GI;
 	uint32_t get_index_shift = (fifo_index == 0) ? FDCAN_RXF0S_F0GI_SHIFT : FDCAN_RXF1S_F1GI_SHIFT;
 
-	// Check if FIFO has messages
 	if ((*fifo_status_reg & fifo_level_mask) == 0) {
 		return;
 	}
 
-	// Get the get index
 	uint32_t get_index = (*fifo_status_reg & get_index_mask) >> get_index_shift;
 
-	// Calculate address in message RAM
 	uint32_t rx_fifo_addr = (fifo_index == 0) ? MessageRam_RxFIFO0SA : MessageRam_RxFIFO1SA;
 	volatile RxMessageRAM *rx_mailbox = (volatile RxMessageRAM *)(rx_fifo_addr + (get_index * FDCAN_FRAME_BUFFER_SIZE * 4));
 
-	// Read the frame
 	CanardCANFrame frame = {};
 
 	uint32_t id_flags = rx_mailbox->id_flags;
@@ -159,55 +255,68 @@ static void handleRxInterrupt(uint8_t fifo_index)
 		frame.id |= CANARD_CAN_FRAME_RTR;
 	}
 
-	// Get DLC
-	uint32_t dlc = (rx_mailbox->dlc_timestamp >> 16) & 0xF;
-	frame.data_len = dlc;
+	const uint32_t dlc_word = rx_mailbox->dlc_timestamp;
+	const uint8_t dlc = (uint8_t)((dlc_word >> 16) & 0xF);
+	const bool is_fd = (dlc_word & FDCAN_ELMT_FDF) != 0;
+#	if CANARD_ENABLE_CANFD
+	frame.canfd = is_fd;
+	frame.data_len = is_fd ? dlc_to_len(dlc) : (dlc > 8 ? 8 : dlc);
+#	else
+	(void)is_fd;
+	frame.data_len = dlc > 8 ? 8 : dlc;
+#	endif
 
-	// Copy data
+	uint8_t nbytes = frame.data_len;
+	if (nbytes > (uint8_t)sizeof(frame.data)) {
+		nbytes = (uint8_t)sizeof(frame.data);
+		frame.data_len = nbytes;
+	}
+	const uint8_t nwords = (uint8_t)((nbytes + 3) / 4);
 	uint32_t *data_ptr = (uint32_t *)frame.data;
-	for (int i = 0; i < 2; i++) {
+	for (uint8_t i = 0; i < nwords; i++) {
 		data_ptr[i] = rx_mailbox->data[i];
 	}
 
-	// Acknowledge the read
 	*fifo_ack_reg = get_index;
 
-	// Process the frame
+	if (is_fd) {
+		fd_err_streak = 0;
+		fd_locked = 1;
+	}
+
 	DroneCAN_handleFrame(&frame);
 }
 
-static void handleTxCompleteInterrupt(void)
-{
-	// Nothing to do in simple bootloader mode
-}
+static void handleTxCompleteInterrupt(void) {}
 
 static void pollErrorFlagsFromISR(void)
 {
-	// Simple error handling
-	uint32_t ecr = FDCAN1->ECR;
-	(void)ecr;
+	const uint8_t cel = (uint8_t)(FDCAN1->ECR >> 16);
+	if (cel == 0) {
+		return;
+	}
+	if (fd_auto && !fd_locked) {
+		if (fd_err_streak < 0xFFFF) {
+			fd_err_streak++;
+		}
+		if (fd_err_streak >= FD_ERR_STREAK_RETUNE) {
+			fd_need_retune = 1;
+			fd_err_streak = 0;
+		}
+	}
 }
 
-/*
-  get a 16 byte unique ID for this node
-*/
 void sys_can_getUniqueID(uint8_t id[16])
 {
-	// Use CMSIS UID_BASE definition
 	const uint8_t *uidbase = (const uint8_t *)UID_BASE;
 	memcpy(id, uidbase, 12);
 
-	// put CPU ID in last 4 bytes
 	const uint32_t cpuid = SCB->CPUID;
 	memcpy(&id[12], &cpuid, 4);
 }
 
-/*
-  interrupt handlers for FDCAN1
-*/
 void FDCAN1_IT0_IRQHandler(void)
 {
-	// Rx FIFO interrupts
 	if ((FDCAN1->IR & FDCAN_IR_RF0N) || (FDCAN1->IR & FDCAN_IR_RF0F)) {
 		FDCAN1->IR = FDCAN_IR_RF0N | FDCAN_IR_RF0F;
 		handleRxInterrupt(0);
@@ -223,62 +332,48 @@ void FDCAN1_IT0_IRQHandler(void)
 
 void FDCAN1_IT1_IRQHandler(void)
 {
-	// Tx complete interrupt
 	if (FDCAN1->IR & FDCAN_IR_TC) {
 		FDCAN1->IR = FDCAN_IR_TC;
 		handleTxCompleteInterrupt();
 	}
 
-	// Bus off interrupt
 	if (FDCAN1->IR & FDCAN_IR_BO) {
 		FDCAN1->IR = FDCAN_IR_BO;
-		// Try to recover from bus off
 		FDCAN1->CCCR &= ~FDCAN_CCCR_INIT;
 	}
+
+#	ifndef BOOTLOADER
+	if (FDCAN1->IR & (FDCAN_IR_PED | FDCAN_IR_PEA)) {
+		FDCAN1->IR = FDCAN_IR_PED | FDCAN_IR_PEA;
+	}
+#	endif
 
 	pollErrorFlagsFromISR();
 }
 
-/*
-  try to transmit a frame.
-  return 1 for success, 0 for no space, -ve for failure
- */
 int16_t sys_can_transmit(const CanardCANFrame *txf)
 {
 	return can_send(txf) ? 1 : 0;
 }
 
-/*
-  check for an incoming frame
-  return 1 on new frame, 0 for no frame, -ve for error
- */
 int16_t sys_can_receive(CanardCANFrame *rx_frame)
 {
-	// not used on STM32 with interrupt-driven receive
+	(void)rx_frame;
 	return -1;
 }
 
-/*
-  disable CAN IRQs
- */
 void sys_can_disable_IRQ(void)
 {
 	NVIC_DisableIRQ(FDCAN1_IT0_IRQn);
 	NVIC_DisableIRQ(FDCAN1_IT1_IRQn);
 }
 
-/*
-  enable CAN IRQs
- */
 void sys_can_enable_IRQ(void)
 {
 	NVIC_EnableIRQ(FDCAN1_IT0_IRQn);
 	NVIC_EnableIRQ(FDCAN1_IT1_IRQn);
 }
 
-/*
-  wait for register bit to change state
-*/
 static bool waitForBitState(volatile uint32_t *reg, uint32_t mask, bool target_state)
 {
 	while (true) {
@@ -290,54 +385,38 @@ static bool waitForBitState(volatile uint32_t *reg, uint32_t mask, bool target_s
 	return false;
 }
 
-/*
-  init code should be small, not fast
- */
 #	pragma GCC optimize("Os")
 
 static void can_init(void)
 {
-	// Enable FDCAN clock
 	RCC->APB1ENR1 |= RCC_APB1ENR1_FDCANEN;
 
-	// Wait for clock to stabilize
 	for (volatile int i = 0; i < 10000; i++) {
 		__NOP();
 	}
 
-	// Perform reset
 	RCC->APB1RSTR1 |= RCC_APB1RSTR1_FDCANRST;
 	RCC->APB1RSTR1 &= ~RCC_APB1RSTR1_FDCANRST;
 
-	// Wait after reset
 	for (volatile int i = 0; i < 100; i++) {
 		__NOP();
 	}
 
-	// Note: PLL_Q must be configured to output 80 MHz
-	// This should be done in bl_clock_config() by enabling PLL Q domain
-	// with Q divider = 4 (VCO 320 MHz / 4 = 80 MHz)
-
-	// Exit sleep mode
 	FDCAN1->CCCR &= ~FDCAN_CCCR_CSR;
 
-	// Wait for sleep mode to exit
 	if (!waitForBitState(&FDCAN1->CCCR, FDCAN_CCCR_CSA, false)) {
-		return; // Failed to exit sleep mode
+		return;
 	}
 
-	// Enter initialization mode
 	FDCAN1->CCCR |= FDCAN_CCCR_INIT;
 
-	// Wait for initialization mode (with timeout)
 	if (!waitForBitState(&FDCAN1->CCCR, FDCAN_CCCR_INIT, true)) {
-		return; // Failed to enter init mode
+		return;
 	}
 
-	// Enable configuration change
 	FDCAN1->CCCR |= FDCAN_CCCR_CCE;
 
-	// Configure bit timing for 1 Mbps with 80 MHz FDCAN clock
+	/* 1 Mbps nominal, 80 MHz kernel clock, 10 tq, 90% sample point. */
 	const uint8_t sjw = 1;
 	const uint8_t bs1 = 8;
 	const uint8_t bs2 = 1;
@@ -346,57 +425,130 @@ static void can_init(void)
 	FDCAN1->NBTP = (((sjw - 1) << FDCAN_NBTP_NSJW_Pos) | ((bs1 - 1) << FDCAN_NBTP_NTSEG1_Pos) | ((bs2 - 1) << FDCAN_NBTP_NTSEG2_Pos) |
 			((prescaler - 1) << FDCAN_NBTP_NBRP_Pos));
 
-	// Setup message RAM
+	apply_fd_timings(fd_idx);
+
+	FDCAN1->CCCR |= FDCAN_CCCR_FDOE | FDCAN_CCCR_BRSE;
+
 	setupMessageRam();
 
-	// Clear all interrupts
 	FDCAN1->IR = 0x3FFFFFFF;
 
-	// Configure interrupts
-	FDCAN1->IE = FDCAN_IE_RF0NE | // Rx FIFO 0 new message
-		     FDCAN_IE_RF0FE | // Rx FIFO 0 Full
-		     FDCAN_IE_RF1NE | // Rx FIFO 1 new message
-		     FDCAN_IE_RF1FE | // Rx FIFO 1 Full
-		     FDCAN_IE_TCE |   // Transmission complete
-		     FDCAN_IE_BOE;    // Bus off
+	FDCAN1->IE = FDCAN_IE_RF0NE | FDCAN_IE_RF0FE | FDCAN_IE_RF1NE | FDCAN_IE_RF1FE | FDCAN_IE_TCE | FDCAN_IE_BOE
+#	ifndef BOOTLOADER
+		     | FDCAN_IE_PEDE | FDCAN_IE_PEAE
+#	endif
+		;
 
-	// Route interrupts
 	FDCAN1->ILS = FDCAN_ILS_PERR | FDCAN_ILS_SMSG;
 
-	// Configure Tx Buffer Transmission Interrupt Enable for STM32G4
 	FDCAN1->TXBTIE = 0x7;
 
-	// Enable both interrupt lines
 	FDCAN1->ILE = 0x3;
 
-	// Leave initialization mode
 	FDCAN1->CCCR &= ~FDCAN_CCCR_INIT;
 
-	// Wait for normal mode
 	waitForBitState(&FDCAN1->CCCR, FDCAN_CCCR_INIT, false);
 }
 
-/*
-  initialise CAN hardware
- */
+static void fd_select_initial_rate(void)
+{
+#	ifdef BOOTLOADER
+	const uint8_t *eeprom = (const uint8_t *)EEPROM_START_ADD;
+	uint8_t want = eeprom[EEPROM_FD_MBPS_OFF];
+	if (eeprom[0] != 1) {
+		want = 0;
+	}
+#	else
+	const uint8_t want = eepromBuffer.can.fd_mbps;
+#	endif
+	const int8_t idx = fd_idx_for_mbps(want);
+	if (want == 0 || idx < 0) {
+		fd_auto = 1;
+		fd_locked = 0;
+		fd_idx = 0; /* 5 Mbps, product max */
+	} else {
+		fd_auto = 0;
+		fd_locked = 1;
+		fd_idx = (uint8_t)idx;
+	}
+	fd_err_streak = 0;
+	fd_need_retune = 0;
+}
+
+bool sys_can_prefer_canfd_tx(void)
+{
+	return fd_locked != 0;
+}
+
+static uint32_t fd_now_ms(void)
+{
+#	ifdef BOOTLOADER
+	return LL_TIM_GetCounter(BL_TIMER) / 1000u;
+#	else
+	static uint32_t base_us;
+	static uint16_t last;
+	const uint16_t cnt = get_timer_us16();
+	if (cnt < last) {
+		base_us += 0x10000u;
+	}
+	last = cnt;
+	return (base_us + cnt) / 1000u;
+#	endif
+}
+
+static void fd_retune_next(void)
+{
+	const uint8_t n = (uint8_t)(sizeof(fd_timings) / sizeof(fd_timings[0]));
+	const uint8_t next = (uint8_t)((fd_idx + 1) % n);
+
+	FDCAN1->CCCR |= FDCAN_CCCR_INIT;
+	if (!waitForBitState(&FDCAN1->CCCR, FDCAN_CCCR_INIT, true)) {
+		return;
+	}
+	FDCAN1->CCCR |= FDCAN_CCCR_CCE;
+	apply_fd_timings(next);
+	FDCAN1->CCCR |= FDCAN_CCCR_FDOE | FDCAN_CCCR_BRSE;
+	FDCAN1->CCCR &= ~FDCAN_CCCR_INIT;
+	waitForBitState(&FDCAN1->CCCR, FDCAN_CCCR_INIT, false);
+	fd_err_streak = 0;
+	fd_need_retune = 0;
+	fd_hunt_start_ms = fd_now_ms();
+}
+
+void sys_can_service(void)
+{
+	if (!fd_auto || fd_locked) {
+		fd_need_retune = 0;
+		return;
+	}
+	const uint32_t elapsed = fd_now_ms() - fd_hunt_start_ms;
+	if ((fd_need_retune && elapsed >= FD_HUNT_MIN_MS) || elapsed >= FD_HUNT_DWELL_MS) {
+		fd_retune_next();
+	}
+}
+
 void sys_can_init(void)
 {
-	// Setup CAN RX and TX pins
-	// assumes PA11/PA12 for FDCAN1
-	LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOA);
-
 	LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
-	GPIO_InitStruct.Pin = LL_GPIO_PIN_11 | LL_GPIO_PIN_12;
 	GPIO_InitStruct.Mode = LL_GPIO_MODE_ALTERNATE;
 	GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
 	GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
 	GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_VERY_HIGH;
-	GPIO_InitStruct.Alternate = LL_GPIO_AF_9; // AF9 for FDCAN1
-	LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+	GPIO_InitStruct.Alternate = LL_GPIO_AF_9;
 
+	LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOA);
+	LL_AHB2_GRP1_EnableClock(LL_AHB2_GRP1_PERIPH_GPIOB);
+
+	GPIO_InitStruct.Pin = CAN_RX_PIN;
+	LL_GPIO_Init(CAN_RX_PORT, &GPIO_InitStruct);
+
+	GPIO_InitStruct.Pin = CAN_TX_PIN;
+	LL_GPIO_Init(CAN_TX_PORT, &GPIO_InitStruct);
+
+	fd_select_initial_rate();
 	can_init();
+	fd_hunt_start_ms = fd_now_ms();
 
-	// Enable interrupt for CAN receive and transmit
 	NVIC_SetPriority(FDCAN1_IT0_IRQn, 5);
 	NVIC_SetPriority(FDCAN1_IT1_IRQn, 5);
 	NVIC_EnableIRQ(FDCAN1_IT0_IRQn);
@@ -415,4 +567,32 @@ void set_rtc_backup_register(uint8_t idx, uint32_t value)
 	bkp[idx] = value;
 }
 
-#endif // DRONECAN_SUPPORT && defined(MCU_G431)
+void setup_portpin(uint16_t portpin, bool enable)
+{
+	const uint8_t port = portpin >> 8;
+	const uint8_t pin = portpin & 0xff;
+	const uint32_t pinshift = 1U << pin;
+	GPIO_TypeDef *const ports[] = {GPIOA, GPIOB, GPIOC};
+	if (port >= sizeof(ports) / sizeof(ports[0])) {
+		return;
+	}
+	GPIO_TypeDef *pport = ports[port];
+
+	LL_AHB2_GRP1_EnableClock(1U << port);
+
+	if (enable) {
+		LL_GPIO_SetOutputPin(pport, pinshift);
+	} else {
+		LL_GPIO_ResetOutputPin(pport, pinshift);
+	}
+
+	LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
+	GPIO_InitStruct.Pin = pinshift;
+	GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
+	GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
+	GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+	GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+	LL_GPIO_Init(pport, &GPIO_InitStruct);
+}
+
+#endif /* DRONECAN_SUPPORT && defined(MCU_G431) */

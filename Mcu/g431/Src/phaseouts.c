@@ -6,6 +6,7 @@
  */
 #include "phaseouts.h"
 
+#include "gate_driver.h"
 #include "targets.h"
 
 extern char prop_brake_active;
@@ -36,6 +37,7 @@ void proportionalBrake()
 	// alternate mode and turn upper OFF for each
 	// channel
 	// turn all HIGH channels off for ABC
+	gateDriverEnsure();
 
 	LL_GPIO_SetPinMode(PHASE_A_GPIO_PORT_HIGH, PHASE_A_GPIO_HIGH, LL_GPIO_MODE_OUTPUT);
 	PHASE_A_GPIO_PORT_HIGH->HIGH_BITREG_OFF = PHASE_A_GPIO_HIGH;
@@ -264,6 +266,7 @@ void allOff()
 
 void comStep(int newStep)
 {
+	gateDriverEnsure();
 	// TIM14->CNT = 0;
 	switch (newStep) {
 		case 1: // A-B
@@ -308,6 +311,7 @@ void comStep(int newStep)
 
 void fullBrake()
 { // full braking shorting all low sides
+	gateDriverEnsure();
 	phaseALOW();
 	phaseBLOW();
 	phaseCLOW();
@@ -315,6 +319,7 @@ void fullBrake()
 
 void allpwm()
 { // for stepper_sine
+	gateDriverEnsure();
 	phaseAPWM();
 	phaseBPWM();
 	phaseCPWM();

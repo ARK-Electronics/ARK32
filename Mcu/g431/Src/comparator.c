@@ -32,6 +32,7 @@
 #include "comparator.h"
 
 #include "common.h"
+#include "motor_runtime.h"
 #include "targets.h"
 
 COMP_TypeDef *active_COMP = COMP2;
@@ -81,6 +82,51 @@ void changeCompInput()
 
 		LL_COMP_ConfigInputs(active_COMP, PHASE_B_COMP, PHASE_B_INPUT_PLUS);
 	}
+	/*
+	 * G4 dual-COMP path: F051 enables hyst whenever CI is slow. On this 12S
+	 * free-run high-KV article, pure free-run BEMF can sit near/under 10 mV
+	 * at crawl RPM — always-on 10 mV hyst blocked real edges and latched
+	 * stuck-rotor at 5–6% (bench 2026-08). Only add hyst when the interval
+	 * is slow AND duty is already into a real drive (loaded start / prop),
+	 * where F051 is clean and BEMF is larger. Free-run crawl stays NONE.
+	 *
+	 * Turning hysteresis UP is a standing suggestion for the low-rpm noise
+	 * and it is the wrong direction on this part. DS13122 Rev 4 Table 73:
+	 * LL_COMP_HYSTERESIS_10MV is HYST = 1, which is 9 mV typical but up to
+	 * 16 mV, on top of an input offset of -9..+3 mV. The next step up
+	 * (HYST = 2) is 18 mV typical and up to 32 mV. Against a signal of
+	 * ~132 mV at 1000 rpm falling linearly with speed, code 1 already
+	 * consumes a worst-case 25 mV of the crawl budget - which is what the
+	 * 2026-08 bench saw as blocked edges and a latched stuck rotor. The
+	 * hysteresis knob is out of room here; noise has to be rejected in
+	 * time (ZC_SEARCH_BLANK_64THS, COMP_BLANK_TICKS) or the signal has to
+	 * be read with something that has a lower floor than the comparator.
+	 */
+	if (average_interval >= 400 && duty_cycle > 200) {
+		LL_COMP_SetInputHysteresis(COMP1, LL_COMP_HYSTERESIS_10MV);
+		LL_COMP_SetInputHysteresis(COMP2, LL_COMP_HYSTERESIS_10MV);
+	} else {
+		LL_COMP_SetInputHysteresis(COMP1, LL_COMP_HYSTERESIS_NONE);
+		LL_COMP_SetInputHysteresis(COMP2, LL_COMP_HYSTERESIS_NONE);
+	}
+#ifdef COMP_BLANK_TICKS
+	/*
+	 * ST G4 COMP blanking forces the output LOW (not hold-last). That only
+	 * blanks cleanly on falling-BEMF steps (pre-cross low / rising EXTI). On
+	 * rising-BEMF it manufactures falling edges into EXTI. Arm TIM1 OC5 only
+	 * when rising == 0; leave rising steps ungated.
+	 *
+	 * Full design note (ideal hold-last vs ST force-low, Alka, sizing,
+	 * alternatives): doc/g431-comp-blanking.md
+	 */
+	if (rising) {
+		LL_COMP_SetOutputBlankingSource(COMP1, LL_COMP_BLANKINGSRC_NONE);
+		LL_COMP_SetOutputBlankingSource(COMP2, LL_COMP_BLANKINGSRC_NONE);
+	} else {
+		LL_COMP_SetOutputBlankingSource(COMP1, LL_COMP_BLANKINGSRC_TIM1_OC5_COMP1);
+		LL_COMP_SetOutputBlankingSource(COMP2, LL_COMP_BLANKINGSRC_TIM1_OC5_COMP2);
+	}
+#endif
 	if (rising) {
 		LL_EXTI_DisableRisingTrig_0_31(LL_EXTI_LINE_22);
 		LL_EXTI_DisableRisingTrig_0_31(LL_EXTI_LINE_21);

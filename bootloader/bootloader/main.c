@@ -1,0 +1,1516 @@
+/*
+  bootloader for AM32 ESC firmware
+
+  based on https://github.com/AlkaMotors/AT32F421_AM32_Bootloader
+ */
+#include <main.h>
+#include <stdio.h>
+
+#include <version.h>
+
+/* Includes ------------------------------------------------------------------*/
+#include <stdbool.h>
+#include <stdio.h>
+
+//#pragma GCC optimize("O0")
+
+#include <eeprom.h>
+
+//#define USE_ADC_INPUT      // will go right to application and ignore eeprom
+//#define UPDATE_EEPROM_ENABLE
+
+// use this to check the clock config for the MCU (with a logic
+// analyser on the input pin)
+//#define BOOTLOADER_TEST_CLOCK
+
+// use this to check the string output code. When enabled
+// the string HELLO_WORLD is output every 10ms
+//#define BOOTLOADER_TEST_STRING
+
+// use this to check the backup domain registers work
+//#define BOOTLOADER_TEST_BKUP
+
+// when there is no app fw yet, disable jump()
+//#define DISABLE_JUMP
+
+// optionally enable stats on serial bit-banging
+//#define SERIAL_STATS
+
+/*
+  enable checking for software reset for jump.
+  generally on a software reset we do want to stay in the bootloader
+  if the signal pin is floating, but disabling this can be useful for
+  CAN testing
+*/
+#define CHECK_SOFTWARE_RESET 1
+
+/*
+  enable checking for eeprom configured before jump
+  disabling this can be useful for CAN development
+*/
+#define CHECK_EEPROM_BEFORE_JUMP 1
+
+/*
+  should we update the bootloader version in eeprom?
+ */
+#define UPDATE_EEPROM_ENABLE 1
+
+/*
+  should checkForSignal() look for a bootloader client that is already
+  sending when we power up? Without this the level checks read 19200
+  traffic as a pin that has been pulled low and boot the application
+  instead of answering. Targets with no room left in a 4k bootloader
+  region turn it off in their makefile.
+ */
+#ifndef DETECT_SERIAL_CLIENT
+#define DETECT_SERIAL_CLIENT 1
+#endif
+
+#include <string.h>
+
+#ifndef MCU_FLASH_START
+#define MCU_FLASH_START 0x08000000
+#endif
+
+#ifndef FIRMWARE_RELATIVE_START
+// note: DRONECAN_SUPPORT is always defined (0 or 1) by the build, so test its
+// value rather than defined(), to match the convention used elsewhere
+#if defined(MCXA153) || DRONECAN_SUPPORT
+#define FIRMWARE_RELATIVE_START 0x4000
+#else
+#define FIRMWARE_RELATIVE_START 0x1000
+#endif
+#endif
+
+#ifndef EEPROM_MAX_SIZE
+#define EEPROM_MAX_SIZE 1024 // must be multiple of 256
+#endif
+
+#ifdef USE_PA2
+#define input_pin        GPIO_PIN(2)
+#define input_port       GPIOA
+#define PIN_NUMBER       2
+#define PORT_LETTER      0
+#elif defined(USE_PB4)
+#define input_pin         GPIO_PIN(4)
+#define input_port        GPIOB
+#define PIN_NUMBER        4
+#define PORT_LETTER       1
+#elif defined(USE_PA15)
+#define input_pin         GPIO_PIN(15)
+#define input_port        GPIOA
+#define PIN_NUMBER        15
+#define PORT_LETTER       0
+#elif defined(USE_PA6)
+#define input_pin         GPIO_PIN(6)
+#define input_port        GPIOA
+#define PIN_NUMBER        6
+#define PORT_LETTER       0
+#elif defined(USE_PA0)
+#define input_pin         GPIO_PIN(0)
+#define input_port        GPIOA
+#define PIN_NUMBER        0
+#define PORT_LETTER       0
+#elif defined(USE_PB2)
+#define input_pin         GPIO_PIN(2)
+#define input_port        GPIOB
+#define PIN_NUMBER        2
+#define PORT_LETTER       1
+#elif defined(USE_PC6)
+#define input_pin         GPIO_PIN(6)
+#define input_port        GPIOC
+#define PIN_NUMBER        6
+#define PORT_LETTER       2
+#else
+#error "Bootloader comms pin not defined"
+#endif
+
+static uint16_t invalid_command;
+
+#include <blutil.h>
+
+// default no-op LED functions if not provided by blutil.h (USE_RGB_LED)
+#ifndef USE_RGB_LED
+static inline void bl_led_init(void) {}
+static inline void bl_led_on(void) {}
+static inline void bl_led_off(void) {}
+static inline void bl_led_red_on(void) {}
+#endif
+
+#ifdef USE_RGB_LED
+/*
+  blink RGB LEDs while stuck in the bootloader
+  - normal: blink all LEDs at ~2.5Hz
+  - error:  blink red only
+ */
+static uint16_t led_timer_start;
+static uint8_t led_blink_counter;
+static bool led_error_mode;
+
+static void __attribute__((unused)) bl_led_set_error(bool error)
+{
+  led_error_mode = error;
+}
+
+static void bl_led_update(void)
+{
+  const uint16_t now = bl_timer_us();
+  if ((uint16_t)(now - led_timer_start) < 25000U) {
+    return;
+  }
+  led_timer_start = now;
+  led_blink_counter++;
+  if (led_blink_counter & 0x08) {
+    if (led_error_mode) {
+      bl_led_red_on();
+    } else {
+      bl_led_on();
+    }
+  } else {
+    bl_led_off();
+  }
+}
+#endif // USE_RGB_LED
+
+#if DRONECAN_SUPPORT
+#include "DroneCAN/DroneCAN.h"
+#include "sys_can.h"
+#endif
+
+#ifndef BOARD_FLASH_SIZE
+#error "must define BOARD_FLASH_SIZE"
+#endif
+
+#define PIN_CODE (PORT_LETTER << 4 | PIN_NUMBER)
+
+/*
+  currently only support 32, 64 or 128 k flash
+ */
+#ifdef NXP
+#ifndef FLASH_SECTOR_SIZE
+#error "must define FLASH_SECTOR_SIZE"
+#endif
+
+#if BOARD_FLASH_SIZE == 64
+#define EEPROM_START_ADD (0x10000 - FLASH_SECTOR_SIZE)
+#define FLASH_SIZE_CODE 0x15
+#define ADDRESS_SHIFT 0
+
+#elif BOARD_FLASH_SIZE == 128
+#define EEPROM_START_ADD (0x20000 - FLASH_SECTOR_SIZE)
+//#define FLASH_SIZE_CODE 0x2B
+#define FLASH_SIZE_CODE 0x16
+#define ADDRESS_SHIFT 2 // addresses from the bl client are shifted 2 bits before being used
+#else
+#error "unsupported BOARD_FLASH_SIZE"
+#endif
+
+#else
+#if BOARD_FLASH_SIZE == 32
+#define EEPROM_START_ADD (MCU_FLASH_START+0x7c00)
+#define FLASH_SIZE_CODE 0x1f
+#define ADDRESS_SHIFT 0
+
+#elif BOARD_FLASH_SIZE == 64
+#define EEPROM_START_ADD (MCU_FLASH_START+0xf800)
+#define FLASH_SIZE_CODE 0x35
+#define ADDRESS_SHIFT 0
+
+#elif BOARD_FLASH_SIZE == 128
+#define EEPROM_START_ADD (MCU_FLASH_START+0x1f800)
+#define FLASH_SIZE_CODE 0x2B
+#define ADDRESS_SHIFT 2 // addresses from the bl client are shifted 2 bits before being used
+#else
+#error "unsupported BOARD_FLASH_SIZE"
+#endif
+
+#endif
+
+/*
+  a bootloader protocol version, sent as byte 8 in the deviceInfo
+  this should change when the configurator applications need to know
+  about a changed feature set in the bootloader
+
+  v2: magic flash addresses (ADDRESS_MAGIC_EEPROM, ADDRESS_MAGIC_FILE_NAME) supported
+  v3: supports ADDRESS_MAGIC_DEVINFO
+ */
+#define BOOTLOADER_PROTOCOL_VERSION 3
+
+/*
+  the devinfo structure tells the configuration client our pin code,
+  flash size and device type. It can also be used by the main firmware
+  to confirm we have the right eeprom address and pin code. We have 2
+  32bit magic values so the main firmware can confirm the bootloader
+  supports this feature
+ */
+#define DEVINFO_MAGIC1 0x5925e3da
+#define DEVINFO_MAGIC2 0x4eb863d9
+
+static const struct __attribute__((packed)) {
+  uint32_t magic1;
+  uint32_t magic2;
+  /*
+    deviceInfo bytes: '4','7','1', pin code, flash size code, 0x06, 0x06,
+    protocol version, 0x30
+   */
+  const uint8_t deviceInfo[9];
+  /*
+    for (protocol version >= 3) we have additional information which can be fetched via ADDRESS_MAGIC_DEVINFO
+  */
+  uint8_t length;
+  uint8_t address_shift; // this is 2 on some MCUs
+  /*
+    the following uint16_t start addresses are the addresses that need
+    to be passed to CMD_SET_ADDRESS to get each of the respective
+    areas. Note that these are shifted addresses if address_shift is
+    non-zero. This keeps the values within the limitation of the 16
+    bit address in the protocol
+  */
+  uint16_t firmware_start;
+  uint16_t filename_start;
+  uint16_t eeprom_start;
+  uint16_t tune_start;
+} devinfo __attribute__((section(".devinfo"))) = {
+  .magic1 = DEVINFO_MAGIC1,
+  .magic2 = DEVINFO_MAGIC2,
+  .deviceInfo = {'4','7','1',PIN_CODE,FLASH_SIZE_CODE,0x06,0x06,BOOTLOADER_PROTOCOL_VERSION,0x30},
+  sizeof(devinfo),
+  ADDRESS_SHIFT,
+  (uint16_t)(FIRMWARE_RELATIVE_START >> ADDRESS_SHIFT), // firmware_start
+  (uint16_t)((EEPROM_START_ADD - 32) >> ADDRESS_SHIFT), // filename_start
+  (uint16_t)(EEPROM_START_ADD >> ADDRESS_SHIFT), // eeprom_start
+  (uint16_t)((EEPROM_START_ADD + 48U) >> ADDRESS_SHIFT) // tune_start
+};
+
+typedef void (*pFunction)(void);
+
+#define APPLICATION_ADDRESS     (uint32_t)(MCU_FLASH_START + FIRMWARE_RELATIVE_START)
+
+/*
+  a magic value for CMD_SET_ADDRESS which sets the address to
+  EEPROM_START_ADD. Supported for BOOTLOADER_PROTOCOL_VERSION 2 and
+  later
+ */
+#define ADDRESS_MAGIC_EEPROM 0x20
+
+// magic address for FILE_NAME
+#define ADDRESS_MAGIC_FILE_NAME 0x21
+
+// magic address for continue transfer from last read
+#define ADDRESS_MAGIC_CONTINUE 0x22
+
+/*
+  magic address that maps to the devinfo structure in flash, so a
+  configuration client can READ the full deviceInfo (including the protocol
+  version and firmware start) even over a 4-way passthrough that only forwards
+  a short signature in the InitFlash reply. The read returns magic1, magic2
+  then the deviceInfo bytes, so the client can confirm support via the magic
+  values. Supported for BOOTLOADER_PROTOCOL_VERSION 3 and later.
+ */
+#define ADDRESS_MAGIC_DEVINFO 0x23
+
+
+#define CMD_RUN             0x00
+#define CMD_PROG_FLASH      0x01
+#define CMD_ERASE_FLASH     0x02
+#define CMD_READ_FLASH_SIL  0x03
+#define CMD_VERIFY_FLASH    0x03
+#define CMD_VERIFY_FLASH_ARM 0x04
+#define CMD_READ_EEPROM     0x04
+#define CMD_PROG_EEPROM     0x05
+#define CMD_READ_SRAM       0x06
+#define CMD_READ_FLASH_ATM  0x07
+#define CMD_KEEP_ALIVE      0xFD
+#define CMD_SET_ADDRESS     0xFF
+#define CMD_SET_BUFFER      0xFE
+
+static char receiveByte;
+static bool messagereceived;
+static int cmd;
+static int received;
+static bool initialized;
+/*
+  set whenever a validated (good-CRC, known) 4-way command is processed. While
+  set we stop polling DroneCAN, because DroneCAN_boot_ok() does a multi-ms
+  crc32 over the whole firmware that blocks the bit-banged serial and corrupts
+  4-way reads. Marking on every good command (not just the deviceInfo probe)
+  protects even a client that skips the deviceInfo handshake from the first
+  command onward. The start-bit-wait loop clears this after
+  BL_SERIAL_IDLE_THRESHOLD ticks (~10s) without a good command, so DroneCAN
+  polling resumes quickly once the client goes away - no reset required. See
+  serialreadChar(), mark_serial_active() and BL_SERIAL_IDLE_THRESHOLD.
+ */
+static bool bl_serial_active;
+#if DRONECAN_SUPPORT
+// counter of consecutive ~50ms idle ticks while bl_serial_active is set.
+// Zeroed by mark_serial_active() on every good 4-way command and by any
+// received byte, so it only climbs during true post-session silence.
+static uint16_t bl_serial_idle_count;
+// ~10 seconds of silence after the last good 4-way command before we assume the
+// client has gone and resume DroneCAN polling. Short enough for fast recovery,
+// long enough to bridge the gaps between commands in an active session.
+// 200 ticks * 50ms = 10s.
+#define BL_SERIAL_IDLE_THRESHOLD 200U
+#endif
+
+// mark that a validated 4-way command was just handled: suppress DroneCAN
+// polling for this config session and restart the idle timer.
+static void mark_serial_active(void)
+{
+  bl_serial_active = true;
+#if DRONECAN_SUPPORT
+  bl_serial_idle_count = 0;
+#endif
+}
+static uint8_t rxBuffer[258];
+static uint8_t payLoadBuffer[256];
+static uint8_t rxbyte;
+static uint32_t address;
+static uint32_t continue_address;
+
+typedef union __attribute__ ((packed))
+{
+  uint8_t bytes[2];
+  uint16_t word;
+} uint8_16_u;
+
+static uint16_t len;
+static uint16_t payload_buffer_size;
+static char incoming_payload_no_command;
+
+/* USER CODE BEGIN PFP */
+static void sendString(const uint8_t data[], int len);
+static void receiveBuffer();
+static void serialwriteChar(uint8_t data);
+static void serialwriteOneChar(uint8_t data);
+
+#define BAUDRATE      19200
+#define BITTIME          52 // 1000000/BAUDRATE
+#define HALFBITTIME      26 // 500000/BAUDRATE
+
+// used for timing bytes
+static uint16_t us_start;
+
+static void bl_timer_reset(void)
+{
+  us_start = bl_timer_us();
+}
+
+static uint16_t bl_timer_elapsed(void)
+{
+  return bl_timer_us() - us_start;
+}
+
+static void delayMicroseconds(uint16_t micros)
+{
+  bl_timer_reset();
+  while (bl_timer_elapsed() < micros) {
+  }
+}
+
+/*
+  jump to the application firmware
+ */
+static void jump()
+{
+#ifndef DISABLE_JUMP
+#if CHECK_EEPROM_BEFORE_JUMP
+#ifdef NXP
+  uint8_t eeprom[EEPROM_MAX_SIZE];
+  read_flash_bin(eeprom, EEPROM_START_ADD, EEPROM_MAX_SIZE);
+  uint8_t value = eeprom[0];
+#else
+  uint8_t value = *(uint8_t*)(EEPROM_START_ADD);
+#endif
+  /*
+    byte 0 of the eeprom is set to 0x01 once the settings have been
+    written, so a different value means the board has not been
+    configured. A blank byte is the exception: that is either a board
+    that has never been configured or an update_EEPROM() that lost
+    power during the page erase, and in both cases there can still be
+    perfectly good firmware in flash. The application header checks
+    below are what actually prove that, so refusing on a blank byte
+    only serves to trap a working board in the bootloader with no way
+    out except a configurator.
+  */
+  if (value != 0x01 && value != 0xFF) {
+    invalid_command = 0;
+    return;
+  }
+#endif
+#ifndef DISABLE_APP_HEADER_CHECKS
+  /*
+    first word of the app is the stack pointer - make sure that it is in range
+   */
+  const uint32_t *app = (uint32_t*)(MCU_FLASH_START + FIRMWARE_RELATIVE_START);
+  const uint32_t ram_start = 0x20000000;
+#ifndef RAM_LIMIT_KB
+#define RAM_LIMIT_KB 64
+#endif
+  const uint32_t ram_limit_kb = RAM_LIMIT_KB;
+  const uint32_t ram_end = ram_start+ram_limit_kb*1024;
+  if (app[0] < ram_start || app[0] > ram_end) {
+    invalid_command = 0;
+    return;
+  }
+  /*
+    2nd word is the entry point of the main app. Ensure that is in range
+   */
+  const uint32_t flash_limit_kb = 256;
+  if (app[1] < APPLICATION_ADDRESS || app[1] > APPLICATION_ADDRESS+flash_limit_kb*1024) {
+    // outside a 256k range, really unlikely to be a valid
+    // application, don't jump
+    invalid_command = 0;
+    return;
+  }
+#endif // DISABLE_APP_HEADER_CHECKS
+
+#if DRONECAN_SUPPORT
+  if (!DroneCAN_boot_ok()) {
+    invalid_command = 0;
+#ifdef USE_RGB_LED
+    bl_led_set_error(true);
+#endif
+    return;
+  }
+
+  sys_can_disable_IRQ();
+#endif
+
+  bl_led_off();
+  jump_to_application();
+#endif
+}
+
+/*
+  16 bit CRC
+ */
+uint16_t crc16(const uint8_t* pBuff, uint16_t length)
+{
+  uint16_t ret = 0;
+
+  for (int i = 0; i < length; i++) {
+    uint8_t xb = pBuff[i];
+    for (uint8_t j = 0; j < 8; j++) {
+      if (((xb & 0x01) ^ (ret & 0x0001)) != 0) {
+        ret >>= 1;
+        ret ^= 0xA001;
+      } else {
+        ret >>= 1;
+      }
+      xb = xb >> 1;
+    }
+  }
+  return ret;
+}
+
+static bool checkCrc(uint8_t* pBuff, uint16_t length)
+{
+  const uint16_t crcin = pBuff[length] | (pBuff[length+1]<<8);
+  const uint16_t crc2 = crc16(pBuff, length);
+
+  return crcin == crc2;
+}
+
+
+static void setReceive()
+{
+  gpio_mode_set_input(input_pin, GPIO_PULL_UP);
+  received = 0;
+}
+
+static void setTransmit()
+{
+  // set high before we set as output to guarantee idle high
+  gpio_set(input_pin);
+  gpio_mode_set_output(input_pin, GPIO_OUTPUT_PUSH_PULL);
+
+  // delay a bit to let the sender get setup for receiving
+  // only delay if device info has been sent, this prevents
+  // an issue with iNAV
+  if (initialized){
+    delayMicroseconds(BITTIME);
+  }
+}
+
+static void serialwriteOneChar(uint8_t c)
+{
+#if DRONECAN_SUPPORT
+  sys_can_disable_IRQ();
+#endif
+  setTransmit();
+  serialwriteChar(c);
+  setReceive();
+#if DRONECAN_SUPPORT
+  sys_can_enable_IRQ();
+#endif
+}
+
+static void send_ACK()
+{
+  serialwriteOneChar(0x30);             // good ack!
+  invalid_command = 0;
+  // an ACK is only sent for a validated command; keep DroneCAN suppressed
+  mark_serial_active();
+}
+
+static void send_BAD_ACK()
+{
+  serialwriteOneChar(0xC1);                // bad command message.
+  invalid_command++;
+}
+
+static void send_BAD_CRC_ACK()
+{
+  serialwriteOneChar(0xC2);                // bad command message.
+  invalid_command++;
+}
+
+static void sendDeviceInfo()
+{
+  sendString(devinfo.deviceInfo,sizeof(devinfo.deviceInfo));
+  initialized = true;
+  // a config client is connected; stop DroneCAN polling so its firmware-CRC
+  // scan can't block the bit-banged serial during this session
+  mark_serial_active();
+}
+
+static bool checkAddressWritable(uint32_t address)
+{
+  return address >= APPLICATION_ADDRESS;
+}
+
+static void decodeInput()
+{
+  if (incoming_payload_no_command) {
+    len = payload_buffer_size;
+
+    if (checkCrc(rxBuffer,len)) {
+      memset(payLoadBuffer, 0, sizeof(payLoadBuffer));             // reset buffer
+
+      for (int i = 0; i < len; i++) {
+        payLoadBuffer[i]= rxBuffer[i];
+      }
+      send_ACK();
+      incoming_payload_no_command = 0;
+
+      return;
+    } else {
+      send_BAD_CRC_ACK();
+      return;
+    }
+  }
+
+  cmd = rxBuffer[0];
+
+  if (rxBuffer[16] == 0x7d) {
+    if (rxBuffer[8] == 13 && rxBuffer[9] == 66) {
+      sendDeviceInfo();
+      rxBuffer[20]= 0;
+
+    }
+    return;
+  }
+
+  if (rxBuffer[20] == 0x7d) {
+    if (rxBuffer[12] == 13 && rxBuffer[13] == 66) {
+      sendDeviceInfo();
+      rxBuffer[20]= 0;
+      return;
+    }
+
+  }
+  if (rxBuffer[40] == 0x7d) {
+    if (rxBuffer[32] == 13 && rxBuffer[33] == 66) {
+      sendDeviceInfo();
+      rxBuffer[20]= 0;
+      return;
+    }
+  }
+
+  if (cmd == CMD_RUN) {
+    // starts the main app
+    if ((rxBuffer[1] == 0) && (rxBuffer[2] == 0) && (rxBuffer[3] == 0)) {
+      invalid_command = 101;
+    }
+  }
+
+  if (cmd == CMD_PROG_FLASH) {
+    len = 2;
+    if (!checkCrc((uint8_t*)rxBuffer, len)) {
+      send_BAD_CRC_ACK();
+
+      return;
+    }
+
+    if (!checkAddressWritable(address)) {
+      send_BAD_ACK();
+
+      return;
+    }
+
+    if (address == EEPROM_START_ADD && payload_buffer_size > 2) {
+      /*
+        if the configuration client is writing the eeprom area
+        then replace the bootloader version byte in the buffer
+        with the right version. This makes the update_EEPROM()
+        less likely to need to erase any flash
+      */
+      payLoadBuffer[2] = BOOTLOADER_VERSION;
+    }
+
+    if (!save_flash_nolib((uint8_t*)payLoadBuffer, payload_buffer_size,address)) {
+      send_BAD_ACK();
+    } else {
+      send_ACK();
+    }
+
+    return;
+  }
+
+  if (cmd == CMD_SET_ADDRESS) {
+
+    // command set addressinput format is: CMD, 00 , High byte
+    // address, Low byte address, crclb ,crchb
+    len = 4;  // package without 2 byte crc
+    if (!checkCrc((uint8_t*)rxBuffer, len)) {
+      send_BAD_CRC_ACK();
+      return;
+    }
+
+    invalid_command = 0;
+
+    address = rxBuffer[2] << 8 | rxBuffer[3];
+
+    /*
+      check for magic addresses that map to specific areas
+    */
+    if (address == ADDRESS_MAGIC_EEPROM) {
+      // config app has requested access to the eeprom region
+      address = EEPROM_START_ADD;
+    } else if (address == ADDRESS_MAGIC_FILE_NAME) {
+      // config app has requested access to the FILE_NAME. Assume eeprom-32 for now,
+      // this may change for some MCUs in the future
+      address = EEPROM_START_ADD - 32;
+    } else if (address == ADDRESS_MAGIC_CONTINUE) {
+      // allow easy continue from last address, for breaking up eeprom into multiple small reads
+      address = continue_address;
+    } else if (address == ADDRESS_MAGIC_DEVINFO) {
+      // config app has requested the devinfo structure (magic1, magic2,
+      // deviceInfo). Lets the client read the protocol version and firmware
+      // start over a 4-way link that doesn't forward the full deviceInfo.
+      address = (uint32_t)(uintptr_t)&devinfo;
+    } else if (address < 1024) {
+      // other addresses below 1024 are reserved for future magic values
+      send_BAD_ACK();
+      return;
+    } else {
+      // cope with ADDRESS_SHIFT for 128k flash boards, and add
+      // in MCU base flash address
+      address = MCU_FLASH_START + (address << ADDRESS_SHIFT);
+    }
+
+    send_ACK();
+    return;
+  }
+
+  if (cmd == CMD_SET_BUFFER) {
+    // for writing buffer rx buffer 0 = command byte.  command set
+    // address, input , format is CMD, 00 , 00 or 01 (if buffer is 256),
+    // buffer_size,
+    len = 4;  // package without 2 byte crc
+    if (!checkCrc((uint8_t*)rxBuffer, len)) {
+      send_BAD_CRC_ACK();
+
+      return;
+    }
+    mark_serial_active();
+
+    // no ack with command set buffer;
+    if (rxBuffer[2] == 0x01) {
+      payload_buffer_size = 256;                          // if nothing in this buffer
+    } else {
+      payload_buffer_size = rxBuffer[3];
+    }
+    incoming_payload_no_command = 1;
+    setReceive();
+
+    return;
+  }
+
+  if (cmd == CMD_KEEP_ALIVE) {
+
+    len = 2;
+    if (!checkCrc((uint8_t*)rxBuffer, len)) {
+      send_BAD_CRC_ACK();
+
+      return;
+    }
+    mark_serial_active();
+
+    serialwriteOneChar(0xC1);                // bad command message.
+    return;
+  }
+
+  if (cmd == CMD_ERASE_FLASH) {
+    len = 2;
+    if (!checkCrc((uint8_t*)rxBuffer, len)) {
+      send_BAD_CRC_ACK();
+
+      return;
+    }
+
+    if (!checkAddressWritable(address)) {
+      send_BAD_ACK();
+
+      return;
+    }
+
+    send_ACK();
+    return;
+  }
+
+  if (cmd == CMD_READ_FLASH_SIL) {
+
+    // for sending contents of flash memory at the memory location set in
+    // bootloader.c need to still set memory with data from set mem
+    // command
+    len = 2;
+    if (!checkCrc((uint8_t*)rxBuffer, len)) {
+      send_BAD_CRC_ACK();
+
+      return;
+    }
+    mark_serial_active();
+
+    if (address == 0) {
+      // must send SET_ADDRESS first
+      send_BAD_ACK();
+      return;
+    }
+
+    uint16_t out_buffer_size = rxBuffer[1];//
+    if (out_buffer_size == 0) {
+      out_buffer_size = 256;
+    }
+
+    uint8_t read_data[out_buffer_size + 3];        // make buffer 3 larger to fit CRC and ACK
+    memset(read_data, 0, sizeof(read_data));
+    //    read_flash((uint8_t*)read_data , address);                 // make sure read_flash reads two less than buffer.
+    read_flash_bin((uint8_t*)read_data, address, out_buffer_size);
+
+    const uint16_t crc = crc16(read_data,out_buffer_size);
+    read_data[out_buffer_size] = crc&0xFF;
+    read_data[out_buffer_size + 1] = crc>>8;
+    read_data[out_buffer_size + 2] = 0x30;
+    sendString(read_data, out_buffer_size+3);
+
+    // allow the client to continue to the next address with ADDRESS_MAGIC_CONTINUE
+    continue_address = address + out_buffer_size;
+
+    // ensure client sends a SET_ADDRESS each time
+    address = 0;
+
+    return;
+  }
+
+  serialwriteOneChar(0xC1);                // bad command message.
+  invalid_command++;
+}
+
+#ifdef SERIAL_STATS
+// stats for debugging serial protocol
+struct {
+  uint32_t no_idle;
+  uint32_t no_start;
+  uint32_t bad_start;
+  uint32_t bad_stop;
+  uint32_t good;
+} stats;
+#endif
+
+/*
+  read one byte from the input pin, 19200, not inverted, one stop bit
+
+  return false if we can't get a byte, or the byte has bad framing
+ */
+static bool serialreadChar()
+{
+  rxbyte=0;
+  bl_timer_reset();
+
+  // UART is idle high, wait for it to be in the idle state
+  while (!gpio_read(input_pin)) { // wait for rx to go high
+    if (bl_timer_elapsed() > 20000U) {
+      /*
+        if we don't get a command for 20ms then assume we should
+        be trying to boot the main firmware, invalid_command 101
+        triggers the jump immediately
+       */
+      invalid_command = 101;
+#ifdef SERIAL_STATS
+      stats.no_idle++;
+#endif
+      return false;
+    }
+  }
+
+  // now we need to wait for the start bit leading edge, which is low
+  bl_timer_reset();
+  while (gpio_read(input_pin)) {
+    uint16_t elapsed = bl_timer_elapsed();
+    if (messagereceived && elapsed > 5*BITTIME) {
+      // we've been waiting too long, don't allow for long gaps
+      // between bytes
+#ifdef SERIAL_STATS
+      stats.no_start++;
+#endif
+      return false;
+    }
+#if DRONECAN_SUPPORT
+    // Check DroneCAN every ~50ms when waiting for first byte.
+    // DroneCAN_boot_ok() scans flash (~2-5ms per call), so we
+    // rate-limit to avoid blocking serial start-bit detection.
+    if (!messagereceived && elapsed > 50000) {
+      if (bl_serial_active) {
+        /*
+          a config client is mid-session: a good 4-way command set
+          bl_serial_active (see mark_serial_active()) so DroneCAN polling
+          stays suppressed. The idle counter is zeroed on every good command
+          and any received byte, so it only climbs during real silence. After
+          BL_SERIAL_IDLE_THRESHOLD ticks (~10s) without a command we assume the
+          client is gone and resume polling - no reset required.
+         */
+        if (++bl_serial_idle_count >= BL_SERIAL_IDLE_THRESHOLD) {
+          bl_serial_active = false;
+          bl_serial_idle_count = 0;
+        }
+      } else if (DroneCAN_update()) {
+        jump();
+      }
+      bl_timer_reset();
+    }
+#endif
+#ifdef USE_RGB_LED
+    bl_led_update();
+#endif
+  }
+
+  // start bit detected - disable CAN IRQs to protect bit-banged timing
+#if DRONECAN_SUPPORT
+  sys_can_disable_IRQ();
+#endif
+
+  // wait to get the center of bit time. We want to sample at the
+  // middle of each bit
+  delayMicroseconds(HALFBITTIME);
+  if (gpio_read(input_pin)) {
+    // bad framing, we should be half-way through the start bit
+    // which should still be low
+#ifdef SERIAL_STATS
+    stats.bad_start++;
+#endif
+#if DRONECAN_SUPPORT
+    sys_can_enable_IRQ();
+#endif
+    return false;
+  }
+
+  /*
+    now sample the 8 data bits
+   */
+  int bits_to_read = 0;
+  while (bits_to_read < 8) {
+    delayMicroseconds(BITTIME);
+    rxbyte = rxbyte | gpio_read(input_pin) << bits_to_read;
+    bits_to_read++;
+  }
+
+  // wait till middle of stop bit, so we can check that too
+  delayMicroseconds(BITTIME);
+  if (!gpio_read(input_pin)) {
+    // bad framing, stop bit should be high
+#ifdef SERIAL_STATS
+    stats.bad_stop++;
+#endif
+#if DRONECAN_SUPPORT
+    sys_can_enable_IRQ();
+#endif
+    return false;
+  }
+
+  // re-enable CAN IRQs after byte is complete
+#if DRONECAN_SUPPORT
+  sys_can_enable_IRQ();
+#endif
+
+  // we got a good byte
+  messagereceived = true;
+#if DRONECAN_SUPPORT
+  bl_serial_idle_count = 0;
+#endif
+  receiveByte = rxbyte;
+#ifdef SERIAL_STATS
+  stats.good++;
+#endif
+  return true;
+}
+
+
+static void serialwriteChar(uint8_t data)
+{
+  // start bit is low
+  gpio_clear(input_pin);
+  delayMicroseconds(BITTIME);
+
+  // send data bits
+  uint8_t bits_written = 0;
+  while (bits_written < 8) {
+    if (data & 0x01) {
+      gpio_set(input_pin);
+    } else {
+      // GPIO_BC(input_port) = input_pin;
+      gpio_clear(input_pin);
+    }
+    bits_written++;
+    data = data >> 1;
+    delayMicroseconds(BITTIME);
+  }
+
+  // send stop bit
+  gpio_set(input_pin);
+
+  /*
+    note that we skip the delay by BITTIME for the full stop bit and
+    do it in sendString() instead to ensure when sending an ACK
+    immediately followed by a setReceive() on a slow MCU that we
+    start on the receive as soon as possible.
+  */
+}
+
+
+static void sendString(const uint8_t *data, int len)
+{
+#if DRONECAN_SUPPORT
+  sys_can_disable_IRQ();
+#endif
+  setTransmit();
+  for (int i = 0; i < len; i++) {
+    serialwriteChar(data[i]);
+    // for multi-byte writes we add the stop bit delay
+    delayMicroseconds(BITTIME);
+  }
+  setReceive();
+#if DRONECAN_SUPPORT
+  sys_can_enable_IRQ();
+#endif
+}
+
+static void receiveBuffer()
+{
+  uint16_t count = 0;
+  messagereceived = false;
+  memset(rxBuffer, 0, sizeof(rxBuffer));
+
+  setReceive();
+
+  for (uint32_t i = 0; i < sizeof(rxBuffer); i++) {
+    if (!serialreadChar()) {
+      break;
+    }
+
+    if (incoming_payload_no_command) {
+      if (count == payload_buffer_size+2U) {
+        break;
+      }
+
+      rxBuffer[i] = rxbyte;
+      count++;
+    } else {
+      if (bl_timer_elapsed() > 250) {
+
+        count = 0;
+
+        break;
+      } else {
+        rxBuffer[i] = rxbyte;
+        if (i == 257) {
+          invalid_command+=20;       // needs one hundred to trigger a jump but will be reset on next set address commmand
+
+        }
+      }
+    }
+  }
+  if (messagereceived) {
+    decodeInput();
+  }else{
+    invalid_command++;
+  }
+}
+
+#ifdef UPDATE_EEPROM_ENABLE
+/*
+  Updating the version means erasing the eeprom and writing it back,
+  and there is no second page to stage a copy in, so for as long as
+  that takes the settings exist only in ram. Two things stop that from
+  being a board that comes back wrong:
+
+  - it only runs on a software reset, which in practice means the user
+    asked the firmware to enter the bootloader, so the board is on a
+    bench rather than in the air
+  - if power is lost anyway, jump() still boots a blank eeprom, so the
+    board runs its firmware on defaults instead of stopping
+ */
+static void update_EEPROM()
+{
+  if (!bl_was_software_reset()) {
+    // we only update the bootloader version on a software reset to reduce the chances
+    // of a brownout or spark causing a eeprom write that corrupts the settings
+    return;
+  }
+#ifdef NXP
+  uint8_t eeprom[EEPROM_MAX_SIZE];
+  read_flash_bin(eeprom, EEPROM_START_ADD, EEPROM_MAX_SIZE);
+#else
+  const uint8_t *eeprom = (const uint8_t *)EEPROM_START_ADD;
+#endif
+  if (BOOTLOADER_VERSION == eeprom[2] || eeprom[2] == 0xFF || eeprom[2] == 0x00) {
+    return;
+  }
+
+  // update only the bootloader version, preserve every other byte
+  uint8_t data[EEPROM_MAX_SIZE];
+  memcpy(data, eeprom, EEPROM_MAX_SIZE);
+  data[2] = BOOTLOADER_VERSION;
+
+#ifdef NXP
+  /*
+    the NXP driver erases a whole 8k flash sector per write regardless
+    of length, so there is nothing to gain by writing less than the
+    whole region, and EEPROM_MAX_SIZE need not be chunk aligned here.
+  */
+  save_flash_nolib(data, EEPROM_MAX_SIZE, EEPROM_START_ADD);
+#else
+  /*
+    On the STM32 style driver the write erases one page and programs
+    it back a halfword at a time, so the settings are exposed for the
+    length of that write. Rewrite only the first chunk, which is where
+    AM32 keeps its settings: the erase leaves the rest of the page at
+    0xFF, which is what it already was, so the programming part of the
+    window shrinks to a quarter. save_flash_nolib() may also not accept
+    a write larger than one chunk.
+
+    That is only lossless if nothing is stored past the first chunk. If
+    something is, leave the version alone rather than destroy settings
+    for a version byte. The skip is silent: such a unit keeps its old
+    version and reads back like one that was never updated. AM32 keeps
+    its settings well inside the first chunk, so this does not arise in
+    practice, but it is worth knowing when reading a version byte in
+    the field.
+  */
+  #define EEPROM_UPDATE_SIZE 256
+  _Static_assert(EEPROM_MAX_SIZE >= EEPROM_UPDATE_SIZE,
+                 "eeprom region smaller than one update chunk");
+
+  for (uint32_t i = EEPROM_UPDATE_SIZE; i < EEPROM_MAX_SIZE; i++) {
+    if (eeprom[i] != 0xFF) {
+      return;
+    }
+  }
+
+  // this write is also what erases the page, so it has to come last
+  save_flash_nolib(data, EEPROM_UPDATE_SIZE, EEPROM_START_ADD);
+#endif
+}
+#endif // UPDATE_EEPROM_ENABLE
+
+/*
+  the shortest pulse a 19200 baud bootloader UART can produce is one
+  bit time, so anything much shorter than that cannot be bootloader
+  traffic
+ */
+#define FAST_SIGNAL_MAX_PULSE_US (BITTIME/2)
+
+// number of short pulses needed before we declare a fast signal
+#define FAST_SIGNAL_MIN_PULSES 8
+
+/*
+  how long to watch the pin for. The slowest DShot rate a flight
+  controller will use repeats well inside this window
+ */
+#define FAST_SIGNAL_WINDOW_US 2000
+
+/*
+  detect a fast digital signal on the input pin
+
+  DShot, bidirectional DShot, Multishot and Oneshot all contain pulses
+  far shorter than one 19200 baud bit time. If we see enough of them
+  then a flight controller is driving the pin and we should be running
+  the main firmware rather than sitting in the bootloader.
+
+  This has to be done with edge timing rather than by sampling the pin
+  level. Normal DShot idles low, but bidirectional DShot idles high,
+  which is indistinguishable from an idle bootloader UART if you only
+  look at levels.
+ */
+static bool detect_fast_input_signal(void)
+{
+  uint8_t short_pulses = 0;
+  bool last_level = gpio_read(input_pin);
+  uint16_t last_edge = 0;
+
+  bl_timer_reset();
+
+  while (bl_timer_elapsed() < FAST_SIGNAL_WINDOW_US) {
+    const bool level = gpio_read(input_pin);
+    if (level == last_level) {
+      continue;
+    }
+    last_level = level;
+
+    const uint16_t now = bl_timer_elapsed();
+    if (now - last_edge < FAST_SIGNAL_MAX_PULSE_US &&
+        ++short_pulses >= FAST_SIGNAL_MIN_PULSES) {
+      return true;
+    }
+    last_edge = now;
+  }
+
+  return false;
+}
+
+/*
+  look for 19200 framing on the input pin
+
+  A bootloader client that is already sending when we power up holds
+  the line low for most of every byte, and the level checks in
+  checkForSignal() read that as a pin that has been pulled low, so we
+  boot the firmware instead of answering. Framing tells the two apart:
+  take a falling edge as a start bit and check that the stop bit of
+  that byte and of the several after it all land high on the 19200
+  grid.
+
+  Being wrong in the direction of staying here is cheap. If an input
+  protocol happens to fool this, the main loop boots the firmware a
+  few ms later through detect_fast_input_signal() or the invalid
+  command count. Being wrong the other way is what leaves a board that
+  cannot be flashed.
+ */
+#if DETECT_SERIAL_CLIENT
+static bool detect_serial_framing(void)
+{
+  for (uint8_t tries = 0; tries < 8; tries++) {
+    bool was_high = false;
+    bool falling_edge = false;
+
+    bl_timer_reset();
+    while (bl_timer_elapsed() < 20U*BITTIME) {
+      if (gpio_read(input_pin)) {
+        was_high = true;
+      } else if (was_high) {
+        falling_edge = true;
+        break;
+      }
+    }
+
+    if (!falling_edge) {
+      return false;		// nothing is switching, so nothing is sending
+    }
+
+    /*
+      Treat the edge as a start bit and look for a run of stop bits
+      on the 19200 grid, never resyncing. A client sends its packet
+      back to back, so every tenth bit from here has to be high.
+
+      The run has to be several bytes long. Oneshot125 repeats every
+      500us against a byte time of 520us, so it lines up with one or
+      two stop bits often enough to matter, but 20us of drift per
+      byte pulls it off the grid before the run is done.
+
+      Picking the signal up mid byte lands on a data bit rather than
+      a start bit, which is what the retries are for.
+    */
+    uint8_t stop_bits = 0;
+
+    delayMicroseconds(9U*BITTIME + HALFBITTIME);
+    while (gpio_read(input_pin)) {
+      if (++stop_bits >= 5) {
+        return true;
+      }
+      delayMicroseconds(10U*BITTIME);
+    }
+  }
+
+  return false;
+}
+#else
+static bool detect_serial_framing(void)
+{
+  return false;
+}
+#endif // DETECT_SERIAL_CLIENT
+
+#define low_pin_count_threshold 450		// count signal pin is low before determining jump to main firmware
+#define pull_down_pin_count_interations 4000		// greater interations extend grace period for input devices booting with signal pin high
+static void checkForSignal()
+{
+  uint16_t low_pin_count = 0;
+
+  gpio_mode_set_input(input_pin, GPIO_PULL_DOWN);
+
+  delayMicroseconds(500);
+
+  /*
+    if a fast signal is already being driven onto the pin then a
+    flight controller is talking to us and we should boot the main
+    firmware. The level based checks below cannot see an inverted
+    (bidirectional) DShot signal, as that idles high and so looks the
+    same as a bootloader client holding the line high.
+
+    Skipped on a software reset for the same reason the level checks
+    are (see below): a software reset generally means the firmware
+    asked to stay in the bootloader, and we must let update_EEPROM()
+    run. A board that really is being driven with DShot still recovers
+    through the main loop detector, which is not gated this way.
+  */
+#if CHECK_SOFTWARE_RESET
+  if (!bl_was_software_reset() && detect_fast_input_signal()) {
+    jump();
+  }
+#else
+  if (detect_fast_input_signal()) {
+    jump();
+  }
+#endif
+
+  for (int i = 0 ; i < pull_down_pin_count_interations ; i ++) {
+    if (!gpio_read(input_pin)) {
+      low_pin_count++;
+    }
+
+    delayMicroseconds(10);
+    if (low_pin_count > low_pin_count_threshold) {
+      i = pull_down_pin_count_interations ;  // end for loop if low_pin_count_threshold has already been exceeded
+    }
+  }
+  if (low_pin_count > low_pin_count_threshold) {		// pulled low & majority stayed low - jump to application
+    if (detect_serial_framing()) {
+      return;		// a client is sending to us, the pin is not pulled low
+    }
+#if CHECK_SOFTWARE_RESET
+    if (!bl_was_software_reset()) {
+      jump();
+    }
+#else
+    jump();
+#endif
+  }
+
+  gpio_mode_set_input(input_pin, GPIO_PULL_UP);
+
+  delayMicroseconds(500);
+
+  for (int i = 0 ; i < 500; i++) {
+    if ( !(gpio_read(input_pin))) {
+      low_pin_count++;
+    } else {
+
+    }
+    delayMicroseconds(10);
+  }
+  if (low_pin_count == 0) {
+    return;		// pulled high & never low in history - stay in bootloader only
+  }
+
+  low_pin_count = 0;
+
+  gpio_mode_set_input(input_pin, GPIO_PULL_NONE);
+
+  delayMicroseconds(500);
+
+  for (int i = 0 ; i < 500; i ++) {
+    if ( !(gpio_read(input_pin))) {
+      low_pin_count++;
+    }
+
+    delayMicroseconds(10);
+  }
+
+  /*
+    floating and low at least once - jump to application, unless the
+    line is actually a client sending to us.
+
+    detect_serial_framing() reads a steadily high line as a run of stop
+    bits, so a floating pin that took one low glitch and then sat high
+    now stays in the bootloader where before it would boot. That is the
+    safe direction on purpose: with no flight controller attached there
+    are no motors to leave unspun, and the main loop still boots the
+    firmware once a real signal appears. Booting on a noise glitch is
+    the worse outcome. This bias is best confirmed on hardware with a
+    floating-pin power up, which the SITL suite cannot model faithfully.
+  */
+  if (low_pin_count > 0 && !detect_serial_framing()) {
+    jump();
+  }
+}
+
+#ifdef BOOTLOADER_TEST_CLOCK
+/*
+  this should provide a 2ms low followed by a 1ms high if the clock is correct
+ */
+static void test_clock(void)
+{
+  setTransmit();
+
+  while (1) {
+    gpio_clear(input_pin);
+    bl_timer_reset();
+    while (bl_timer_elapsed() < 2000) ;
+    gpio_set(input_pin);
+    bl_timer_reset();
+    while (bl_timer_elapsed() < 1000) ;
+  }
+}
+#endif // BOOTLOADER_TEST_CLOCK
+
+#ifdef BOOTLOADER_TEST_STRING
+/*
+  this should send HELLO_WORLD continuously
+ */
+static void test_string(void)
+{
+  while (1) {
+    delayMicroseconds(10000);
+    sendString((uint8_t*)"HELLO_WORLD",11);
+  }
+}
+#endif // BOOTLOADER_TEST_STRING
+
+
+#ifdef BOOTLOADER_TEST_BKUP
+/*
+  test operation of backup domain registers
+ */
+volatile struct {
+  uint32_t value;
+  uint32_t fail;
+} bkup;
+
+static void test_rtc_backup(void)
+{
+  const uint8_t idx = 1;
+  while (true) {
+    bkup.value++;
+    set_rtc_backup_register(idx, bkup.value);
+    const uint32_t bkup_value2 = get_rtc_backup_register(idx);
+    if (bkup_value2 != bkup.value) {
+      bkup.fail++;
+    }
+    delayMicroseconds(1000);
+  }
+}
+#endif
+
+int main(void)
+{
+  bl_clock_config();
+  bl_timer_init();
+  bl_gpio_init();
+  bl_led_init();
+#if defined(GATE_DRIVER_OFF_PORT) && (defined(GATE_DRIVER_OFF_PIN) || defined(GATE_DRIVER_OFF_PIN_NUM))
+  /* DRV8350 ENABLE / DRV8328 nSLEEP — keep gate driver asleep in BL */
+  bl_gate_driver_off();
+#endif
+
+#ifdef BOOTLOADER_TEST_CLOCK
+  test_clock();
+#endif
+#ifdef BOOTLOADER_TEST_STRING
+  test_string();
+#endif
+#ifdef BOOTLOADER_TEST_BKUP
+  test_rtc_backup();
+#endif
+
+#if DRONECAN_SUPPORT
+  /*
+    If the signal pin is driven (e.g. DShot), tell DroneCAN so boot_ok() accepts
+    the jump. Must run before checkForSignal(), whose float+low path calls jump()
+    unconditionally - otherwise jump() is rejected with have_raw_command false
+    and a DShot-only boot bounces.
+
+    Prefer detect_fast_input_signal() so bidirectional DShot (idle high) is
+    recognised; fall back to a coarse "any low within ~5ms" sample for a
+    line held low without fast edges.
+  */
+  {
+    gpio_mode_set_input(input_pin, GPIO_PULL_UP);
+    delayMicroseconds(500);
+    bool has_pin_signal = detect_fast_input_signal();
+    if (!has_pin_signal) {
+      for (int i = 0; i < 500; i++) {
+        if (!gpio_read(input_pin)) {
+          has_pin_signal = true;
+          break;
+        }
+        delayMicroseconds(10);
+      }
+    }
+    if (has_pin_signal) {
+      DroneCAN_set_have_signal();
+    }
+  }
+
+  // bring CAN RX live before checkForSignal() so the no-CAN fallback window
+  // (NONCAN_FALLBACK_MS) observes the bus from boot. Return value ignored: it
+  // is false this early (no raw command, deadline not yet reached).
+  (void)DroneCAN_update();
+#endif
+
+  checkForSignal();
+
+  gpio_mode_set_input(input_pin, GPIO_PULL_UP);
+
+#ifdef USE_ADC_INPUT  // go right to application
+  jump();
+#endif
+
+#ifdef UPDATE_EEPROM_ENABLE
+  update_EEPROM();
+#endif
+
+  while (1) {
+    receiveBuffer();
+
+    if (invalid_command > 100) {
+      jump();
+    }
+
+    /*
+      the flight controller may only start driving the pin after we
+      have finished checkForSignal(), which is common with
+      bidirectional DShot as that leaves the line idle high while the
+      flight controller boots. Once we start failing to decode bytes,
+      check whether that is because a fast signal has appeared.
+
+      Gated a little above zero so a single bad CRC in an otherwise
+      healthy configurator session does not spend 2ms staring at the
+      pin, which would drop the bytes arriving during that window and
+      turn one error into several. A real flight controller drives the
+      pin continuously and trips this within a few bytes regardless.
+    */
+    /*
+      Skip the multi-ms DShot sample while a 4-way serial client is
+      active - same reason we pause DroneCAN: staring at the pin would
+      drop bytes mid-transfer.
+    */
+    if (!bl_serial_active && invalid_command > 2 && detect_fast_input_signal()) {
+      jump();
+    }
+#if DRONECAN_SUPPORT
+    if (!bl_serial_active && DroneCAN_update()) {
+      jump();
+    }
+#endif
+  }
+}

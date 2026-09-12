@@ -137,6 +137,9 @@ def make_row(t: float, segment: str, throttle_cmd: float,
 class RunResult:
     meta: dict = field(default_factory=dict)
     rows: list[dict] = field(default_factory=list)
+    # Optional G4 debug-UART transcript (timestamped lines); written as
+    # debug_uart.log next to samples.csv when present.
+    debug_uart_text: str | None = None
 
     def save(self, run_dir: str | Path) -> Path:
         run_dir = Path(run_dir)
@@ -147,6 +150,8 @@ class RunResult:
             writer.writerows(self.rows)
         with open(run_dir / "meta.json", "w") as fh:
             json.dump(self.meta, fh, indent=2, sort_keys=True)
+        if self.debug_uart_text:
+            (run_dir / "debug_uart.log").write_text(self.debug_uart_text)
         return run_dir
 
     @classmethod

@@ -73,8 +73,8 @@ PARAMS = [
     (40, 'SINE_MODE_CHANGEOVER', 0, 255, 5, 'throttle level leaving sine start'),
     (41, 'DRAG_BRAKE_STRENGTH', 0, 10, 10, 'brake strength at zero throttle'),
     (42, 'DRIVING_BRAKE_STRENGTH', 0, 10, 10, 'brake strength while driving'),
-    (43, 'TEMPERATURE_LIMIT', 70, 255, 255, 'thermal limit, C (255 = off)'),
-    (44, 'CURRENT_LIMIT', 0, 100, 102, 'current limit in 2A steps (>100 = off)'),
+    (43, 'TEMPERATURE_LIMIT', 70, 255, 105, 'derate onset, C (outside 70..140 = off)'),
+    (44, 'CURRENT_LIMIT', 0, 100, 100, 'current limit in 2A steps (>100 = off)'),
     (45, 'SINE_MODE_POWER', 1, 10, 5, 'sine startup power'),
     (46, 'INPUT_SIGNAL_TYPE', 0, 5, 5, '0=auto 1=dshot 2=servo 5=dronecan only'),
     (47, 'AUTO_ADVANCE', 0, 1, 0, 'automatic timing advance'),
@@ -86,6 +86,7 @@ PARAMS = [
     (181, 'FILTER_HZ', 0, 255, 20, 'DroneCAN input filter cutoff, Hz'),
     (182, 'DEBUG_RATE', 0, 200, 0, 'FlexDebug rate, Hz'),
     (183, 'TERM_ENABLE', 0, 1, 0, 'serial terminal'),
+    (184, 'TEMP_DERATE_BAND', 5, 40, 15, 'C from thermal onset to full derate'),
 ]
 
 PARAMS_BY_NAME = dict((p[1], p) for p in PARAMS)
@@ -114,6 +115,7 @@ CALC = {
                     if v < 3 else '?',
     'CURRENT_LIMIT': lambda v: '%d A' % (v * 2) if v <= 100 else 'off',
     'TEMPERATURE_LIMIT': lambda v: '%d C' % v if 70 <= v <= 140 else 'off',
+    'TEMP_DERATE_BAND': lambda v: '%d C ramp' % v if 5 <= v <= 40 else '15 C (default)',
     'TELEM_RATE': lambda v: '%d Hz' % v,
     'DEBUG_RATE': lambda v: '%d Hz' % v,
     'FILTER_HZ': lambda v: '%d Hz' % v,

@@ -218,7 +218,7 @@ def cmd_build(args) -> int:
 
 def cmd_flash(args) -> int:
     from .build import build_firmware
-    from .debugger.openocd import OpenOcdDebugger
+    from .debugger.factory import openocd_from_rig
     rig = load_rig(args.config)
     if args.bin:
         binf = Path(args.bin)
@@ -227,10 +227,10 @@ def cmd_flash(args) -> int:
                               hwci_perf=not args.no_perf,
                               arm_sdk_prefix=args.arm_sdk_prefix)
         binf = arts.bin
-    dbg = OpenOcdDebugger(rig.openocd_configs, openocd_bin=rig.openocd_bin,
-                          search_dirs=rig.openocd_search_dirs)
+    dbg = openocd_from_rig(rig)
     dbg.flash(str(binf), rig.app_load_addr)
-    print(f"flashed {binf} @ 0x{rig.app_load_addr:08x}")
+    print(f"flashed {binf} @ 0x{rig.app_load_addr:08x} "
+          f"(target {rig.target}, openocd {rig.openocd_configs})")
     return 0
 
 
@@ -245,6 +245,9 @@ def cmd_run(args) -> int:
                       tare=not args.no_tare)
     out = Path(args.out) if args.out else _default_out(profile.name, sim)
     result.save(out)
+    if result.debug_uart_text:
+        print(f"  debug UART log: {out / 'debug_uart.log'} "
+              f"({result.meta.get('debug_uart_line_count', 0)} lines)")
     print(f"saved {len(result.rows)} samples to {out}")
     return _verdict_rc(result, None)
 
@@ -286,9 +289,8 @@ def cmd_ci(args) -> int:
         arts = build_firmware(rig.repo_root, rig.target, hwci_perf=True,
                               arm_sdk_prefix=args.arm_sdk_prefix)
         if rig.debugger_backend == "openocd":
-            from .debugger.openocd import OpenOcdDebugger
-            dbg = OpenOcdDebugger(rig.openocd_configs, openocd_bin=rig.openocd_bin,
-                                  search_dirs=rig.openocd_search_dirs)
+            from .debugger.factory import openocd_from_rig
+            dbg = openocd_from_rig(rig)
             dbg.flash(str(arts.bin), rig.app_load_addr)
             dbg.close()
         else:
@@ -426,7 +428,7 @@ def cmd_settings(args) -> int:
         closer = lambda: None  # noqa: E731 - kept alive across invocations
         flash = dbg.flash
     else:
-        from .debugger.openocd import OpenOcdDebugger
+        from .debugger.factory import openocd_from_rig
         rig = load_rig(args.config)
         elf = rig.resolved_elf()
         if elf is None:
@@ -434,9 +436,7 @@ def cmd_settings(args) -> int:
                   "eeprom_address is resolved from the flashed ELF",
                   file=sys.stderr)
             return 2
-        make = lambda: OpenOcdDebugger(  # noqa: E731
-            rig.openocd_configs, openocd_bin=rig.openocd_bin,
-            search_dirs=rig.openocd_search_dirs)
+        make = lambda: openocd_from_rig(rig)  # noqa: E731
         dbg = make().open()
         closer = dbg.close
         addr = st.resolve_eeprom_address(dbg, str(elf))
@@ -484,6 +484,46 @@ def cmd_settings(args) -> int:
         return 0
     finally:
         closer()
+
+
+def cmd_debug_uart(args) -> int:
+    """Live tail of the G4 debug console (state transitions + fault events)."""
+    import time as time_mod
+
+    from .debug_uart import DebugUartReader, resolve_stlink_vcp
+
+    port = args.port
+    baud = args.baud or 115200
+    if args.config:
+        rig = load_rig(args.config)
+        if not port:
+            port = rig.debug_uart_port
+        if not args.baud:
+            baud = rig.debug_uart_baud
+    resolved = resolve_stlink_vcp(port) if port else resolve_stlink_vcp(None)
+    if not resolved:
+        print("error: no ST-Link VCP found; set --port or install udev rule "
+              "for /dev/esc-debug-uart (see scripts/99-hwci.rules)",
+              file=sys.stderr)
+        return 2
+    print(f"debug UART on {resolved} @ {baud}  (Ctrl-C to stop)",
+          file=sys.stderr)
+    reader = DebugUartReader(resolved, baud).open()
+    t0 = time_mod.monotonic()
+    seen = 0
+    try:
+        while args.duration <= 0 or (time_mod.monotonic() - t0) < args.duration:
+            lines = reader.lines()
+            while seen < len(lines):
+                rec = lines[seen]
+                seen += 1
+                print(rec.text, flush=True)
+            time_mod.sleep(0.05)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        reader.close()
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -602,6 +642,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--out")
     sp.add_argument("--no-plots", action="store_true")
     sp.set_defaults(func=cmd_ci)
+
+    sp = sub.add_parser(
+        "debug-uart",
+        help="tail ARK_G431_CAN debug console (ST-Link VCP / USART2 PB3)")
+    add_common(sp)
+    sp.add_argument("--port", help="serial device (default: rig or auto ST-Link VCP)")
+    sp.add_argument("--baud", type=int, default=0,
+                    help="baud (default: rig debug_uart_baud or 115200)")
+    sp.add_argument("--duration", type=float, default=0,
+                    help="exit after N seconds (0 = until Ctrl-C)")
+    sp.set_defaults(func=cmd_debug_uart)
 
     return p
 
