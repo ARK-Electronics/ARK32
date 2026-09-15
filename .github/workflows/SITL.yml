@@ -5,6 +5,7 @@ on:
     branches: ["main", "ark-release"]
   pull_request:
     branches: ["main", "ark-release"]
+  workflow_call:
   workflow_dispatch:
 
 jobs:
