@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
-# Match CI clang-format (check_format). Drain stdin (updated refs).
+# Check the committed trees being pushed, independently of the working tree.
 set -euo pipefail
-cat >/dev/null
 cd "$(git rev-parse --show-toplevel)"
-exec make check_format
+declare -A checked=()
+while read -r local_ref local_oid remote_ref remote_oid; do
+  # Deletions have an all-zero local object ID (SHA-1 or SHA-256).
+  [[ "$local_oid" =~ ^0+$ ]] && continue
+  # Peel annotated tags. Tags pointing to a tree/blob have no source commit.
+  if ! commit="$(git rev-parse --verify --quiet "${local_oid}^{commit}")"; then
+    continue
+  fi
+  [[ -n "${checked[$commit]+x}" ]] && continue
+  checked[$commit]=1
+  echo "Checking formatting for $local_ref ($commit)"
+  bash scripts/format.sh --check --ref "$commit" </dev/null
+done

@@ -6,6 +6,7 @@
 #   scripts/format.sh --check      # fail if any file would change (CI)
 #   scripts/format.sh --changed    # only files changed vs git merge-base/HEAD
 #   scripts/format.sh --check --changed
+#   scripts/format.sh --check --ref REV  # check a committed tree in isolation
 #
 # Style config: repo-root .clang-format
 # Excludes vendor HAL (Drivers), CMSIS, generated DroneCAN DSDL, libcanard, etc.
@@ -24,21 +25,36 @@ CF_VENV="$ROOT/tools/clang-format-venv"
 
 CHECK=0
 CHANGED_ONLY=0
-for arg in "$@"; do
-  case "$arg" in
+REF=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --check) CHECK=1 ;;
     --changed|--diff-only) CHANGED_ONLY=1 ;;
+    --ref)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "--ref requires a revision" >&2
+        exit 2
+      fi
+      REF="$2"
+      shift
+      ;;
     -h|--help)
       sed -n '2,16p' "$0"
       exit 0
       ;;
     *)
-      echo "Unknown option: $arg" >&2
-      echo "Usage: $0 [--check] [--changed]" >&2
+      echo "Unknown option: $1" >&2
+      echo "Usage: $0 [--check] [--changed] [--ref REV]" >&2
       exit 2
       ;;
   esac
+  shift
 done
+
+if [[ -n "$REF" && ( "$CHECK" -ne 1 || "$CHANGED_ONLY" -ne 0 ) ]]; then
+  echo "--ref requires --check and cannot be combined with --changed" >&2
+  exit 2
+fi
 
 clang_format_version() {
   "$1" --version 2>/dev/null | head -1 || true
@@ -77,9 +93,28 @@ ensure_clang_format() {
 
 CF="$(ensure_clang_format)" || exit 1
 
-# Enable the repo pre-push hook (check_format) for this clone.
-if git rev-parse --git-dir >/dev/null 2>&1 && [[ -d "$ROOT/.githooks" ]]; then
-  git config --local core.hooksPath .githooks
+# Keep the caller's index and working tree untouched. Use the current formatter
+# with the sources and .clang-format from the revision being checked.
+if [[ -n "$REF" ]]; then
+  commit="$(git rev-parse --verify --end-of-options "${REF}^{commit}")"
+  # CLANG_FORMAT can be relative to the original checkout.
+  CF="$(cd "$(dirname "$CF")" && pwd)/$(basename "$CF")"
+  snapshot="$(mktemp -d "${TMPDIR:-/tmp}/ark32-format.XXXXXXXX")"
+  snapshot="$(cd "$snapshot" && pwd)"
+  trap 'rm -rf "$snapshot"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  git_dir="$(git rev-parse --absolute-git-dir)"
+  mkdir "$snapshot/tree"
+  (
+    export GIT_INDEX_FILE="$snapshot/index"
+    git read-tree "$commit"
+    # Unlike git archive, checkout-index includes export-ignore paths. Resolve
+    # attributes from the temporary index, with CI's LF checkout convention.
+    git -C "$snapshot/tree" --git-dir="$git_dir" --work-tree="$snapshot/tree" \
+      -c core.autocrlf=false checkout-index --all
+  )
+  cd "$snapshot/tree"
 fi
 
 # Collect sources under application and MCU trees, pruning third-party /

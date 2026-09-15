@@ -22,6 +22,9 @@ jobs:
       - name: Check formatting
         run: make check_format
 
+      - name: Test formatting hooks
+        run: python3 -m unittest discover -s scripts/tests -p test_format_hooks.py -v
+
   cppcheck:
     name: cppcheck (ARK F051 control path)
     runs-on: ubuntu-latest

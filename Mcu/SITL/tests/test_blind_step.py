@@ -1,6 +1,6 @@
 '''Missed-ZC blind-step path tests (PR #41, BLHeli-style timeout commutation).
 
-Uses state-port fault injection (cmd 3) to suppress comparator EXTI
+Uses state-port fault injection (cmd 0x80) to suppress comparator EXTI
 delivery - the comparator LEVEL keeps tracking the physics, so poll mode
 and the confirm loop stay honest while the interrupt path sees missed
 crossings. Covers the three paths that previously rested only on bench
@@ -28,7 +28,9 @@ import pytest
 import sitl_dshot as sd
 from sitl_harness import Sender, rpm_from_state, wait_for_state
 
-STATE_MAGIC_CMD = 0x5353
+from sitl_state_protocol import (
+    STATE_MAGIC_CMD, STATE_CMD_ZC_STATS, STATE_CMD_ZC_FAULT,
+)
 ZC_STATS_MAGIC = 0x5356
 
 STATS_FIELDS = ('zero_crosses', 'commutation_interval', 'dropped_edges',
@@ -45,12 +47,12 @@ def _open_ctl(sitl):
 
 
 def _zc_fault(ctl, mode, duration_us):
-    ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, 8, mode, duration_us))
+    ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, STATE_CMD_ZC_FAULT, mode, duration_us))
 
 
 def _zc_stats(ctl, retries=5):
     for _ in range(retries):
-        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
+        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, STATE_CMD_ZC_STATS, 0))
         try:
             pkt = ctl.recv(64)
         except socket.timeout:

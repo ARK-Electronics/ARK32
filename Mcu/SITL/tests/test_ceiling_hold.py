@@ -28,7 +28,9 @@ import time
 import sitl_dshot as sd
 from sitl_harness import SITL_DIR, Sender, rpm_from_state, wait_for_state
 
-STATE_MAGIC_CMD = 0x5353
+from sitl_state_protocol import (
+    STATE_MAGIC_CMD, STATE_CMD_ZC_STATS, STATE_CMD_ZC_FAULT,
+)
 ZC_STATS_MAGIC = 0x5356
 MODELS = os.path.join(SITL_DIR, 'models')
 
@@ -50,7 +52,7 @@ def _open_ctl(sitl):
 
 def _zc_stats(ctl, retries=5):
     for _ in range(retries):
-        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
+        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, STATE_CMD_ZC_STATS, 0))
         try:
             pkt = ctl.recv(64)
         except socket.timeout:
@@ -64,7 +66,7 @@ def _zc_stats(ctl, retries=5):
 
 
 def _zc_fault(ctl, mode, duration_us):
-    ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, 8, mode, duration_us))
+    ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, STATE_CMD_ZC_FAULT, mode, duration_us))
 
 
 def test_ceiling_hold_engages_on_desync(sitl_factory, state_stream):

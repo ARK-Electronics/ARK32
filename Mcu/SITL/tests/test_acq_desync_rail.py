@@ -24,7 +24,9 @@ import time
 import sitl_dshot as sd
 from sitl_harness import SITL_DIR, Sender, rpm_from_state, wait_for_state
 
-STATE_MAGIC_CMD = 0x5353
+from sitl_state_protocol import (
+    STATE_MAGIC_CMD, STATE_CMD_ZC_STATS,
+)
 ZC_STATS_MAGIC = 0x5356
 STATS_FIELDS = ('zero_crosses', 'commutation_interval', 'dropped_edges',
                 'desync_happened', 'old_routine', 'running', 'armed',
@@ -42,7 +44,7 @@ def _open_ctl(sitl):
 
 def _zc_stats(ctl, retries=5):
     for _ in range(retries):
-        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
+        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, STATE_CMD_ZC_STATS, 0))
         try:
             pkt = ctl.recv(64)
         except socket.timeout:
