@@ -17,7 +17,8 @@
       cmd 0 SUBSCRIBE: u32 period_ns; flags byte bit0 = averaged
         sampling (currents/voltages are the mean over each sample
         period instead of instantaneous, avoiding PWM aliasing at
-        coarse periods)
+        coarse periods); bit1 requests version 3 scope samples (always
+        instantaneous). Without bit1 the version 2 layout is unchanged.
       cmd 1 LOAD_MODEL: JSON file path (rest of packet)
       cmd 2 SET_SPEEDUP: float speedup (0 = free run)
       cmd 3 SUBSCRIBE_TONES: no payload. Streams tone events: the
@@ -33,17 +34,36 @@
       cmd 7 SET_STUCK: float 0..1, stuck rotor fraction (prop blocked
         by an obstruction, e.g. a tree branch): scales the model's
         holding torque, 1.0 locks the rotor rigidly
-      ARK test extensions (free cmd numbers above the upstream set):
-      cmd 8 ZC_FAULT: pad byte = mode (0 off, 1 drop all comparator
+      cmd 9 RESET: no payload. Resets the emulated ESC exactly like
+        the firmware's own NVIC_SystemReset (a re-exec), keeping the
+        eeprom backing file. Simulated time restarts at zero
+      cmd 8 WATCH_VARS: u8 count in the pad byte, u32 min_period_ns,
+        then count * (u8 size, NUL-terminated symbol name). Firmware
+        globals are resolved by name with dlsym (the SITL links with
+        -rdynamic) and streamed as change events: a value is sent when
+        it first differs from the last sent one, coalesced per
+        variable to min_period_ns. Subscribing sends the current
+        values, so a plot always has a starting point. Like the
+        sample stream the subscription expires two seconds after the
+        last refresh; an identical refresh only extends it
+      ARK test extensions (reserved command range 0x80..0xff):
+      cmd 0x80 ZC_FAULT: pad byte = mode (0 off, 1 drop all comparator
         edge deliveries, 2 drop every other commutation window),
         u32 duration_us. For blind-step/missed-ZC path tests.
-      cmd 9 ZC_STATS: no payload; replies with the commutation
+      cmd 0x81 ZC_STATS: no payload; replies with the commutation
         tracking snapshot (magic 0x5356, versioned fields)
-      cmd 10 GOV_FORCE: u16 slope_q10, u16 conf — force governor
+      cmd 0x82 GOV_FORCE: u16 slope_q10, u16 conf — force governor
         state for un-latch engagement tests
   SITL -> client:
-    u16 magic 0x5354, u8 version=1, u8 count, count * sample
+    u16 magic 0x5354, u8 version=2 or 3, u8 count, count * sample
+        v3 appends: float bemf[3], filtered_phase[3], filtered_neutral;
+        i8 diodes[3] (-1 low, 0 off, +1 high), u8 pad;
+        float active_duty (0..1), u32 firmware_desync_count
     u16 magic 0x5355, u8 ok, u8 pad, message   (LOAD_MODEL reply)
+    u16 magic 0x5359, u8 version=1, u8 count, count * u8 resolved
+        (WATCH_VARS reply, one flag per requested name)
+    u16 magic 0x535a, u8 version=1, u8 count, count * event
+        {u64 t_ns, u32 index, u64 raw value zero-extended}
 
   eeprom access (cmd 5/6) lets a local tool read and edit the ESC
   settings directly, without the 4-way or DroneCAN parameter paths:
@@ -59,7 +79,7 @@
         first sample), u32 sample_period_ns, count * float
         (physics audio samples, arbitrary linear units)
 
-  ZC_STATS (cmd 9) reply, magic 0x5356 (shared with tone/eeprom packet
+  ZC_STATS (cmd 0x81) reply, magic 0x5356 (shared with tone/eeprom packet
   tags; distinguished by length + the poller asked for ZC_STATS):
     u16 magic 0x5356, u8 version=6, u8 pad, u32 zero_crosses,
       u32 commutation_interval, u32 dropped_edges, u32 desync_happened,
@@ -90,6 +110,7 @@
 #include "runtime_loop.h"
 #include "faults.h"
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -99,6 +120,8 @@
 #ifdef _WIN32
 #	define setenv(name, val, overwrite) _putenv_s((name), (val))
 #	define unsetenv(name) _putenv(name "=")
+#else
+#	include <dlfcn.h>
 #endif
 
 #define STATE_MAGIC_CMD 0x5353
@@ -106,6 +129,10 @@
 #define STATE_MAGIC_REPLY 0x5355
 #define STATE_MAGIC_TONE 0x5356
 #define STATE_MAGIC_AUDIO 0x5357
+
+#define STATE_CMD_ZC_FAULT 0x80
+#define STATE_CMD_ZC_STATS 0x81
+#define STATE_CMD_GOV_FORCE 0x82
 
 struct __attribute__((packed)) state_sample {
 	uint64_t t_ns;
@@ -121,7 +148,20 @@ struct __attribute__((packed)) state_sample {
 	uint8_t pad[3];
 };
 
-#define STATE_BATCH 16
+struct __attribute__((packed)) scope_sample {
+	struct state_sample state;
+	float bemf[3], filtered[3], neutral;
+	int8_t diodes[3];
+	uint8_t pad;
+	float duty;
+	uint32_t desync_count;
+};
+
+_Static_assert(sizeof(struct state_sample) == 60, "state protocol v2 layout");
+_Static_assert(sizeof(struct scope_sample) == 100, "state protocol v3 layout");
+
+// Keep extended packets below the usual Ethernet MTU, including UDP/IP.
+#define STATE_BATCH 12
 
 static int fd = -1;
 static struct sockaddr_in sub_addr;
@@ -130,6 +170,7 @@ static time_t sub_expire;
 static uint32_t period_req_ns = 50000; // requested by the subscriber
 static uint32_t period_ns = 50000;     // effective, wall rate limited
 static bool averaged;		       // mean over the period instead of point samples
+static bool scope_samples;
 static double sig_acc[8];
 static uint32_t sig_n;
 static uint64_t next_sample_ns;
@@ -139,7 +180,7 @@ static struct __attribute__((packed)) {
 	uint16_t magic;
 	uint8_t version;
 	uint8_t count;
-	struct state_sample s[STATE_BATCH];
+	struct scope_sample s[STATE_BATCH];
 } batch = {.magic = STATE_MAGIC_DATA, .version = 2};
 
 // tone event stream (cmd 3)
@@ -260,6 +301,36 @@ static void tone_send(uint64_t now_ns)
 	} ev = {STATE_MAGIC_TONE, 1, 0, now_ns, tone_freq, tone_amp};
 	sendto(fd, &ev, sizeof(ev), 0, (struct sockaddr *)&tone_addr, sizeof(tone_addr));
 	tone_last_tx_wall_ns = sitl_wallclock_ns();
+}
+
+/*
+  beep-in-progress flag, kept current on every physics step so a test
+  can watch it: "wait armed == 1" then "wait sitl_tone_active == 0"
+  is the point the startup/arming beeps are over and throttle is live
+  (the tunes run to completion inside an interrupt handler, so input
+  is deaf until they end). Uses the same signature as tone_step below:
+  only sounds.c ever sets a non-zero TIM1 prescaler
+ */
+volatile uint8_t sitl_tone_active;
+
+static void tone_active_update(void)
+{
+	uint32_t psc, arr, ccr[3];
+	sitl_tim1_get_active(&psc, &arr, ccr);
+	uint8_t active = 0;
+	if (psc > 0 && arr > 0) {
+		const float freq = 160e6f / (float)((psc + 1) * (arr + 1));
+		for (int p = 0; p < 3; p++) {
+			const uint8_t mode = sitl_phase_mode[p];
+			// no ccr test: a beep_volume 0 tune drives CCR 0 yet the
+			// firmware is just as deaf while it plays
+			if ((mode == SITL_PHASE_PWM || mode == SITL_PHASE_PWM_NOCOMP) && freq < 20000) {
+				active = 1;
+				break;
+			}
+		}
+	}
+	sitl_tone_active = active;
 }
 
 /*
@@ -432,6 +503,150 @@ static void eeprom_set(uint16_t off, uint16_t len, const uint8_t *data, int avai
 }
 
 /*
+  variable watch (cmd 8): a test runner names firmware globals and gets
+  a timestamped event whenever one changes, which is what turns "the
+  motor stopped early" into "zero_throttle_brake_active went 1 at
+  t=6.2031". Symbols are resolved in-process, so this works on any
+  global without a registry to maintain
+ */
+#define STATE_MAGIC_WATCH_REPLY 0x5359
+#define STATE_MAGIC_WATCH_DATA 0x535a
+#define WATCH_MAX 16
+#define WATCH_NAME_MAX 64
+#define WATCH_BATCH 32
+
+static struct {
+	const volatile void *addr; // NULL for an unresolved name: the slot
+				   // still occupies its index so event
+				   // indices match the request order
+	uint8_t size;
+	uint64_t last;
+	bool have_last;
+	uint64_t next_ns; // per variable coalescing deadline
+} watch[WATCH_MAX];
+static uint8_t watch_count;
+static uint32_t watch_min_period_ns;
+static struct sockaddr_in watch_addr;
+static volatile bool watch_reset_pending;
+static bool watch_have_sub;
+static time_t watch_expire;
+static uint8_t watch_req[512]; // last request payload, to spot refreshes
+static int watch_req_len;
+
+struct __attribute__((packed)) watch_event {
+	uint64_t t_ns;
+	uint32_t index;
+	uint64_t raw;
+};
+
+static struct __attribute__((packed)) {
+	uint16_t magic;
+	uint8_t version;
+	uint8_t count;
+	uint8_t ok[WATCH_MAX];
+} watch_reply = {.magic = STATE_MAGIC_WATCH_REPLY, .version = 1};
+
+static struct __attribute__((packed)) {
+	uint16_t magic;
+	uint8_t version;
+	uint8_t count;
+	struct watch_event ev[WATCH_BATCH];
+} watch_batch = {.magic = STATE_MAGIC_WATCH_DATA, .version = 1};
+static uint64_t watch_last_flush_ns;
+
+static uint64_t watch_read(int i)
+{
+	uint64_t v = 0;
+	memcpy(&v, (const void *)watch[i].addr, watch[i].size);
+	return v;
+}
+
+static void watch_cmd(const uint8_t *pkt, int len, struct sockaddr_in *src)
+{
+	// an unchanged re-send is a keepalive: extend the expiry without
+	// disturbing the change detection state, but do retransmit the
+	// resolution reply - the subscriber may never have received it
+	if (watch_have_sub && len == watch_req_len && memcmp(pkt, watch_req, len) == 0 &&
+	    src->sin_addr.s_addr == watch_addr.sin_addr.s_addr && src->sin_port == watch_addr.sin_port) {
+		watch_expire = time(NULL) + 2;
+		sendto(fd, &watch_reply, 4 + watch_reply.count, 0, (struct sockaddr *)src, sizeof(*src));
+		return;
+	}
+	const uint8_t req_count = pkt[3];
+	int off = 8;
+	watch_count = 0;
+	watch_reply.count = 0;
+	memcpy(&watch_min_period_ns, pkt + 4, 4);
+	for (int k = 0; k < req_count && k < WATCH_MAX; k++) {
+		if (off >= len) {
+			break;
+		}
+		const uint8_t size = pkt[off++];
+		const char *name = (const char *)(pkt + off);
+		const int name_len = (int)strnlen(name, len - off);
+		if (name_len >= len - off || name_len >= WATCH_NAME_MAX) {
+			break;
+		}
+		off += name_len + 1;
+		void *addr = NULL;
+#ifndef _WIN32
+		addr = dlsym(RTLD_DEFAULT, name);
+#endif
+		const bool size_ok = size == 1 || size == 2 || size == 4 || size == 8;
+		// an unresolved name keeps its slot (addr NULL) so the event
+		// index always equals the request index
+		watch[watch_count].addr = (addr != NULL && size_ok) ? addr : NULL;
+		watch[watch_count].size = size_ok ? size : 1;
+		watch[watch_count].have_last = false;
+		watch[watch_count].next_ns = 0;
+		watch_reply.ok[watch_reply.count++] = watch[watch_count].addr != NULL;
+		if (watch[watch_count].addr == NULL) {
+			fprintf(stderr, "SITL: watch cannot resolve '%s' size %u\n", name, (unsigned)size);
+		}
+		watch_count++;
+	}
+	watch_addr = *src;
+	watch_have_sub = true;
+	watch_expire = time(NULL) + 2;
+	watch_batch.count = 0;
+	watch_req_len = len < (int)sizeof(watch_req) ? len : 0;
+	memcpy(watch_req, pkt, watch_req_len);
+	sendto(fd, &watch_reply, 4 + watch_reply.count, 0, (struct sockaddr *)src, sizeof(*src));
+}
+
+static void watch_step(uint64_t now_ns)
+{
+	if (!watch_have_sub) {
+		return;
+	}
+	for (int i = 0; i < watch_count; i++) {
+		if (watch[i].addr == NULL || now_ns < watch[i].next_ns) {
+			continue;
+		}
+		const uint64_t v = watch_read(i);
+		if (watch[i].have_last && v == watch[i].last) {
+			continue;
+		}
+		watch[i].last = v;
+		watch[i].have_last = true;
+		watch[i].next_ns = now_ns + watch_min_period_ns;
+		struct watch_event *ev = &watch_batch.ev[watch_batch.count++];
+		ev->t_ns = now_ns;
+		ev->index = (uint32_t)i;
+		ev->raw = v;
+		if (watch_batch.count >= WATCH_BATCH) {
+			break; // the rest go next step; ordering stays intact
+		}
+	}
+	if (watch_batch.count > 0 && (watch_batch.count >= WATCH_BATCH || now_ns - watch_last_flush_ns > 5000000ULL)) {
+		sendto(fd, &watch_batch, 4 + watch_batch.count * sizeof(struct watch_event), 0, (struct sockaddr *)&watch_addr,
+		       sizeof(watch_addr));
+		watch_batch.count = 0;
+		watch_last_flush_ns = now_ns;
+	}
+}
+
+/*
   effective sample period: the subscriber's request, floored to the
   physics step and rate limited to about 200k samples per second of
   wall clock so fine sampling does not overload the sim thread at high
@@ -472,6 +687,11 @@ void sitl_state_poll(void)
 		audio_have_sub = false;
 		unsetenv(AUDIO_SUB_ENV);
 	}
+	if (watch_have_sub && time(NULL) > watch_expire) {
+		watch_have_sub = false;
+		watch_count = 0;
+		watch_req_len = 0;
+	}
 	uint8_t pkt[512];
 	struct sockaddr_in src;
 	socklen_t srclen = sizeof(src);
@@ -486,12 +706,16 @@ void sitl_state_poll(void)
 	}
 	const uint8_t cmd = pkt[2];
 	if (cmd == 0 && ret >= 8) {
+		const bool want_scope = (pkt[3] & 2) != 0;
+		const bool want_averaged = (pkt[3] & 1) != 0 && !want_scope;
+		const bool format_changed = want_scope != scope_samples || want_averaged != averaged;
 		memcpy(&period_req_ns, pkt + 4, 4);
-		averaged = (pkt[3] & 1) != 0;
+		scope_samples = want_scope;
+		averaged = want_averaged;
 		apply_period();
 		// a new subscriber must not receive samples batched for the
 		// previous one
-		if (!have_sub || src.sin_addr.s_addr != sub_addr.sin_addr.s_addr || src.sin_port != sub_addr.sin_port) {
+		if (format_changed || !have_sub || src.sin_addr.s_addr != sub_addr.sin_addr.s_addr || src.sin_port != sub_addr.sin_port) {
 			batch.count = 0;
 			memset(sig_acc, 0, sizeof(sig_acc));
 			sig_n = 0;
@@ -539,6 +763,14 @@ void sitl_state_poll(void)
 			setenv("AM32_SITL_STUCK", buf, 1);
 			fprintf(stderr, "SITL: stuck rotor %.2f\n", (double)stuck);
 		}
+	} else if (cmd == 8 && ret >= 8) {
+		watch_cmd(pkt, (int)ret, &src);
+	} else if (cmd == 9) {
+		// deferred to sitl_state_reset_requested(): this poll can run
+		// nested inside an interrupt handler's busy wait, where the
+		// reset preamble (stdio, coverage flush) could deadlock on a
+		// lock the parked firmware thread holds
+		watch_reset_pending = true;
 	} else if (cmd == 5) {
 		eeprom_fetch(&src);
 	} else if (cmd == 6 && ret >= 8) {
@@ -557,12 +789,12 @@ void sitl_state_poll(void)
 		audio_have_sub = true;
 		audio_expire = time(NULL) + 2;
 		sub_save_env(AUDIO_SUB_ENV, &audio_addr);
-	} else if (cmd == 8 && ret >= 8) {
+	} else if (cmd == STATE_CMD_ZC_FAULT && ret >= 8) {
 		// ZC_FAULT — see motor_zc_fault()
 		uint32_t duration_us;
 		memcpy(&duration_us, pkt + 4, 4);
 		motor_zc_fault(pkt[3], duration_us);
-	} else if (cmd == 9) {
+	} else if (cmd == STATE_CMD_ZC_STATS) {
 		// ZC_STATS — racy reads of firmware globals are fine: every
 		// field is a naturally-aligned scalar and the client polls.
 		// Magic 0x5356 matches the ARK pytest suite (versioned;
@@ -645,7 +877,7 @@ void sitl_state_poll(void)
 			.desync_episode_bucket_v = desync_episode_bucket,
 		};
 		sendto(fd, &reply, sizeof(reply), 0, (struct sockaddr *)&src, sizeof(src));
-	} else if (cmd == 10 && ret >= 8) {
+	} else if (cmd == STATE_CMD_GOV_FORCE && ret >= 8) {
 		// GOV_FORCE: u16 slope_q10, u16 conf
 		uint16_t slope, conf;
 		memcpy(&slope, pkt + 4, 2);
@@ -654,11 +886,20 @@ void sitl_state_poll(void)
 	}
 }
 
+// polled from the sim thread main loop, outside any nested stepping:
+// a cmd 9 reset executes here where no firmware locks can be held
+bool sitl_state_reset_requested(void)
+{
+	return watch_reset_pending;
+}
+
 // called from the sim thread on every physics step
 void sitl_state_step(uint64_t now_ns)
 {
+	tone_active_update();
 	tone_step(now_ns);
 	audio_step(now_ns);
+	watch_step(now_ns);
 	if (!have_sub) {
 		return;
 	}
@@ -671,7 +912,8 @@ void sitl_state_step(uint64_t now_ns)
 	}
 	next_sample_ns = now_ns + period_ns;
 
-	struct state_sample *s = &batch.s[batch.count];
+	struct scope_sample *scope = &batch.s[batch.count];
+	struct state_sample *s = &scope->state;
 	memset(s, 0, sizeof(*s));
 	s->t_ns = now_ns;
 	float omega, theta, theta_e, i[3], v[3], vbus, ibus;
@@ -705,10 +947,38 @@ void sitl_state_step(uint64_t now_ns)
 	}
 	s->comp_phase = sitl_comp_phase;
 	s->comp_out = sitl_comp_out;
+	if (scope_samples) {
+		float bemf[3], filtered[3], neutral;
+		int8_t diodes[3];
+		motor_get_scope(bemf, filtered, &neutral, diodes);
+		memcpy(scope->bemf, bemf, sizeof(bemf));
+		memcpy(scope->filtered, filtered, sizeof(filtered));
+		memcpy(scope->diodes, diodes, sizeof(diodes));
+		scope->neutral = neutral;
+		scope->pad = 0;
+		uint32_t psc, arr, ccr[3];
+		sitl_tim1_get_active(&psc, &arr, ccr);
+		scope->duty = fminf(1.0f, (float)ccr[0] / ((double)arr + 1));
+		extern uint32_t desync_happened;
+		scope->desync_count = desync_happened;
+	}
 	batch.count++;
 
 	if (batch.count >= STATE_BATCH || now_ns - last_flush_ns > 5000000ULL) {
-		sendto(fd, &batch, 4 + batch.count * sizeof(struct state_sample), 0, (struct sockaddr *)&sub_addr, sizeof(sub_addr));
+		if (scope_samples) {
+			batch.version = 3;
+			sendto(fd, &batch, 4 + batch.count * sizeof(struct scope_sample), 0, (struct sockaddr *)&sub_addr,
+			       sizeof(sub_addr));
+		} else {
+			uint8_t legacy[4 + STATE_BATCH * sizeof(struct state_sample)];
+			batch.version = 2;
+			memcpy(legacy, &batch, 4);
+			for (unsigned k = 0; k < batch.count; k++) {
+				memcpy(legacy + 4 + k * sizeof(struct state_sample), &batch.s[k].state, sizeof(struct state_sample));
+			}
+			sendto(fd, legacy, 4 + batch.count * sizeof(struct state_sample), 0, (struct sockaddr *)&sub_addr,
+			       sizeof(sub_addr));
+		}
 		batch.count = 0;
 		last_flush_ns = now_ns;
 	}

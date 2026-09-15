@@ -20,6 +20,8 @@ windows-tools.zip
 .settings/
 Mcu/SITL/venv/
 sitl-venv/
+# External upstream SITL tools/tests, pinned by Mcu/SITL/escsim-revision.txt
+/ESCSim/
 .pytest_cache/
 **/__pycache__/
 **/sitl_ci.log

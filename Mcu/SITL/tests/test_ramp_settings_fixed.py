@@ -47,7 +47,9 @@ import time
 import sitl_dshot as sd
 from sitl_harness import SITL_DIR, Sender, rpm_from_state, wait_for_state
 
-STATE_MAGIC_CMD = 0x5353
+from sitl_state_protocol import (
+    STATE_MAGIC_CMD, STATE_CMD_ZC_STATS, STATE_CMD_ZC_FAULT,
+)
 ZC_STATS_MAGIC = 0x5356
 MODELS = os.path.join(SITL_DIR, 'models')
 
@@ -90,9 +92,7 @@ def _open_ctl(sitl):
 def _zc_stats(ctl, retries=8):
     need = struct.calcsize(STATS_FMT)
     for _ in range(retries):
-        # cmd 9 ZC_STATS (ARK extension; remapped from 4 when upstream
-        # SITL claimed 3/4 for tone/audio subscribe — see #77).
-        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
+        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, STATE_CMD_ZC_STATS, 0))
         try:
             pkt = ctl.recv(96)
         except socket.timeout:
@@ -108,8 +108,7 @@ def _zc_stats(ctl, retries=8):
 
 
 def _zc_fault(ctl, mode, duration_us):
-    # cmd 8 ZC_FAULT (ARK extension; remapped from 3 — see #77).
-    ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, 8, mode, duration_us))
+    ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, STATE_CMD_ZC_FAULT, mode, duration_us))
 
 
 def _spool_established(sitl, sim, ctl, tx, value=900, rpm_min=2000.0,

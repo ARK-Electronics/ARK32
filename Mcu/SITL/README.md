@@ -302,5 +302,9 @@ filtering logic is genuinely exercised at PWM switching level.
 
 ### Upstream compatibility
 
-See [UPSTREAM.md](UPSTREAM.md) for the pinned merged AM32 baseline, local
-adaptations, reference models, and cross-platform/sanitizer test commands.
+See [UPSTREAM.md](UPSTREAM.md) for the pinned AM32 and ESCSim revisions,
+local adaptations, reference models, and cross-platform/sanitizer commands.
+Upstream's GUI and tests now live in ESCSim. The simulator supports its
+variable watches, deferred reset command and opt-in v3 demagnetization scope;
+the ARK GUI and tests remain here. ARK fault-injection commands moved to
+`0x80`–`0x82` to avoid upstream's watch/reset command IDs.

@@ -7,7 +7,7 @@ and soft-releases authority.
 
 WHY THIS TEST EXISTS: stock SITL models rarely arm a stuck-low slope, so a
 no-op un-latch passes every suite. This forces the bind via SITL GOV_FORCE
-(cmd 5), which freezes the estimator for 1.2 s and advances the stuck window
+(cmd 0x82), which freezes the estimator for 1.2 s and advances the stuck window
 deterministically — then asserts:
 
   1. gov_stuck_ms advances under the inject
@@ -28,7 +28,9 @@ import time
 import sitl_dshot as sd
 from sitl_harness import SITL_DIR, Sender, rpm_from_state, wait_for_state
 
-STATE_MAGIC_CMD = 0x5353
+from sitl_state_protocol import (
+    STATE_MAGIC_CMD, STATE_CMD_ZC_STATS, STATE_CMD_GOV_FORCE,
+)
 ZC_STATS_MAGIC = 0x5356
 MODELS = os.path.join(SITL_DIR, 'models')
 
@@ -56,7 +58,7 @@ def _open_ctl(sitl):
 def _zc_stats(ctl, retries=8):
     need = struct.calcsize(STATS_FMT)
     for _ in range(retries):
-        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
+        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, STATE_CMD_ZC_STATS, 0))
         try:
             pkt = ctl.recv(96)
         except socket.timeout:
@@ -71,7 +73,7 @@ def _zc_stats(ctl, retries=8):
 
 
 def _gov_force(ctl, slope_q10: int, conf: int):
-    ctl.send(struct.pack('<HBBHH', STATE_MAGIC_CMD, 10, 0, slope_q10 & 0xFFFF,
+    ctl.send(struct.pack('<HBBHH', STATE_MAGIC_CMD, STATE_CMD_GOV_FORCE, 0, slope_q10 & 0xFFFF,
                          conf & 0xFFFF))
 
 
