@@ -14,6 +14,12 @@ def test_classify_warn_nfault_otw_is_not_fault():
     assert r.fault is None
 
 
+def test_classify_warn_nfault_is_not_fault():
+    r = _classify("warn: nFAULT", 1.0)
+    assert r.kind == "raw"
+    assert r.fault is None
+
+
 def test_classify_warn_nfault_retry_is_not_fault():
     r = _classify("warn: nFAULT retry", 1.5)
     assert r.kind == "raw"

@@ -5,7 +5,7 @@ Firmware (``Src/debug_uart.c``, ``USE_DEBUG_UART``) emits a small text console:
 * boot banner: ``ARK_G431_CAN debug UART @ 115200 (PB3/USART2)``
 * state: ``esc: <from> -> <to>``
 * faults: ``fault: nFAULT`` / ``fault: desync`` / …
-* warnings: ``warn: nFAULT OTW`` / ``warn: nFAULT retry`` (do not abort)
+* warnings: ``warn: nFAULT`` / ``warn: nFAULT retry`` (do not abort)
 
 This is **not** KISS telemetry (that is a separate optional wire). On the
 thrust-stand bench the TX pin is wired to the ST-Link V3 Virtual COM Port;

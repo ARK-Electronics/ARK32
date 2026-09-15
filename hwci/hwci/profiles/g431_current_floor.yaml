@@ -1,11 +1,11 @@
 name: g431_current_floor
 description: >
-  ARK_G431_CAN nFAULT GD_LIVE_CA_MIN datapoint. Armed idle, then the lowest
-  nonzero throttles this ESC is actually commanded at (5% / 8%), no-prop.
-  After the run, p50/p95 hwci_perf.current_ca on idle vs hold05/hold08
-  against 50 cA (0.50 A). If either straddles 50, raise GD_LIVE_CA_MIN —
-  unconfirmed WARN + 250 ms ceiling would false-drop a barely-spinning motor.
-  Props off. See hwci/docs/BENCH_SETUPS.md (G4 nFAULT current floor).
+  ARK_G431_CAN idle and low-throttle current characterization. Armed idle,
+  then 5% / 8% throttle, no-prop. Compare distributions of
+  hwci_perf.current_ca on idle vs hold05/hold08. Smoothed current does not
+  control the nFAULT warning or drive-loss latch; this profile retains its
+  historical name for existing bench scripts. Props off. See
+  hwci/docs/BENCH_SETUPS.md (G4 current and coast measurements).
 sample_rate_hz: 100
 arm_settle_s: 3.0
 steady_tail_fraction: 0.5

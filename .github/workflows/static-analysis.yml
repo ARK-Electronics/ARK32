@@ -7,6 +7,29 @@ on:
   workflow_dispatch:
 
 jobs:
+  gate-driver-tests:
+    name: gate-driver fault regressions (host C + Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pytest
+        run: python -m pip install pytest
+
+      - name: Run gate-driver regressions
+        env:
+          PYTHONPATH: hwci
+        run: >-
+          python -m pytest -q
+          hwci/tests/test_gd_nfault.py
+          hwci/tests/test_gd_nfault_firmware.py
+          hwci/tests/test_gd_nfault_integration.py
+          hwci/tests/test_debug_uart.py
+
   format:
     name: clang-format (check_format)
     runs-on: ubuntu-latest

@@ -219,9 +219,9 @@
 	 *   nFAULT  = PA12 (FAULT_N) — open-drain, external 20k to 3.3V;
 	 *             asserts on VDS OCP (resistor-set on VDS pin), UVLO, OTW,
 	 *             OTSD, GDF (single wire OR — no SPI status). Firmware
-	 *             classifies from pin duration + whether the bridge is
-	 *             still conducting (faults.c): OTW and 8 ms VDS retries
-	 *             keep PWM; Hi-Z faults cut drive.
+	 *             reports warnings without interrupting drive (faults.c).
+	 *             A BEMF failure during nFAULT inhibits further starts
+	 *             until sustained zero throttle; pin release cannot restart.
 	 * Mode / IDRIVE / VDS thresholds are hardwired on the board; firmware
 	 * only enables the driver and reacts to FAULT_N.
 	 */

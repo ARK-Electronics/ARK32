@@ -156,6 +156,7 @@ static const char *evt_name(uint8_t e)
 	switch (e) {
 		case DBG_EVT_BOOT:
 			return "boot";
+		case DBG_EVT_NFAULT_WARNING:
 		case DBG_EVT_NFAULT:
 			return "nFAULT";
 		case DBG_EVT_NFAULT_UVLO:
@@ -207,7 +208,9 @@ void debugUartService(void)
 			debugUartPrintf("esc: %s -> %s\r\n", from, to);
 		} else if (rec.kind == 2) {
 			/* OTW / VDS-retry are warnings: HWCI aborts on "fault: nFAULT". */
-			const char *pfx = (rec.a == DBG_EVT_NFAULT_OTW || rec.a == DBG_EVT_NFAULT_RETRY) ? "warn" : "fault";
+			const char *pfx = (rec.a == DBG_EVT_NFAULT_WARNING || rec.a == DBG_EVT_NFAULT_OTW || rec.a == DBG_EVT_NFAULT_RETRY)
+						  ? "warn"
+						  : "fault";
 			debugUartPrintf("%s: %s\r\n", pfx, evt_name(rec.a));
 		}
 	}

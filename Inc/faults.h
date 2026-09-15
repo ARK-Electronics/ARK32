@@ -17,18 +17,18 @@ typedef enum {
 	FAULT_BEMF_STALL,
 	/*
 	 * Gate-driver nFAULT classes. Not DRV status bits (H-interface has no
-	 * SPI). On DRV8350H they come from pin duration + bridge conduction;
+	 * SPI). On DRV8350H these are warning / drive-loss log labels;
 	 * on DRV8328 every nFAULT is a latched cut (UVLO vs other is a V hint).
 	 */
 	FAULT_GD_UVLO,	  /* bus below useful pack voltage */
-	FAULT_GD_OCP,	  /* VDS retry pulse, or retry budget exceeded */
-	FAULT_GD_OTW,	  /* nFAULT held, bridge still driving (DRV OTW) */
-	FAULT_GD_OTSD,	  /* held + dead, MCU die in thermal band (log label) */
-	FAULT_GD_UNKNOWN, /* held + dead, no UVLO/thermal signature (GDF etc.) */
+	FAULT_GD_OCP,	  /* observed short nFAULT pulse (possible VDS retry) */
+	FAULT_GD_OTW,	  /* retained OTW label; the ORed pin alone cannot prove OTW */
+	FAULT_GD_OTSD,	  /* drive loss + nFAULT, MCU thermal band (log label) */
+	FAULT_GD_UNKNOWN, /* unclassified nFAULT warning or drive-loss fault */
 } fault_id_t;
 
 /*
- * Classified cause while nFAULT warning/Hi-Z/latch is active.
+ * Log label while an nFAULT warning or drive-loss latch is active.
  * FAULT_NONE when healthy. Best-effort only — not a DRV status register.
  */
 fault_id_t faultGateDriverCause(void);
@@ -214,42 +214,32 @@ uint32_t faultErrorCount(void);
 void faultErrorCountReset(void);
 
 /*
- * Gate-driver nFAULT poll. Two chip policies (see faults.c):
+ * Gate-driver nFAULT poll. DRV8350H: observed pulses and held nFAULT are
+ * warnings only. Current, temperature, pin duration, and pulse counts do
+ * not prove loss of drive, so they must not cut a synchronized motor.
  *
- * DRV8350H (ARK 12S CAN): pin duration + bridge conducting *while driven*.
- *   pulse ~8 ms     : VDS auto-retry — keep PWM, count pulses if seen
- *   held + live     : OTW warning — keep PWM, log WARNING (rate-limited)
- *   held + dead     : Hi-Z until pin releases; MCU temp is a log label only
- *                     (not HIZ vs latch). Persistent pin-low at zero throttle
- *                     ENABLE tRST (consecutive failed pulses; pin-high
- *                     recovery resets), then latch.
- *   held + commanded, never confirmed live, ~250 ms : Hi-Z (dwell backstop;
- *                     commanded time accumulates across idle blips below
- *                     the DRV sleep threshold; a sleep re-classifies)
+ * The existing hard BEMF recovery paths call faultGateDriverLatchOnDriveLoss
+ * before restarting. A coincident/recent nFAULT latches PWM off until pilot
+ * demand has remained zero for 100 ms. Pin release never restarts a run.
  *
- * DRV8328 (ARK 4IN1): every nFAULT already Hi-Z's the FETs (no OTW-only,
- * no 8 ms retry). Cut PWM, latch stuck until zero throttle; nSLEEP sleep
- * clears the DRV latch.
- *
- * Call from the main loop (not the 20 kHz path). No-op without the pin.
+ * DRV8328: every nFAULT already disables its bridge. Cut and latch until
+ * zero throttle; nSLEEP sleep resets the hardware fault.
+ * Call from the main loop. No-op without the pin.
  */
 void faultPollGateDriver(void);
 
-/* 1 kHz timebase for nFAULT duration (called from tenKhzRoutine's 1 kHz
- * branch). No-op without the pin. */
+/* Called ONLY when an existing BEMF failure path has decided to stop or
+ * forcibly commutate. Returns 1 if a DRV8350 fault inhibits that restart.
+ * A warning alone must never call this hook or end a run. */
+uint8_t faultGateDriverLatchOnDriveLoss(void);
+
+/* 1 kHz correlation and deliberate-zero timebase; also runs in sine mode. */
 void faultGateDriverTick1kHz(void);
 
-/* 1 while PWM must stay off (DRV Hi-Z wait or latched trip). Not set for
- * OTW warning or the classify window — those keep driving. Sleep
- * (ENABLE/nSLEEP low) does not count: the pin is asserted by VCP UVLO then. */
+/* 1 while PWM must stay off for a latched gate-driver trip. */
 uint8_t faultGateDriverFaultActive(void);
 
-/* 1 while nFAULT is held and the bridge is still driving (OTW class). */
+/* 1 while trusted nFAULT is held (advisory, not a proven OTW status). */
 uint8_t faultGateDriverWarningActive(void);
-
-/* 1 while a Hi-Z wait needs ENABLE high so the pin can auto-clear and so
- * a zero-throttle ENABLE tRST can unlatch GDF. LATCH does not set this:
- * sleep-on-idle is that state's reset. */
-uint8_t faultGateDriverKeepAwake(void);
 
 #endif /* FAULTS_H_ */
