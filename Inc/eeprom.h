@@ -19,6 +19,12 @@
 #	define MOTOR_POLES_MIN 2
 #	define MOTOR_POLES_MAX 128
 
+/* Validate before publishing a settings byte to IRQ/main-loop consumers. */
+static inline uint8_t sanitizeMotorPoles(uint8_t poles)
+{
+	return poles >= MOTOR_POLES_MIN && poles <= MOTOR_POLES_MAX ? poles : 14;
+}
+
 typedef union EEprom_u {
 	struct {
 		uint8_t reserved_0;	//0
