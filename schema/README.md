@@ -47,11 +47,12 @@ ranges: firmware 1.35, temperature 141 and current 102 are intentional.
 The remainder of an erase image is 0xFF. Configurator resets preserve the
 identity/CAN fields declared by `preserveOnDefaults`.
 
-The product factory JSON uses display units, with two explicit legacy
-exceptions: temperature 141 and current 102 represent the schema's raw
-disabled sentinels. Its encoder accepts those exact sentinels and otherwise
-requires an exact display-to-raw round trip. The resulting 1 KiB production
-page is unchanged. Factory test SHA256 is pinned to the pre-schema encoder.
+The product factory JSON uses display units and accepts `disabledValue.raw`
+sentinels, including temperature 255. Two explicit legacy exceptions remain:
+temperature 141 and current 102 preserve the historical raw defaults. Its
+encoder accepts those exact sentinels and otherwise requires an exact
+display-to-raw round trip. The resulting 1 KiB production page is unchanged.
+Factory test SHA256 is pinned to the pre-schema encoder.
 
 Run language/history/factory checks with:
 

@@ -109,9 +109,25 @@ def test_resolve_eeprom_address_sanity_checks(monkeypatch):
 # --------------------------------------------------------------------------
 # DWARF union-walk cross-check vs the real firmware header
 # --------------------------------------------------------------------------
-def test_union_layout_flattens_anonymous_struct(host_eeprom_elf):
+def test_union_layout_flattens_generated_struct(host_eeprom_elf):
     from hwci import elf
     members = {m.name: m for m in elf.union_layout(host_eeprom_elf, "EEprom_u")}
+    assert members["max_ramp_speed"].offset == 5
+    assert members["min_duty_cycle"].offset == 6
+    assert members["variable_pwm_freq"].offset == 21
+    assert members["timing_advance"].offset == 23
+    assert members["pwm_frequency"].offset == 24
+    assert members["auto_timing"].offset == 47
+    assert members["firmware_major"].offset == 3
+    assert members["firmware_minor"].offset == 4
+    assert members["servo_deadband"].offset == 35
+    assert members["can_esc_index"].offset == 177
+    assert members["buffer"].offset == 0
+
+
+def test_union_layout_flattens_legacy_struct(host_legacy_eeprom_elf):
+    from hwci import elf
+    members = {m.name: m for m in elf.union_layout(host_legacy_eeprom_elf, "EEprom_u")}
     # direct members of the anonymous first struct
     assert members["advance_level"].offset == 23
     assert members["pwm_frequency"].offset == 24
@@ -127,6 +143,27 @@ def test_union_layout_flattens_anonymous_struct(host_eeprom_elf):
 
 def test_eeprom_fields_match_firmware_header(host_eeprom_elf):
     st.check_eeprom_layout(host_eeprom_elf)
+
+
+def test_eeprom_fields_match_legacy_firmware_header(host_legacy_eeprom_elf):
+    st.check_eeprom_layout(host_legacy_eeprom_elf)
+
+
+@pytest.mark.parametrize("change", ["missing", "offset", "size"])
+def test_generated_layout_still_rejects_drift(host_eeprom_elf, monkeypatch, change):
+    from dataclasses import replace
+    from hwci import elf
+
+    members = elf.union_layout(host_eeprom_elf, "EEprom_u")
+    member = next(m for m in members if m.name == "timing_advance")
+    members.remove(member)
+    if change != "missing":
+        members.append(replace(member, **{change: getattr(member, change) + 1}))
+        # A legacy name at the right offset must not hide a bad current member.
+        members.append(replace(member, name="advance_level"))
+    monkeypatch.setattr(st.elf, "union_layout", lambda path, name: members)
+    with pytest.raises(st.SettingsError, match="layout mismatch at 'advance_level'"):
+        st.check_eeprom_layout(host_eeprom_elf)
 
 
 def test_layout_check_fails_hard_on_missing_union(host_perf_elf):

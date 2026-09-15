@@ -15,6 +15,10 @@ jobs:
       - uses: ./.github/actions/setup-eeprom
       - run: make eeprom-check
       - run: python3 -m unittest discover -s scripts/eeprom/tests -v
+      - name: Install host layout test dependencies
+        run: python3 -m pip install -e ./hwci pytest
+      - name: Check HWCI EEPROM compatibility
+        run: python3 -m pytest -q hwci/tests/test_settings.py
 
   format:
     name: clang-format (check_format)

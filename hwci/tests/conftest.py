@@ -7,6 +7,7 @@ so its layout is identical on the host and on the Cortex-M0 target.
 """
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -125,12 +126,8 @@ def host_perf_elf_v3(tmp_path_factory):
     return _compile_probe(tmp_path_factory, "perf_elf_v3", _PROBE_V3_C)
 
 
-# EEprom settings probe: compiles the REAL Inc/eeprom.h on the host so the
-# DWARF union-walk cross-check in hwci.settings is tested against the actual
-# firmware layout. eeprom.h starts with `#include "main.h"` (an MCU-specific
-# header), so the header is copied next to a stub main.h that only provides
-# <stdint.h> - all EEprom_t needs. Members are uint8_t, so host and Cortex-M0
-# layouts are identical.
+# Compile the real generated EEPROM layout on the host, using the same
+# generator as firmware builds. Its packed layout is identical on Cortex-M0.
 _PROBE_EEPROM_C = """\
 #include "eeprom.h"
 EEprom_t eepromBuffer;
@@ -148,11 +145,24 @@ def host_eeprom_elf(tmp_path_factory):
     if _CC is None:
         pytest.skip("no host C compiler available")
     d = tmp_path_factory.mktemp("eeprom_elf")
-    (d / "main.h").write_text("#include <stdint.h>\n")
-    (d / "eeprom.h").write_text((HEADER_DIR / "eeprom.h").read_text())
+    subprocess.run([sys.executable, str(REPO_ROOT / "scripts/eeprom/eeprom_tool.py"),
+                    "generate", "--out", str(d)], check=True, capture_output=True)
     src = d / "probe.c"
     src.write_text(_PROBE_EEPROM_C)
     out = d / "probe.elf"
-    subprocess.run([_CC, "-g", "-O0", f"-I{d}", str(src), "-o", str(out)],
+    subprocess.run([_CC, "-g", "-O0", f"-I{HEADER_DIR}", f"-I{d}", str(src), "-o", str(out)],
                    check=True, capture_output=True)
     return str(out)
+
+
+@pytest.fixture(scope="session")
+def host_legacy_eeprom_elf(tmp_path_factory):
+    """Frozen pre-schema header for tuning older firmware in A/B runs."""
+    pytest.importorskip("elftools")
+    if _CC is None:
+        pytest.skip("no host C compiler available")
+    d = tmp_path_factory.mktemp("legacy_eeprom_header")
+    (d / "main.h").write_text("#include <stdint.h>\n")
+    legacy = Path(__file__).parent / "fixtures/eeprom_legacy.h"
+    (d / "eeprom.h").write_text(legacy.read_text())
+    return _compile_probe(tmp_path_factory, "legacy_eeprom_elf", _PROBE_EEPROM_C, d)

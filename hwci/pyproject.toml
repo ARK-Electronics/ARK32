@@ -18,7 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 plot = ["matplotlib>=3.7"]            # report plots + tune PDF report
 flightstand = ["grpcio>=1.51"]        # real Flight Stand gRPC client
-dev = ["pytest>=7.0", "grpcio-tools>=1.51", "matplotlib>=3.7"]
+dev = ["pytest>=7.0", "grpcio-tools>=1.51", "matplotlib>=3.7", "jsonschema>=4.10,<5"]
 
 [project.scripts]
 hwci = "hwci.cli:main"

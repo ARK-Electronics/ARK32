@@ -62,6 +62,11 @@ def _read_version_h(path: Path) -> tuple[int, int, int]:
 
 
 def _encode_field(field: dict, value) -> int:
+    # A disabled value is a raw sentinel, even when it lies outside the
+    # ordinary setting's valid range (for example, temperature 255).
+    disabled = field.get("disabledValue", {}).get("raw")
+    if disabled is not None and value == disabled:
+        return disabled
     # The historical erase image deliberately carries out-of-range disable
     # bytes. Preserve only its documented sentinels; ordinary values must be
     # representable exactly in display units.

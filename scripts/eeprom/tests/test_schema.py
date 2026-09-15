@@ -127,6 +127,36 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(page).hexdigest(), '0ddd802a96d82220bef23ea7901b560caf2e393c947194befddf1ad17ffdb864')
         self.assertEqual(page[48:], b'\xff' * (1024 - 48))
 
+    def test_factory_temperature_accepts_disabled_sentinels_and_endpoints(self):
+        product = json.loads((REPO_ROOT / 'factory/ARK_4IN1_F051_eeprom_defaults.json').read_text())
+        for temperature in (255, 141, 70, 140):
+            with self.subTest(temperature=temperature):
+                product['settings']['temperature_limit'] = temperature
+                page = build_eeprom_page(product, 32, 0, 3)
+                self.assertEqual(page[43], temperature)
+                self.assertEqual(page[44], 102)
+
+    def test_factory_temperature_rejects_invalid_and_inexact_values(self):
+        product = json.loads((REPO_ROOT / 'factory/ARK_4IN1_F051_eeprom_defaults.json').read_text())
+        for temperature in (69, 142, 254, 256, 70.5, 139.5):
+            with self.subTest(temperature=temperature):
+                product['settings']['temperature_limit'] = temperature
+                with self.assertRaises(FactoryImageError):
+                    build_eeprom_page(product, 32, 0, 3)
+
+    def test_factory_current_preserves_sentinels_and_display_conversion(self):
+        product = json.loads((REPO_ROOT / 'factory/ARK_4IN1_F051_eeprom_defaults.json').read_text())
+        for current, expected_raw in ((0, 0), (102, 102), (100, 50), (200, 100)):
+            with self.subTest(current=current):
+                product['settings']['current_limit'] = current
+                page = build_eeprom_page(product, 32, 0, 3)
+                self.assertEqual(page[44], expected_raw)
+        for current in (1, 201, 204, 255):
+            with self.subTest(current=current):
+                product['settings']['current_limit'] = current
+                with self.assertRaises(FactoryImageError):
+                    build_eeprom_page(product, 32, 0, 3)
+
     def test_generation_is_deterministic(self):
         with tempfile.TemporaryDirectory() as directory:
             cmd = [sys.executable, str(SCRIPTS / 'eeprom/eeprom_tool.py'), 'generate', '--out', directory]
