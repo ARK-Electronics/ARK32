@@ -6,60 +6,115 @@
 #   scripts/format.sh --check      # fail if any file would change (CI)
 #   scripts/format.sh --changed    # only files changed vs git merge-base/HEAD
 #   scripts/format.sh --check --changed
+#   scripts/format.sh --check --ref REV  # check a committed tree in isolation
 #
 # Style config: repo-root .clang-format
 # Excludes vendor HAL (Drivers), CMSIS, generated DroneCAN DSDL, libcanard, etc.
+#
+# Requires clang-format 22.1.5 (same pin as CI). Distro packages (Ubuntu 18.x)
+# produce a different AST and will fail the PR check. Override the binary with
+# CLANG_FORMAT=... if it reports that version; otherwise a repo-local venv is
+# bootstrapped under tools/clang-format-venv (gitignored).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+CLANG_FORMAT_PIN=22.1.5
+CF_VENV="$ROOT/tools/clang-format-venv"
+
 CHECK=0
 CHANGED_ONLY=0
-for arg in "$@"; do
-  case "$arg" in
+REF=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --check) CHECK=1 ;;
     --changed|--diff-only) CHANGED_ONLY=1 ;;
+    --ref)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "--ref requires a revision" >&2
+        exit 2
+      fi
+      REF="$2"
+      shift
+      ;;
     -h|--help)
-      sed -n '2,12p' "$0"
+      sed -n '2,16p' "$0"
       exit 0
       ;;
     *)
-      echo "Unknown option: $arg" >&2
-      echo "Usage: $0 [--check] [--changed]" >&2
+      echo "Unknown option: $1" >&2
+      echo "Usage: $0 [--check] [--changed] [--ref REV]" >&2
       exit 2
       ;;
   esac
+  shift
 done
 
-# Keep in lockstep with .github/workflows/static-analysis.yml
-# (python3 -m pip install --user 'clang-format==22.1.5').
-PINNED_CLANG_FORMAT=22.1.5
-
-if ! command -v clang-format >/dev/null 2>&1; then
-  echo "clang-format not found on PATH." >&2
-  echo "Install: pip install --user 'clang-format==${PINNED_CLANG_FORMAT}'" >&2
-  echo "and put ~/.local/bin first on PATH." >&2
-  exit 1
+if [[ -n "$REF" && ( "$CHECK" -ne 1 || "$CHANGED_ONLY" -ne 0 ) ]]; then
+  echo "--ref requires --check and cannot be combined with --changed" >&2
+  exit 2
 fi
 
-# A different local version + `make format` (AGENTS.md) is how we got a
-# whitespace-only commit that CI then rejected. Fail here instead.
-cf_ver_line="$(clang-format --version | head -1)"
-cf_ver="$(printf '%s\n' "$cf_ver_line" | sed -n 's/.*[[:space:]]\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')"
-if [[ "${CLANG_FORMAT_SKIP_VERSION:-}" != "1" ]]; then
-  if [[ -z "$cf_ver" ]]; then
-    echo "Could not parse clang-format version from: $cf_ver_line" >&2
-    echo "Expected ${PINNED_CLANG_FORMAT} (CI pin)." >&2
-    exit 1
+clang_format_version() {
+  "$1" --version 2>/dev/null | head -1 || true
+}
+
+clang_format_is_pin() {
+  [[ -x "$1" ]] && [[ "$(clang_format_version "$1")" == *"$CLANG_FORMAT_PIN"* ]]
+}
+
+ensure_clang_format() {
+  local c cf
+  if [[ -n "${CLANG_FORMAT:-}" ]]; then
+    if clang_format_is_pin "$CLANG_FORMAT"; then
+      printf '%s\n' "$CLANG_FORMAT"
+      return 0
+    fi
+    echo "CLANG_FORMAT=$CLANG_FORMAT is not clang-format $CLANG_FORMAT_PIN ($(clang_format_version "$CLANG_FORMAT"))." >&2
+    return 1
   fi
-  if [[ "$cf_ver" != "$PINNED_CLANG_FORMAT" ]]; then
-    echo "clang-format ${cf_ver} does not match CI pin ${PINNED_CLANG_FORMAT}." >&2
-    echo "Install: pip install --user 'clang-format==${PINNED_CLANG_FORMAT}'" >&2
-    echo "and ensure that binary is first on PATH." >&2
-    echo "Override (not for PRs): CLANG_FORMAT_SKIP_VERSION=1" >&2
-    exit 1
+  for c in "$CF_VENV/bin/clang-format" "$HOME/.local/bin/clang-format" "$(command -v clang-format 2>/dev/null || true)"; do
+    if clang_format_is_pin "$c"; then
+      printf '%s\n' "$c"
+      return 0
+    fi
+  done
+  echo "clang-format $CLANG_FORMAT_PIN not found (CI pin). Bootstrapping $CF_VENV" >&2
+  python3 -m venv "$CF_VENV"
+  "$CF_VENV/bin/pip" install -q "clang-format==$CLANG_FORMAT_PIN"
+  cf="$CF_VENV/bin/clang-format"
+  if ! clang_format_is_pin "$cf"; then
+    echo "error: $cf is not clang-format $CLANG_FORMAT_PIN ($(clang_format_version "$cf"))" >&2
+    return 1
   fi
+  printf '%s\n' "$cf"
+}
+
+CF="$(ensure_clang_format)" || exit 1
+
+# Keep the caller's index and working tree untouched. Use the current formatter
+# with the sources and .clang-format from the revision being checked.
+if [[ -n "$REF" ]]; then
+  commit="$(git rev-parse --verify --end-of-options "${REF}^{commit}")"
+  # CLANG_FORMAT can be relative to the original checkout.
+  CF="$(cd "$(dirname "$CF")" && pwd)/$(basename "$CF")"
+  snapshot="$(mktemp -d "${TMPDIR:-/tmp}/ark32-format.XXXXXXXX")"
+  snapshot="$(cd "$snapshot" && pwd)"
+  trap 'rm -rf "$snapshot"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  git_dir="$(git rev-parse --absolute-git-dir)"
+  mkdir "$snapshot/tree"
+  (
+    export GIT_INDEX_FILE="$snapshot/index"
+    git read-tree "$commit"
+    # Unlike git archive, checkout-index includes export-ignore paths. Resolve
+    # attributes from the temporary index, with CI's LF checkout convention.
+    git -C "$snapshot/tree" --git-dir="$git_dir" --work-tree="$snapshot/tree" \
+      -c core.autocrlf=false checkout-index --all
+  )
+  cd "$snapshot/tree"
 fi
 
 # Collect sources under application and MCU trees, pruning third-party /
@@ -113,13 +168,13 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
   exit 0
 fi
 
-echo "clang-format ${cf_ver_line}"
+echo "clang-format $(clang_format_version "$CF") ($CF)"
 echo "Files: ${#FILES[@]}  mode: $([[ $CHECK -eq 1 ]] && echo check || echo fix)"
 
 # Canonical form = clang-format, then drop trailing whitespace (clang-format
 # can leave spaces at EOL inside comments). Used by both check and fix.
 canonical_form() {
-  clang-format "$1" | sed 's/[[:space:]]*$//'
+  "$CF" "$1" | sed 's/[[:space:]]*$//'
 }
 
 if [[ "$CHECK" -eq 1 ]]; then
@@ -146,7 +201,7 @@ fi
 # Then strip trailing whitespace so on-disk form matches --check.
 format_batch() {
   printf '%s\0' "${FILES[@]}" | xargs -0 -n 32 -P "$(nproc 2>/dev/null || echo 4)" \
-    clang-format -i
+    "$CF" -i
 }
 format_batch
 format_batch

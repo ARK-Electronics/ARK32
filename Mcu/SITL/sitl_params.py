@@ -19,7 +19,7 @@ import re
 def _version_defines():
     '''VERSION_MAJOR/MINOR and EEPROM_VERSION from Inc/version.h so the
     defaults below track the firmware instead of being duplicated'''
-    d = {'VERSION_MAJOR': 2, 'VERSION_MINOR': 20, 'EEPROM_VERSION': 3}
+    d = {'VERSION_MAJOR': 32, 'VERSION_MINOR': 0, 'EEPROM_VERSION': 3}
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         '..', '..', 'Inc', 'version.h')
     try:

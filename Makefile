@@ -42,14 +42,13 @@ LIBS := -lnosys
 # extract version from Inc/version.h
 VERSION_MAJOR := $(shell $(FGREP) "define VERSION_MAJOR" $(MAIN_INC_DIR)/version.h | $(CUT) -d" " -f3 )
 VERSION_MINOR := $(shell $(FGREP) "define VERSION_MINOR" $(MAIN_INC_DIR)/version.h | $(CUT) -d" " -f3 )
-# optional ARK ship patch (artifact names + .file_name), e.g. 3 -> 3.0.3
-VERSION_PATCH := $(shell $(FGREP) "define VERSION_PATCH" $(MAIN_INC_DIR)/version.h | $(CUT) -d" " -f3 )
 # optional extra suffix from version.h (nightly/rc). Ship releases omit it;
-# IDENTIFIER=ARK32 is the fork mark vs upstream AM32.
+# IDENTIFIER=ARK32 is the artifact prefix; VERSION_MAJOR 32 is the EEPROM
+# fork mark vs upstream AM32.
 VERSION_TAG := $(shell $(FGREP) "define VERSION_TAG" $(MAIN_INC_DIR)/version.h | $(CUT) -d\" -f2 )
 
-# Artifact version: MAJOR.MINOR[.PATCH][-TAG]
-FIRMWARE_VERSION := $(VERSION_MAJOR).$(VERSION_MINOR)$(if $(VERSION_PATCH),.$(VERSION_PATCH))$(if $(VERSION_TAG),-$(VERSION_TAG))
+# Artifact version: MAJOR.MINOR[-TAG]
+FIRMWARE_VERSION := $(VERSION_MAJOR).$(VERSION_MINOR)$(if $(VERSION_TAG),-$(VERSION_TAG))
 
 # Compiler options
 #
@@ -299,7 +298,9 @@ factory-image-check: factory-image
 		bash scripts/check-factory-image-ark.sh
 
 # Code formatting (clang-format ≈ PX4 astyle/Linux look; see .clang-format).
-# Same target names as PX4:
+# Same target names as PX4. Requires clang-format 22.1.5 (CI pin);
+# scripts/format.sh bootstraps tools/clang-format-venv if PATH is a
+# different version. Optional pre-push hook setup is documented in README.md.
 #   make format          — rewrite sources in place
 #   make check_format    — CI: fail if any file would change
 #   make format_changed  — rewrite only files changed vs origin/ark-release
@@ -312,4 +313,3 @@ check_format:
 
 format_changed:
 	$(QUIET)bash scripts/format.sh --changed
-
