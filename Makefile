@@ -148,6 +148,8 @@ BOOTLOADER_G431_SRCS := \
 	$(wildcard bootloader/bootloader/*.[cs]) \
 	$(wildcard bootloader/bootloader/*.ld) \
 	$(wildcard bootloader/bootloader/DroneCAN/*.[ch]) \
+	Src/DroneCAN/sys_can.h \
+	Src/DroneCAN/sys_can_stm32_CANFD.c \
 	$(wildcard bootloader/bootloader/DroneCAN/libcanard/*.[ch]) \
 	$(wildcard bootloader/bootloader/DroneCAN/dsdl_generated/src/*.c) \
 	$(wildcard bootloader/bootloader/DroneCAN/dsdl_generated/include/*.h) \

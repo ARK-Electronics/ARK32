@@ -70,7 +70,9 @@ DSDL_SRC := $(addprefix $(ROOT)/bootloader/DroneCAN/dsdl_generated/src/, \
 	uavcan.protocol.param.NumericValue.c \
 	uavcan.protocol.param.Value.c \
 	uavcan.protocol.SoftwareVersion.c)
-SRC_CAN := $(wildcard $(ROOT)/bootloader/DroneCAN/*.[cs]) \
+# FDCAN driver is the app copy so hunt/latch cannot drift.
+SRC_CAN := $(filter-out %/sys_can_stm32_CANFD.c %/sys_can.h,$(wildcard $(ROOT)/bootloader/DroneCAN/*.[cs])) \
+	$(REPO)/Src/DroneCAN/sys_can_stm32_CANFD.c \
 	$(DSDL_SRC) \
 	$(wildcard $(ROOT)/bootloader/DroneCAN/libcanard/*.c)
 SRC := $(SRC_HAL) $(SRC_MCU) $(SRC_BL) $(SRC_CAN)
@@ -88,6 +90,7 @@ CFLAGS := \
 	-I$(HAL)/Drivers/CMSIS/Include \
 	-I$(HAL)/Drivers/CMSIS/Device/ST/STM32G4xx/Include \
 	-I$(ROOT)/bootloader/DroneCAN \
+	-I$(REPO)/Src/DroneCAN \
 	-I$(ROOT)/bootloader/DroneCAN/libcanard \
 	-I$(ROOT)/bootloader/DroneCAN/dsdl_generated/include \
 	-D$(PART) -DMCU_$(MCU) -DAM32_MCU=\"$(MCU)\" \
