@@ -19,10 +19,13 @@
  * on targets without USE_DEBUG_UART (stubs are no-ops). */
 enum {
 	DBG_EVT_BOOT = 1,
-	DBG_EVT_NFAULT,	     /* gate-driver nFAULT, unclassified (GDF etc.) */
-	DBG_EVT_NFAULT_UVLO, /* nFAULT + low bus → undervoltage class */
-	DBG_EVT_NFAULT_OCP,  /* nFAULT + high current/drive → overcurrent class */
-	DBG_EVT_NFAULT_OTW,  /* nFAULT + high temp → overtemperature class */
+	DBG_EVT_NFAULT_WARNING, /* held nFAULT without confirmed drive loss */
+	DBG_EVT_NFAULT,		/* gate-driver nFAULT, unclassified (GDF etc.) */
+	DBG_EVT_NFAULT_UVLO,	/* nFAULT held, low bus → UVLO */
+	DBG_EVT_NFAULT_OCP,	/* overcurrent fault label */
+	DBG_EVT_NFAULT_OTW,	/* retained OTW warning label */
+	DBG_EVT_NFAULT_OTSD,	/* nFAULT held, bridge dead, MCU thermal label */
+	DBG_EVT_NFAULT_RETRY,	/* short nFAULT pulse (VDS auto-retry) */
 	DBG_EVT_STUCK,
 	DBG_EVT_LVC,
 	DBG_EVT_SIGNAL,

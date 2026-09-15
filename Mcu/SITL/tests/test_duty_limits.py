@@ -43,6 +43,7 @@ import time
 
 import sitl_dshot as sd
 from sitl_harness import SITL_DIR, Sender, wait_for_state
+from sitl_state_protocol import STATE_MAGIC_CMD, STATE_CMD_ZC_STATS
 
 MODELS = os.path.join(SITL_DIR, 'models')
 
@@ -53,7 +54,6 @@ def _tick(n, dt):
         time.sleep(dt)
         yield None
 
-STATE_MAGIC_CMD = 0x5353
 ZC_STATS_MAGIC = 0x5356
 
 # v7 layout (Mcu/SITL/Src/sitl_state.c). Appended-only; a short read is a
@@ -103,7 +103,7 @@ def _open_ctl(sitl):
 def _zc_stats(ctl, retries=8):
     want = struct.calcsize(STATS_FMT)
     for _ in range(retries):
-        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, 9, 0))
+        ctl.send(struct.pack('<HBB', STATE_MAGIC_CMD, STATE_CMD_ZC_STATS, 0))
         try:
             pkt = ctl.recv(512)
         except socket.timeout:

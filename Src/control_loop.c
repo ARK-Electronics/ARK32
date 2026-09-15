@@ -251,6 +251,14 @@ void setInput()
 	} else {
 		adjusted_input = newinput;
 	}
+#if defined(USE_DRV_NFAULT)
+	/* Preserve pilot demand above, but do not let stale input, sine entry,
+	 * or idle braking bypass the gate-driver restart inhibit. */
+	if (faultGateDriverFaultActive()) {
+		input = 0;
+		return;
+	}
+#endif
 #ifndef BRUSHED_MODE
 	if (faultHandleStuckRotorIfNeeded()) {
 		/* drive cut and latched; skip normal throttle map */
@@ -321,6 +329,9 @@ void setInput()
 				/* Wake DRV with IRQs enabled (ENABLE settle is multi-ms on
 				 * DRV8350H). comStep gateDriverEnsure() is then a no-op. */
 				allOff();
+				/* 20 kHz writes CCR even while !running.
+				 * startMotor() → comStep() re-enables at that CCR. */
+				SET_DUTY_CYCLE_ALL(0);
 				gateDriverWakeBlocking();
 				if (!old_routine) {
 					startMotor();
@@ -513,9 +524,11 @@ void setInput()
 	}
 	// Missed-ZC power cut (BLHeli-style): while commutating blind the
 	// rotor position is unknown - bound the energy driven into a possibly
-	// wrong phase. On DRV8328 (F051 4IN1) there is no VDS trip; on
-	// DRV8350H (ARK_G431_CAN) the board has a resistor-set VDS limit and
-	// FAULT_N is polled in faultPollGateDriver. Applied here in setInput
+	// wrong phase. On DRV8328 (F051 4IN1) VDS is latched until nSLEEP
+	// reset; on DRV8350H (ARK_G431_CAN) the board has a resistor-set VDS
+	// limit with cycle-by-cycle retry. FAULT_N is polled in
+	// faultPollGateDriver (OTW / short VDS pulses do not cut PWM).
+	// Applied here in setInput
 	// (on F051 that is the DShot EXTI IRQ, not the main loop) rather than
 	// inside the O3 RAM_FUNC 20 kHz body (bench bisect showed adding code
 	// there disturbs F051 startup). Pulling last_duty_cycle down as well
@@ -609,6 +622,20 @@ RAM_FUNC void tenKhzRoutine()
 	ledcounter++;
 	ramp_count++;
 	one_khz_loop_counter++;
+#if defined(USE_DRV_NFAULT)
+	{
+		/* ADC samples and the nFAULT timebase must run during sine start.
+		 * The PID block below only runs in six-step mode. Keep its cadence
+		 * unchanged while keeping electrical/thermal telemetry fresh at
+		 * 1 kHz in either drive mode. */
+		static uint16_t gd_khz_div;
+		if (++gd_khz_div >= PID_LOOP_DIVIDER) {
+			gd_khz_div = 0;
+			PROCESS_ADC_FLAG = 1;
+			faultGateDriverTick1kHz();
+		}
+	}
+#endif
 	if (!escIsArmed()) {
 		if (cell_count == 0) {
 			if (inputSet) {
@@ -680,6 +707,16 @@ RAM_FUNC void tenKhzRoutine()
 		}
 	}
 
+#if defined(USE_DRV_NFAULT)
+	/* In particular, brake_on_stop=2 must not re-enable a faulted bridge.
+	 * Keep the ADC/zero-throttle clock and signal watchdog running. */
+	if (faultGateDriverFaultActive()) {
+		faultSignalTimeoutTick();
+		HWCI_PERF_CTRL_EXIT();
+		return;
+	}
+#endif
+
 #ifndef BRUSHED_MODE
 
 	if (!escInSineStart()) {
@@ -704,7 +741,9 @@ RAM_FUNC void tenKhzRoutine()
 		}
 #	endif
 		if (one_khz_loop_counter > PID_LOOP_DIVIDER) { // 1khz PID loop
-			PROCESS_ADC_FLAG = 1;		       // set flag to do new adc read at lower priority
+#	if !defined(USE_DRV_NFAULT)
+			PROCESS_ADC_FLAG = 1; // set flag to do new adc read at lower priority
+#	endif
 			one_khz_loop_counter = 0;
 			faultDesyncEpisodeTick1kHz();
 			if (use_current_limit && escIsDriving()) {

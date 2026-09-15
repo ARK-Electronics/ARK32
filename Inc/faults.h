@@ -16,24 +16,33 @@ typedef enum {
 	FAULT_SIGNAL_TIMEOUT,
 	FAULT_BEMF_STALL,
 	/*
-	 * Gate-driver nFAULT classes (DRV8350H / DRV8328). The pin is a single
-	 * open-drain OR of UVLO/OCP/OTW/GDF — no SPI status on hardware-interface
-	 * parts — so these are ADC guesses at the latch edge (V / I / temp).
+	 * Gate-driver nFAULT classes. Not DRV status bits (H-interface has no
+	 * SPI). On DRV8350H these are warning / drive-loss log labels;
+	 * on DRV8328 every nFAULT is a latched cut (UVLO vs other is a V hint).
 	 */
-	FAULT_GD_UVLO,	  /* low bus voltage guess */
-	FAULT_GD_OCP,	  /* high current / was-driving guess */
-	FAULT_GD_OTW,	  /* high temperature guess */
-	FAULT_GD_UNKNOWN, /* nFAULT with no clear ADC signature */
+	FAULT_GD_UVLO,	  /* bus below useful pack voltage */
+	FAULT_GD_OCP,	  /* observed short nFAULT pulse (possible VDS retry) */
+	FAULT_GD_OTW,	  /* retained OTW label; the ORed pin alone cannot prove OTW */
+	FAULT_GD_OTSD,	  /* drive loss + nFAULT, MCU thermal band (log label) */
+	FAULT_GD_UNKNOWN, /* unclassified nFAULT warning or drive-loss fault */
 } fault_id_t;
 
 /*
- * Latched gate-driver fault cause while nFAULT is active or sticky.
+ * Log label while an nFAULT warning or drive-loss latch is active.
  * FAULT_NONE when healthy. Best-effort only — not a DRV status register.
  */
 fault_id_t faultGateDriverCause(void);
 
-/* Short name for logs ("UVLO", "OCP", "OTW", "nFAULT", or ""). */
+/* Short name for logs ("UVLO", "OCP", "OTW", "OTSD", "nFAULT", or ""). */
 const char *faultGateDriverCauseName(fault_id_t cause);
+
+/* Consume a one-shot gate-driver log queued by faultPollGateDriver.
+ * Returns 0 if none, FAULT_GD_LOG_WARNING, or FAULT_GD_LOG_ERROR.
+ * *cause is FAULT_NONE when there is nothing pending. */
+#define FAULT_GD_LOG_NONE 0
+#define FAULT_GD_LOG_WARNING 1
+#define FAULT_GD_LOG_ERROR 2
+uint8_t faultGateDriverConsumeLog(fault_id_t *cause);
 
 /*
  * Stuck-rotor protection (was the top of setInput after throttle map).
@@ -205,23 +214,32 @@ uint32_t faultErrorCount(void);
 void faultErrorCountReset(void);
 
 /*
- * Gate-driver nFAULT poll (DRV8350H FAULT_N on ARK_G431_CAN, DRV8328 on
- * ARK_4IN1_F051 when the pin is defined).
+ * Gate-driver nFAULT poll. DRV8350H: observed pulses and held nFAULT are
+ * warnings only. Current, temperature, pin duration, and pulse counts do
+ * not prove loss of drive, so they must not cut a synchronized motor.
  *
- * The DRV pin is a single open-drain OR of VDS OCP, UVLO, OTW, and GDF —
- * hardware interface parts (…H) do not expose SPI status. On assert we
- * classify a best-effort cause from MCU bus voltage / current / temp
- * (faultGateDriverCause), cut PWM, latch ESC_FAULT_STUCK, log the specific
- * cause, and at zero throttle pulse DRV ENABLE (or clear the software latch
- * after ENABLE-low sleep) so latched trips can clear without reboot.
+ * The existing hard BEMF recovery paths call faultGateDriverLatchOnDriveLoss
+ * before restarting. A coincident/recent nFAULT latches PWM off until pilot
+ * demand has remained zero for 100 ms. Pin release never restarts a run.
  *
- * Call from the main loop (not the 20 kHz path). No-op without the pin.
+ * DRV8328: every nFAULT already disables its bridge. Cut and latch until
+ * zero throttle; nSLEEP sleep resets the hardware fault.
+ * Call from the main loop. No-op without the pin.
  */
 void faultPollGateDriver(void);
 
-/* 1 while a real gate-driver trip is latched, or nFAULT is low while the
- * driver is awake and past post-wake settle. Sleep (ENABLE/nSLEEP low) does
- * not count — the pin is asserted by VCP UVLO then. */
+/* Called ONLY when an existing BEMF failure path has decided to stop or
+ * forcibly commutate. Returns 1 if a DRV8350 fault inhibits that restart.
+ * A warning alone must never call this hook or end a run. */
+uint8_t faultGateDriverLatchOnDriveLoss(void);
+
+/* 1 kHz correlation and deliberate-zero timebase; also runs in sine mode. */
+void faultGateDriverTick1kHz(void);
+
+/* 1 while PWM must stay off for a latched gate-driver trip. */
 uint8_t faultGateDriverFaultActive(void);
+
+/* 1 while trusted nFAULT is held (advisory, not a proven OTW status). */
+uint8_t faultGateDriverWarningActive(void);
 
 #endif /* FAULTS_H_ */

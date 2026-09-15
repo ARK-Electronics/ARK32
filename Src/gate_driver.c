@@ -10,8 +10,8 @@
 #	include "main.h" /* GPIO_TypeDef / BRR / BSRR */
 #	include "motor_runtime.h"
 #	include "targets.h"
+#	include "faults.h"
 #	if defined(USE_DRV_ENABLE)
-/* DRV8350H on ARK 12S CAN: force bridge inputs inactive before ENABLE. */
 #		include "peripherals.h"
 #		include "phaseouts.h"
 #	endif
@@ -27,7 +27,6 @@
 #	else
 #		define GD_WAKE_US 1000u
 #	endif
-#	define GD_FAULT_RST_US 50u
 /* Main-loop polls to ignore nFAULT after ENABLE/nSLEEP rises. Covers the
  * same-loop DroneCAN read after wake, and the first PWM edges. */
 #	define GD_NFAULT_GRACE_POLLS 8u
@@ -59,6 +58,11 @@ void gateDriverInit(void)
 
 void gateDriverWakeBlocking(void)
 {
+#	if defined(USE_DRV_NFAULT)
+	if (faultGateDriverFaultActive()) {
+		return;
+	}
+#	endif
 	if (gate_driver_awake) {
 		return; /* already high; no delay */
 	}
@@ -107,22 +111,14 @@ void gateDriverSleep(void)
 	gd_nfault_grace = 0;
 }
 
-void gateDriverFaultResetPulse(void)
-{
-	/* DRV8350H ENABLE pulse only; nSLEEP boards do not need t_RST. */
-#	if defined(USE_DRV_ENABLE)
-	/* PWM inactive for the whole reset+wake; wake re-does force-low + t_settle. */
-	allOff();
-	SET_DUTY_CYCLE_ALL(0);
-	GD_PORT->BRR = GD_PIN;
-	delayMicros(GD_FAULT_RST_US);
-	gate_driver_awake = 0;
-	gateDriverWakeBlocking();
-#	endif
-}
-
 void gateDriverPoll(void)
 {
+#	if defined(USE_DRV_NFAULT)
+	if (faultGateDriverFaultActive()) {
+		gateDriverSleep();
+		return;
+	}
+#	endif
 	if (running || stepper_sine || prop_brake_active) {
 		gateDriverWakeBlocking();
 	} else {

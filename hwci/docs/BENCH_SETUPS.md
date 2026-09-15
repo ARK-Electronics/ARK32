@@ -40,8 +40,68 @@ hwci debug-uart --config rig.yaml
 
 # Each hardware run with debug_uart_backend: serial also writes
 #   <run_dir>/debug_uart.log
-# and aborts on fault: nFAULT / desync / stuck / stall / acq_desync.
+# and aborts on fault: nFAULT. Other fault lines remain in the log.
+# warn: nFAULT / retry does not abort a run.
 ```
+
+### G4 nFAULT warning and drive-loss latch
+
+On DRV8350H, nFAULT alone does not distinguish an overtemperature warning
+from a fault that disables the bridge. A held pin reports a warning; short
+observed pulses report retry warnings. Neither cuts drive. The smoothed
+current reading is telemetry, not evidence that the driver is live or dead.
+
+The existing BEMF stall and established-run desync paths latch drive off
+when drive is still commanded and nFAULT is low or was observed recently.
+Releasing nFAULT while throttle remains applied does not restart the motor.
+Rearming requires zero throttle continuously for 100 ms; an isolated zero
+frame does not clear the latch. There is no timed high-throttle restart.
+
+The nFAULT jumper checks the **warning** path. Use a stable, unloaded bench
+run and save the UART log and phase-current trace:
+
+1. Hold a stable throttle, then pull nFAULT low for longer than 12 ms.
+2. Expect `warn: nFAULT` while the motor continues running.
+3. Release the jumper. Expect the warning to clear without a drive cut.
+
+Grounding this reporting pin does not disable the gate driver. A drive-loss
+latch test needs an actual driver-disabling event, or a controlled injection
+that combines nFAULT with lost BEMF. Do not count the warning-jumper test as
+validation of this path. For a drive-loss test, verify `fault: nFAULT`, zero
+drive through pin release at nonzero throttle, and recovery only after the
+continuous-zero-throttle rearm interval. Save the phase-current trace to
+check the first restart commutation as well as the UART events.
+
+### G4 current and coast measurements
+
+The existing `g431_current_floor` profile records idle and low-throttle
+current for bench characterization. Its historical name does not imply a
+current threshold in the nFAULT policy:
+
+```bash
+.venv/bin/python -m hwci run --config rig.yaml --profile g431_current_floor \
+  --out runs/g431-current-floor
+```
+
+In `samples.csv` / `hwci_perf.current_ca`, compare the distributions of:
+
+* `idle` (armed, throttle 0, DRV may be asleep — offset / noise)
+* `hold05` / `hold08` (lowest nonzero throttle this ESC is actually commanded)
+
+The existing `g431_hiz_spindown` profile measures ordinary stop-then-punch
+behavior at several coast durations. `require_eeprom` aborts unless
+`brake_on_stop=0` and `rc_car_reverse=0`, so these runs measure an unbraked
+coast. The harness checks the settings on the device before starting:
+
+```bash
+.venv/bin/python -m hwci run --config rig.yaml --profile g431_hiz_spindown \
+  --out runs/g431-hiz-spindown
+```
+
+For each `re20_*` segment, measure time from throttle-up to a stable running
+RPM and inspect `fault: stall` bursts. These measurements describe that
+motor and bench load; they do not validate an automatic nFAULT restart or
+represent a windmilling propeller in flight.
 
 ## SETUP A — Flight Stand throttle (no PX4 / no BDShot)
 

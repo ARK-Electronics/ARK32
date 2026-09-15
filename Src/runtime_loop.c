@@ -282,6 +282,15 @@ void runtimeProcessDesyncCheck(void)
 			// fills the bucket in a few events and latches the ESC during
 			// the recovery it should be riding out. Live regime test only.
 			if (zc_at_desync > 100) {
+#if defined(USE_DRV_NFAULT)
+				/* This branch already ends the failed run. A gate-driver
+				 * warning plus that loss must not start another powered try. */
+				if (((!eepromBuffer.bi_direction && input > DSHOT_CMD_MAX) || commutation_interval > 1000) &&
+				    faultGateDriverLatchOnDriveLoss()) {
+					desync_check = 0;
+					return;
+				}
+#endif
 				if (!commanded_stop) {
 					faultDesyncEpisodeCharge(DESYNC_EPISODE_JUMP);
 				}

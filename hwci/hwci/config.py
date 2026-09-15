@@ -116,6 +116,10 @@ class Profile:
     # RigConfig (recorded into the run meta), not from the test profile.
     pole_pairs: int = 7
     smoke_gates: SmokeGates | None = None
+    # Live EEPROM bytes that must match before the run starts. Empty = no
+    # check. A mismatch aborts rather than producing a plausible wrong
+    # number (e.g. brake_on_stop=1 makes a coast look like HIZ allOff()).
+    require_eeprom: dict[str, int] = field(default_factory=dict)
 
     @property
     def duration_s(self) -> float:
@@ -171,6 +175,8 @@ def profile_from_dict(d: dict) -> Profile:
         demag_rpm_drop_fraction=float(d.get("demag_rpm_drop_fraction", 0.25)),
         pole_pairs=int(d.get("pole_pairs", 7)),
         smoke_gates=_smoke_gates_from(d.get("smoke_gates")),
+        require_eeprom={str(k): int(v)
+                        for k, v in (d.get("require_eeprom") or {}).items()},
     )
 
 
