@@ -149,6 +149,11 @@ def resolve_flash_map(defaults: dict) -> dict:
 def build_eeprom_page(defaults: dict, version_major: int, version_minor: int,
                       eeprom_version: int, page_size: int = EEPROM_PAGE_SIZE) -> bytes:
     """Build the exact product page over the schema's historical erase prefix."""
+    if page_size < EEPROM_SETTINGS_SIZE:
+        raise FactoryImageError(
+            f"flash_map.eeprom_page_size {page_size} is smaller than the "
+            f"{EEPROM_SETTINGS_SIZE} byte settings block"
+        )
     fields = resolve_schema(_SCHEMA, eeprom_version, (version_major, version_minor))["fields"]
     prefix = default_bytes(_SCHEMA, eeprom_version, (version_major, version_minor))
     buf = bytearray(b"\xff" * page_size)
@@ -237,8 +242,10 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--defaults", type=Path, required=True,
                    help="factory/*_eeprom_defaults.json")
-    p.add_argument("--bootloader", type=Path, required=True,
-                   help="Bootloaders/AM32_F051_BOOTLOADER_*.bin")
+    p.add_argument("--bootloader", type=Path, default=None,
+                   help="Bootloaders/AM32_*_BOOTLOADER_*.bin")
+    p.add_argument("--allow-empty-bootloader", action="store_true",
+                   help="leave the bootloader region erased if --bootloader is absent")
     p.add_argument("--app", type=Path, required=True,
                    help="obj/ARK32_ARK_4IN1_F051_*.bin application image")
     p.add_argument("--version-h", type=Path, default=Path("Inc/version.h"))
@@ -263,7 +270,15 @@ def main(argv: list[str] | None = None) -> int:
     fmap = resolve_flash_map(defaults)
     eeprom_page = build_eeprom_page(defaults, ver_maj, ver_min, eeprom_ver,
                                     fmap["eeprom_page_size"])
-    bootloader = args.bootloader.read_bytes()
+    if args.bootloader is not None:
+        bootloader = args.bootloader.read_bytes()
+    elif args.allow_empty_bootloader:
+        print("warning: no bootloader image; leaving the region erased",
+              file=sys.stderr)
+        bootloader = b""
+    else:
+        raise FactoryImageError(
+            "--bootloader is required (or pass --allow-empty-bootloader)")
     app = args.app.read_bytes()
 
     image = build_full_image(bootloader, app, eeprom_page, fmap)

@@ -437,9 +437,14 @@ void runtimeSendTelemetryIfNeeded(void)
  * backstop below this. Placed correctly the floor is unreachable anyway -
  * equilibrium lands inside the band.
  *
- * Nothing here is gated on limits.temperature being in range: settings.c
- * coerces anything outside 70..140 to 255, which no die reading reaches,
- * so a disabled limit falls out of the arithmetic as a constant 2000.
+ * Nothing here is gated on temperature_limit being in range: settings.c
+ * resolves anything outside 70..140 to TARGET_DEFAULT_TEMPERATURE_LIMIT,
+ * which is either an in-range onset (a product that arms the derate) or the
+ * 255 sentinel, and 255 is a reading no die reaches, so a disabled limit
+ * falls out of the arithmetic as a constant 2000. NOTE this used to coerce
+ * to 255 unconditionally; do not restore that - it also defeated the
+ * DroneCAN parameter layer's repair, whose window includes 255, and the ESC
+ * came up with no thermal protection at all.
  */
 #define THERMAL_CEIL_FLOOR 200 /* 10% of full scale; see above */
 #define THERMAL_FILT_Q 12

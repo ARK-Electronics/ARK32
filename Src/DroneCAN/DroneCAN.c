@@ -427,27 +427,37 @@ static void apply_post_skeleton_defaults(EEprom_t *e)
 	/* AUTO: first available of DShot/PWM, with DroneCAN prioritised while the
 	 * RawCommand stream is live (see DroneCAN_active). Never leave a CAN-only
 	 * board on upstream's DShot default. */
-	e->input_type = 0;
+	e->input_type = TARGET_DEFAULT_INPUT_TYPE;
+}
+
+/*
+  The page a param ERASE leaves behind: the configurator skeleton with this
+  target's corrections applied. Everything that has to agree on "the default"
+  reads this - the erase itself, the default_value GetSet advertises, and the
+  SITL seed image - so a GCS "reset to default" cannot write something the
+  erase would not.
+ */
+static const uint8_t *erase_image(void)
+{
+	static EEprom_t image;
+	static uint8_t built;
+	if (!built) {
+		memset(image.buffer, 0xff, sizeof(image.buffer));
+		memcpy(image.buffer, default_settings, sizeof(default_settings));
+		apply_post_skeleton_defaults(&image);
+		built = 1;
+	}
+	return image.buffer;
 }
 
 #	ifdef MCU_SITL
-/* Seed a missing SITL eeprom file the way a factory-flashed ESC comes up:
- * the configurator skeleton with this target's protection envelope applied,
- * i.e. exactly what a DroneCAN param erase leaves behind. Seeding the bare
- * skeleton instead would boot SITL with the limiters disabled. */
+/* Seed a missing SITL eeprom file the way a factory-flashed ESC comes up,
+ * rather than with erased flash or the bare skeleton (limiters disabled). */
 const uint8_t *DroneCAN_default_settings(unsigned *len);
 const uint8_t *DroneCAN_default_settings(unsigned *len)
 {
-	static EEprom_t seeded;
-	static uint8_t built;
-	if (!built) {
-		memset(seeded.buffer, 0xff, sizeof(seeded.buffer));
-		memcpy(seeded.buffer, default_settings, sizeof(default_settings));
-		apply_post_skeleton_defaults(&seeded);
-		built = 1;
-	}
-	*len = sizeof(seeded.buffer);
-	return seeded.buffer;
+	*len = EEPROM_SIZE;
+	return erase_image();
 }
 #	endif
 
@@ -693,7 +703,7 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				pkt.value.integer_value = *(uint8_t *)p->ptr;
 				pkt.default_value.union_tag = UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE;
 				if (eindex < sizeof(default_settings)) {
-					pkt.default_value.integer_value = default_settings[eindex];
+					pkt.default_value.integer_value = erase_image()[eindex];
 				} else {
 					pkt.default_value.integer_value = p->default_value;
 				}
@@ -746,7 +756,7 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				pkt.value.boolean_value = (*(uint8_t *)p->ptr) ? true : false;
 				pkt.default_value.union_tag = UAVCAN_PROTOCOL_PARAM_VALUE_BOOLEAN_VALUE;
 				if (eindex < sizeof(default_settings)) {
-					pkt.default_value.boolean_value = !!default_settings[eindex];
+					pkt.default_value.boolean_value = !!erase_image()[eindex];
 				} else {
 					pkt.default_value.boolean_value = !!p->default_value;
 				}
@@ -784,9 +794,7 @@ static void handle_param_ExecuteOpcode(CanardInstance *ins, CanardRxTransfer *tr
 			can_printf("No erase while running");
 		} else {
 			can_printf("resetting to defaults");
-			memset(eepromBuffer.buffer, 0xff, sizeof(eepromBuffer.buffer));
-			memcpy(eepromBuffer.buffer, default_settings, sizeof(default_settings));
-			apply_post_skeleton_defaults(&eepromBuffer);
+			memcpy(eepromBuffer.buffer, erase_image(), sizeof(eepromBuffer.buffer));
 			save_flash_nolib(eepromBuffer.buffer, sizeof(eepromBuffer.buffer), eeprom_address);
 			loadEEpromSettings();
 			load_settings();

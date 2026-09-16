@@ -268,8 +268,14 @@ def default_blob() -> bytes:
     d[27] = 14     # motor_poles
     d[30] = 5      # beep_volume
     d[32], d[33], d[34], d[35] = 128, 128, 128, 50   # servo cal
-    d[37] = 30     # low_cell_volt_cutoff (3.0v)
-    d[43], d[44] = 141, 102   # limits (off)
+    d[37] = 50     # low_voltage_threshold -> 250+50 = 3.00 V/cell
+    # 141/102 are the AM32 configurator's out-of-range "disabled" pair. The
+    # current limiter does stay off (102 > 100 is never armed), but settings.c
+    # resolves the temperature byte to TARGET_DEFAULT_TEMPERATURE_LIMIT, so on
+    # a target that arms the derate (ARK_G431_CAN, AM32_SITL_CAN) a rig flashed
+    # with this blob runs WITH the thermal foldback, not without it. Write 255
+    # instead if a sweep needs the derate genuinely disabled.
+    d[43], d[44] = 141, 102   # temperature_limit, current_limit
     d[45] = 5      # sine_mode_power
     d[46] = 0      # input_type AUTO_IN (detect DShot/PWM; CAN prioritised if live)
     return bytes(d)

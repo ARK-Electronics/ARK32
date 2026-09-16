@@ -41,6 +41,7 @@ FIELDS = (
     # member None: the skeleton still carries upstream's 160 on purpose (see
     # the MAX_RAMP note in DroneCAN.c) and nothing restores it, so only the
     # macro and the product JSON are held together here.
+    ("INPUT_TYPE", "input_type", "input_type", 1),
     ("MAX_RAMP", None, "max_ramp_percent_per_ms", 10),
 )
 

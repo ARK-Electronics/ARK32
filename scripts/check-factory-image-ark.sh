@@ -216,6 +216,9 @@ ee = img[EEPROM_OFFSET : EEPROM_OFFSET + EEPROM_PAGE]
 if len(ee) != EEPROM_PAGE:
     errors.append("eeprom page truncated")
 
+CURRENT_SENTINEL = 102  # AM32 configurator "disabled", outside the raw 0..100
+
+
 def expect(off: int, want: int, name: str) -> None:
     got = ee[off]
     if got != want:
@@ -249,14 +252,20 @@ expect(9, int(s["current_P"]), "current_P")
 expect(10, int(s["current_I"]), "current_I")
 expect(11, int(s["current_D"]), "current_D")
 expect(43, int(s["temperature_limit"]), "temperature_limit")
-expect(44, int(s["current_limit"]), "current_limit")
+# The JSON is in schema display units: current_limit is amps, stored in 2 A
+# counts. The AM32 configurator's disabled sentinel (102) is out of the raw
+# 0..100 range and build_factory_image.py writes it verbatim, so mirror that.
+i_lim_raw = CURRENT_SENTINEL if int(s["current_limit"]) == CURRENT_SENTINEL else int(s["current_limit"]) // 2
+if int(s["current_limit"]) != CURRENT_SENTINEL and int(s["current_limit"]) % 2:
+    errors.append(f'defaults current_limit {s["current_limit"]} A not encodable in 2 A counts')
+expect(44, i_lim_raw, "current_limit")
 if "temperature_derate_band" in s:
     expect(184, int(s["temperature_derate_band"]), "temp_derate_band")
 elif ee[184] != 0xFF:
     errors.append(f"eeprom[184] temp_derate_band: got {ee[184]} want 255 (JSON omits it)")
 
 t_lim = int(s["temperature_limit"])
-i_lim = int(s["current_limit"])
+i_lim = i_lim_raw
 band = int(s.get("temperature_derate_band", 15))
 thermal_desc = (
     f"derate {t_lim}->{t_lim + band} C" if 70 <= t_lim <= 140 else f"OFF ({t_lim})"

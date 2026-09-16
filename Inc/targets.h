@@ -57,6 +57,7 @@
 #	define TARGET_DEFAULT_TEMPERATURE_LIMIT 105
 #	define TARGET_DEFAULT_CURRENT_LIMIT 100
 #	define TARGET_DEFAULT_TEMP_DERATE_BAND 15
+#	define TARGET_DEFAULT_INPUT_TYPE 0
 #endif
 
 #ifdef ARK_G431_CAN
@@ -193,6 +194,7 @@
 #	define TARGET_DEFAULT_TEMPERATURE_LIMIT 105
 #	define TARGET_DEFAULT_CURRENT_LIMIT 100
 #	define TARGET_DEFAULT_TEMP_DERATE_BAND 15
+#	define TARGET_DEFAULT_INPUT_TYPE 0
 /* Closed-loop earlier at low RPM (same bench rationale as ARK_4IN1_F051). */
 #	ifndef POLLING_MODE_THRESHOLD
 #		define POLLING_MODE_THRESHOLD 5000
@@ -365,6 +367,11 @@
 #endif
 #ifndef TARGET_DEFAULT_TEMP_DERATE_BAND
 #	define TARGET_DEFAULT_TEMP_DERATE_BAND THERMAL_DERATE_BAND_DEFAULT
+#endif
+/* Byte 46. The configurator skeleton carries upstream's DShot (1), which on a
+ * CAN-only board would take the ESC off the bus after a param erase. */
+#ifndef TARGET_DEFAULT_INPUT_TYPE
+#	define TARGET_DEFAULT_INPUT_TYPE 0 /* AUTO_IN */
 #endif
 
 /*
