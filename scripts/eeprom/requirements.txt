@@ -1,0 +1,2 @@
+# Required by every firmware/SITL build and make eeprom-check.
+jsonschema>=4.10,<5

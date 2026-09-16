@@ -2,8 +2,8 @@
 """Run pinned ESCSim behavioral tests against ARK32, with ARK expectations.
 
 Clone am32-firmware/ESCSim at escsim-revision.txt, then pass --escsim PATH.
-The upstream runner and its clients are loaded from that checkout; only
-ARK's startup tune and input-watchdog expectations are adapted here.
+The upstream runner and its clients are loaded from that checkout; ARK's
+startup tune, input watchdog and schema-backed defaults are adapted here.
 """
 
 import argparse
@@ -186,6 +186,13 @@ def load_suite(escsim):
     spec = importlib.util.spec_from_file_location('escsim_ci', runner)
     suite = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(suite)
+    # Pinned ESCSim still parses a literal default_settings[] in DroneCAN.c.
+    # ARK now generates that array from its schema. Supply only the defaults
+    # callback so upstream parameter parsing and image construction stay tested.
+    ark_spec = importlib.util.spec_from_file_location('ark_sitl_params', HERE / 'sitl_params.py')
+    ark_params = importlib.util.module_from_spec(ark_spec)
+    ark_spec.loader.exec_module(ark_params)
+    suite.sitl_params._firmware_defaults = ark_params._firmware_defaults
     suite.INPUT_PORT = 17833
     suite.STATE_PORT = 17834
     suite.can_state_stream = lambda name: can_state_stream(suite, name)

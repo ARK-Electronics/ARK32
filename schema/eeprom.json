@@ -1,0 +1,1944 @@
+{
+  "$schema": "eeprom.schema.json",
+  "$id": "https://github.com/ARK-Electronics/ARK32/schema/eeprom.json",
+  "title": "ARK32 EEPROM Settings Schema",
+  "description": "Unified schema for AM32 ESC EEPROM layout, settings metadata, and version-specific behavior",
+  "version": "1.1.0",
+  "eepromVersions": {
+    "2": {
+      "description": "Legacy EEPROM format (pre-extended settings)",
+      "minSize": 48,
+      "bufferSize": 192,
+      "notes": "Original format without extended settings like current PID. Offsets 5-16 contained ESC name string."
+    },
+    "3": {
+      "description": "Extended settings format",
+      "minSize": 48,
+      "bufferSize": 192,
+      "notes": "Added current PID, ramp rate, min duty cycle, absolute voltage cutoff at offsets 5-12"
+    }
+  },
+  "fields": {
+    "bootByte": {
+      "offset": 0,
+      "size": 1,
+      "type": "uint8",
+      "name": "Boot Byte",
+      "description": "Boot indicator byte (0x01 = valid)",
+      "readOnly": true,
+      "alias": [
+        "BOOT_BYTE"
+      ],
+      "preserveOnDefaults": true,
+      "default": {
+        "raw": 1
+      }
+    },
+    "eepromVersion": {
+      "offset": 1,
+      "size": 1,
+      "type": "uint8",
+      "name": "EEPROM Version",
+      "description": "Layout revision number",
+      "readOnly": true,
+      "alias": [
+        "LAYOUT_REVISION"
+      ],
+      "preserveOnDefaults": true,
+      "default": {
+        "raw": 3
+      },
+      "sitl": {
+        "name": "EEPROM_VERSION"
+      }
+    },
+    "bootloaderVersion": {
+      "offset": 2,
+      "size": 1,
+      "type": "uint8",
+      "name": "Bootloader Version",
+      "readOnly": true,
+      "alias": [
+        "BOOT_LOADER_REVISION"
+      ],
+      "preserveOnDefaults": true,
+      "default": {
+        "raw": 1
+      }
+    },
+    "firmwareMajor": {
+      "offset": 3,
+      "size": 1,
+      "type": "uint8",
+      "name": "Firmware Major Version",
+      "readOnly": true,
+      "alias": [
+        "MAIN_REVISION"
+      ],
+      "preserveOnDefaults": true,
+      "default": {
+        "raw": 1
+      },
+      "sitl": {
+        "name": "VERSION_MAJOR"
+      }
+    },
+    "firmwareMinor": {
+      "offset": 4,
+      "size": 1,
+      "type": "uint8",
+      "name": "Firmware Minor Version",
+      "readOnly": true,
+      "alias": [
+        "SUB_REVISION"
+      ],
+      "preserveOnDefaults": true,
+      "default": {
+        "raw": 35
+      },
+      "sitl": {
+        "name": "VERSION_MINOR"
+      }
+    },
+    "maxRampSpeed": {
+      "offset": 5,
+      "size": 1,
+      "type": "number",
+      "name": "Max Ramp Speed",
+      "description": "Maximum throttle ramp rate",
+      "unit": "% per ms",
+      "minEepromVersion": 3,
+      "raw": {
+        "min": 1,
+        "max": 200
+      },
+      "display": {
+        "min": 0.1,
+        "max": 20.0,
+        "factor": 0.1,
+        "offset": 0,
+        "decimals": 1
+      },
+      "alias": [
+        "MAX_RAMP"
+      ],
+      "default": {
+        "raw": 160
+      },
+      "dronecan": {
+        "name": "MAX_RAMP",
+        "vtype": "uint8",
+        "order": 13,
+        "default": 160
+      },
+      "sitl": {
+        "name": "MAX_RAMP"
+      },
+      "factory": {
+        "key": "max_ramp_percent_per_ms"
+      }
+    },
+    "minDutyCycle": {
+      "offset": 6,
+      "size": 1,
+      "type": "number",
+      "name": "Minimum Duty Cycle",
+      "description": "Minimum motor duty cycle",
+      "unit": "%",
+      "minEepromVersion": 3,
+      "raw": {
+        "min": 0,
+        "max": 50
+      },
+      "display": {
+        "min": 0.0,
+        "max": 25.0,
+        "factor": 0.5,
+        "offset": 0,
+        "decimals": 1
+      },
+      "alias": [
+        "MINIMUM_DUTY_CYCLE"
+      ],
+      "default": {
+        "raw": 4
+      },
+      "dronecan": {
+        "name": "MIN_DUTY_CYCLE",
+        "vtype": "uint8",
+        "order": 14,
+        "default": 4
+      },
+      "sitl": {
+        "name": "MIN_DUTY_CYCLE"
+      },
+      "factory": {
+        "key": "minimum_duty_cycle"
+      }
+    },
+    "disableStickCalibration": {
+      "offset": 7,
+      "size": 1,
+      "type": "bool",
+      "name": "Disable Stick Calibration",
+      "description": "Disable automatic throttle range calibration",
+      "minEepromVersion": 3,
+      "alias": [
+        "DISABLE_STICK_CALIBRATION"
+      ],
+      "default": {
+        "raw": 0
+      },
+      "raw": {
+        "min": 0,
+        "max": 1
+      },
+      "sitl": {
+        "name": "DISABLE_STICK_CALIBRATION"
+      },
+      "factory": {
+        "key": "disable_stick_calibration"
+      }
+    },
+    "absoluteVoltageCutoff": {
+      "offset": 8,
+      "size": 1,
+      "type": "number",
+      "name": "Absolute Voltage Cutoff",
+      "description": "Fixed voltage cutoff threshold (when low voltage mode = Absolute)",
+      "unit": "V",
+      "minEepromVersion": 3,
+      "raw": {
+        "min": 1,
+        "max": 100
+      },
+      "display": {
+        "min": 0.5,
+        "max": 50.0,
+        "factor": 0.5,
+        "offset": 0,
+        "decimals": 1
+      },
+      "alias": [
+        "ABSOLUTE_VOLTAGE_CUTOFF"
+      ],
+      "default": {
+        "raw": 10
+      },
+      "ui": {
+        "visibleWhen": {
+          "field": "lowVoltageCutoff",
+          "op": "eq",
+          "raw": 2
+        }
+      },
+      "sitl": {
+        "name": "ABSOLUTE_VOLTAGE_CUTOFF"
+      },
+      "factory": {
+        "key": "absolute_voltage_cutoff"
+      }
+    },
+    "currentPidP": {
+      "offset": 9,
+      "size": 1,
+      "type": "uint8",
+      "name": "Current PID P",
+      "description": "Proportional gain for current control loop",
+      "minEepromVersion": 3,
+      "raw": {
+        "min": 0,
+        "max": 255
+      },
+      "alias": [
+        "CURRENT_P"
+      ],
+      "default": {
+        "raw": 100
+      },
+      "sitl": {
+        "name": "CURRENT_P"
+      },
+      "factory": {
+        "key": "current_P"
+      }
+    },
+    "currentPidI": {
+      "offset": 10,
+      "size": 1,
+      "type": "uint8",
+      "name": "Current PID I",
+      "description": "Integral gain for current control loop",
+      "minEepromVersion": 3,
+      "raw": {
+        "min": 0,
+        "max": 255
+      },
+      "alias": [
+        "CURRENT_I"
+      ],
+      "default": {
+        "raw": 0
+      },
+      "sitl": {
+        "name": "CURRENT_I"
+      },
+      "factory": {
+        "key": "current_I"
+      }
+    },
+    "currentPidD": {
+      "offset": 11,
+      "size": 1,
+      "type": "uint8",
+      "name": "Current PID D",
+      "description": "Derivative gain for current control loop",
+      "minEepromVersion": 3,
+      "raw": {
+        "min": 0,
+        "max": 255
+      },
+      "alias": [
+        "CURRENT_D"
+      ],
+      "default": {
+        "raw": 50
+      },
+      "sitl": {
+        "name": "CURRENT_D"
+      },
+      "factory": {
+        "key": "current_D"
+      }
+    },
+    "activeBrakePower": {
+      "offset": 12,
+      "size": 1,
+      "type": "uint8",
+      "name": "Active Brake Power",
+      "description": "Active braking duty cycle",
+      "unit": "%",
+      "minEepromVersion": 3,
+      "raw": {
+        "min": 0,
+        "max": 5
+      },
+      "alias": [
+        "ACTIVE_BRAKE_POWER"
+      ],
+      "default": {
+        "raw": 2
+      },
+      "ui": {
+        "disabledWhen": {
+          "field": "brakeOnStop",
+          "op": "ne",
+          "raw": 2
+        }
+      },
+      "sitl": {
+        "name": "ACTIVE_BRAKE_POWER"
+      },
+      "factory": {
+        "key": "active_brake_power"
+      }
+    },
+    "reserved0": {
+      "offset": 13,
+      "size": 4,
+      "type": "reserved",
+      "name": "Reserved",
+      "description": "Reserved bytes for future use",
+      "hidden": true,
+      "default": {
+        "raw": [
+          48,
+          53,
+          49,
+          32
+        ]
+      }
+    },
+    "directionReversed": {
+      "offset": 17,
+      "size": 1,
+      "type": "bool",
+      "name": "Direction Reversed",
+      "description": "Reverse motor rotation direction",
+      "alias": [
+        "MOTOR_DIRECTION"
+      ],
+      "default": {
+        "raw": 0
+      },
+      "raw": {
+        "min": 0,
+        "max": 1
+      },
+      "dronecan": {
+        "name": "DIR_REVERSED",
+        "vtype": "bool",
+        "order": 8,
+        "default": 0
+      },
+      "sitl": {
+        "name": "DIR_REVERSED"
+      },
+      "factory": {
+        "key": "dir_reversed"
+      }
+    },
+    "bidirectionalMode": {
+      "offset": 18,
+      "size": 1,
+      "type": "bool",
+      "name": "Bidirectional Mode",
+      "description": "Enable 3D mode (forward and reverse)",
+      "alias": [
+        "BIDIRECTIONAL_MODE"
+      ],
+      "default": {
+        "raw": 0
+      },
+      "raw": {
+        "min": 0,
+        "max": 1
+      },
+      "dronecan": {
+        "name": "BI_DIRECTIONAL",
+        "vtype": "bool",
+        "order": 9,
+        "default": 0
+      },
+      "sitl": {
+        "name": "BI_DIRECTIONAL"
+      },
+      "factory": {
+        "key": "bi_direction"
+      }
+    },
+    "sineStartup": {
+      "offset": 19,
+      "size": 1,
+      "type": "bool",
+      "name": "Sinusoidal Startup",
+      "description": "Use sinusoidal commutation during startup",
+      "alias": [
+        "SINUSOIDAL_STARTUP"
+      ],
+      "default": {
+        "raw": 0
+      },
+      "raw": {
+        "min": 0,
+        "max": 1
+      },
+      "dronecan": {
+        "name": "USE_SIN_START",
+        "vtype": "bool",
+        "order": 15,
+        "default": 0
+      },
+      "sitl": {
+        "name": "USE_SINE_START"
+      },
+      "factory": {
+        "key": "use_sine_start"
+      }
+    },
+    "complementaryPwm": {
+      "offset": 20,
+      "size": 1,
+      "type": "bool",
+      "name": "Complementary PWM",
+      "description": "Enable complementary PWM mode",
+      "alias": [
+        "COMPLEMENTARY_PWM"
+      ],
+      "default": {
+        "raw": 1
+      },
+      "raw": {
+        "min": 0,
+        "max": 1
+      },
+      "dronecan": {
+        "name": "COMP_PWM",
+        "vtype": "bool",
+        "order": 16,
+        "default": 1
+      },
+      "sitl": {
+        "name": "COMP_PWM"
+      },
+      "factory": {
+        "key": "comp_pwm"
+      }
+    },
+    "variablePwmFreq": {
+      "offset": 21,
+      "size": 1,
+      "type": "enum",
+      "name": "Variable PWM Frequency",
+      "description": "PWM frequency mode",
+      "versions": {
+        "default": {
+          "values": [
+            {
+              "raw": 0,
+              "name": "Off",
+              "description": "Fixed PWM frequency"
+            },
+            {
+              "raw": 1,
+              "name": "On",
+              "description": "Variable PWM frequency"
+            }
+          ],
+          "raw": {
+            "min": 0,
+            "max": 1
+          }
+        },
+        "firmware:2.18+": {
+          "values": [
+            {
+              "raw": 0,
+              "name": "Fixed",
+              "description": "Fixed PWM frequency"
+            },
+            {
+              "raw": 1,
+              "name": "Variable",
+              "description": "Variable PWM frequency"
+            },
+            {
+              "raw": 2,
+              "name": "By RPM",
+              "description": "PWM frequency varies with RPM"
+            }
+          ],
+          "raw": {
+            "min": 0,
+            "max": 2
+          }
+        }
+      },
+      "alias": [
+        "VARIABLE_PWM_FREQUENCY"
+      ],
+      "default": {
+        "raw": 1
+      },
+      "dronecan": {
+        "name": "VARIABLE_PWM",
+        "vtype": "uint8",
+        "order": 11,
+        "default": 1
+      },
+      "sitl": {
+        "name": "VARIABLE_PWM"
+      },
+      "factory": {
+        "key": "variable_pwm"
+      }
+    },
+    "stuckRotorProtection": {
+      "offset": 22,
+      "size": 1,
+      "type": "bool",
+      "name": "Stuck Rotor Protection",
+      "description": "Stop motor if rotor is stuck",
+      "alias": [
+        "STUCK_ROTOR_PROTECTION"
+      ],
+      "default": {
+        "raw": 1
+      },
+      "raw": {
+        "min": 0,
+        "max": 1
+      },
+      "dronecan": {
+        "name": "STUCK_ROTOR_PROTECTION",
+        "vtype": "bool",
+        "order": 17,
+        "default": 1
+      },
+      "sitl": {
+        "name": "STUCK_ROTOR_PROTECTION"
+      },
+      "factory": {
+        "key": "stuck_rotor_protection"
+      }
+    },
+    "timingAdvance": {
+      "offset": 23,
+      "size": 1,
+      "type": "number",
+      "name": "Timing Advance",
+      "description": "Motor commutation timing advance angle (0.9375° per internal unit)",
+      "unit": "°",
+      "versions": {
+        "default": {
+          "raw": {
+            "min": 0,
+            "max": 3
+          },
+          "display": {
+            "min": 0,
+            "max": 22.5,
+            "factor": 7.5,
+            "offset": 0,
+            "decimals": 1
+          },
+          "notes": "Old format: raw 0-3 maps to 0°, 7.5°, 15°, 22.5°"
+        },
+        "eeprom:3+": {
+          "raw": {
+            "min": 10,
+            "max": 42
+          },
+          "display": {
+            "min": 0,
+            "max": 30,
+            "factor": 0.9375,
+            "offset": -9.375,
+            "decimals": 1
+          },
+          "notes": "New format: raw 10-42 stored in EEPROM, internally converted to 0-32, then multiplied by 0.9375 for degrees"
+        }
+      },
+      "alias": [
+        "TIMING_ADVANCE"
+      ],
+      "default": {
+        "raw": 26
+      },
+      "ui": {
+        "disabledWhen": {
+          "field": "autoTiming",
+          "op": "eq",
+          "raw": 1
+        }
+      },
+      "dronecan": {
+        "name": "ADVANCE_LEVEL",
+        "vtype": "uint8",
+        "order": 18,
+        "default": 26,
+        "min": 0,
+        "max": 30
+      },
+      "sitl": {
+        "name": "ADVANCE_LEVEL"
+      },
+      "factory": {
+        "key": "advance_degrees"
+      }
+    },
+    "pwmFrequency": {
+      "offset": 24,
+      "size": 1,
+      "type": "uint8",
+      "name": "PWM Frequency",
+      "description": "Base PWM switching frequency",
+      "unit": "kHz",
+      "versions": {
+        "default": {
+          "raw": {
+            "min": 8,
+            "max": 48
+          }
+        },
+        "eeprom:3+": {
+          "raw": {
+            "min": 8,
+            "max": 144
+          }
+        }
+      },
+      "alias": [
+        "PWM_FREQUENCY"
+      ],
+      "default": {
+        "raw": 24
+      },
+      "ui": {
+        "disabledWhen": {
+          "field": "variablePwmFreq",
+          "op": "gt",
+          "raw": 1
+        }
+      },
+      "dronecan": {
+        "name": "PWM_FREQUENCY",
+        "vtype": "uint8",
+        "order": 12,
+        "default": 24
+      },
+      "sitl": {
+        "name": "PWM_FREQUENCY"
+      },
+      "factory": {
+        "key": "pwm_frequency_khz"
+      }
+    },
+    "startupPower": {
+      "offset": 25,
+      "size": 1,
+      "type": "uint8",
+      "name": "Startup Power",
+      "description": "Power level during motor startup",
+      "unit": "%",
+      "raw": {
+        "min": 50,
+        "max": 150
+      },
+      "alias": [
+        "STARTUP_POWER"
+      ],
+      "default": {
+        "raw": 100
+      },
+      "dronecan": {
+        "name": "STARTUP_POWER",
+        "vtype": "uint8",
+        "order": 20,
+        "default": 100
+      },
+      "sitl": {
+        "name": "STARTUP_POWER"
+      },
+      "factory": {
+        "key": "startup_power"
+      }
+    },
+    "motorKv": {
+      "offset": 26,
+      "size": 1,
+      "type": "number",
+      "name": "Motor KV",
+      "description": "Motor KV rating (RPM per volt)",
+      "unit": "RPM/V",
+      "raw": {
+        "min": 0,
+        "max": 255
+      },
+      "display": {
+        "min": 20,
+        "max": 10220,
+        "factor": 40,
+        "offset": 20,
+        "decimals": 0
+      },
+      "alias": [
+        "MOTOR_KV"
+      ],
+      "default": {
+        "raw": 55
+      },
+      "dronecan": {
+        "name": "MOTOR_KV",
+        "vtype": "uint16",
+        "order": 6,
+        "default": 2000,
+        "ptr": "runtime:motor_kv",
+        "min": 20,
+        "max": 10220
+      },
+      "sitl": {
+        "name": "MOTOR_KV"
+      },
+      "factory": {
+        "key": "motor_kv"
+      }
+    },
+    "motorPoles": {
+      "offset": 27,
+      "size": 1,
+      "type": "uint8",
+      "name": "Motor Poles",
+      "description": "Number of motor magnetic poles",
+      "raw": {
+        "min": 2,
+        "max": 64
+      },
+      "alias": [
+        "MOTOR_POLES"
+      ],
+      "default": {
+        "raw": 14
+      },
+      "versions": {
+        "firmware:32.0+": {
+          "raw": {
+            "max": 128
+          }
+        }
+      },
+      "dronecan": {
+        "name": "MOTOR_POLES",
+        "vtype": "uint8",
+        "order": 7,
+        "default": 14
+      },
+      "sitl": {
+        "name": "MOTOR_POLES"
+      },
+      "factory": {
+        "key": "motor_poles"
+      }
+    },
+    "brakeOnStop": {
+      "offset": 28,
+      "size": 1,
+      "type": "enum",
+      "name": "Brake on Stop",
+      "description": "Braking behavior when throttle is at minimum",
+      "alias": [
+        "BRAKE_ON_STOP"
+      ],
+      "default": {
+        "raw": 0
+      },
+      "versions": {
+        "default": {
+          "values": [
+            {
+              "raw": 0,
+              "name": "Off",
+              "description": "No braking when stopped"
+            },
+            {
+              "raw": 1,
+              "name": "Brake",
+              "description": "Apply brake when throttle is at minimum"
+            }
+          ],
+          "raw": {
+            "min": 0,
+            "max": 1
+          }
+        },
+        "firmware:2.18+": {
+          "values": [
+            {
+              "raw": 0,
+              "name": "Off",
+              "description": "No braking when stopped"
+            },
+            {
+              "raw": 1,
+              "name": "Brake",
+              "description": "Apply brake when throttle is at minimum"
+            },
+            {
+              "raw": 2,
+              "name": "Active Brake",
+              "description": "Active braking mode (requires arming)"
+            }
+          ],
+          "raw": {
+            "min": 0,
+            "max": 2
+          }
+        }
+      },
+      "dronecan": {
+        "name": "BRAKE_ON_STOP",
+        "vtype": "uint8",
+        "order": 25,
+        "default": 1
+      },
+      "sitl": {
+        "name": "BRAKE_ON_STOP"
+      },
+      "factory": {
+        "key": "brake_on_stop"
+      }
+    },
+    "stallProtection": {
+      "offset": 29,
+      "size": 1,
+      "type": "uint8",
+      "name": "Stall Protection",
+      "description": "Low-RPM anti-stall for crawlers/RC cars. 0 disables; any non-zero value enables a low-RPM throttle boost, and the magnitude also sets the startup commutation window that enforces the minimum duty floor (larger values shorten it).",
+      "alias": [
+        "STALL_PROTECTION"
+      ],
+      "default": {
+        "raw": 0
+      },
+      "raw": {
+        "min": 0,
+        "max": 255
+      },
+      "ui": {
+        "widget": "checkbox"
+      },
+      "sitl": {
+        "name": "STALL_PROTECTION"
+      },
+      "factory": {
+        "key": "stall_protection"
+      }
+    },
+    "beepVolume": {
+      "offset": 30,
+      "size": 1,
+      "type": "uint8",
+      "name": "Beep Volume",
+      "description": "Startup beep volume level",
+      "raw": {
+        "min": 0,
+        "max": 11
+      },
+      "alias": [
+        "BEEP_VOLUME"
+      ],
+      "default": {
+        "raw": 5
+      },
+      "dronecan": {
+        "name": "BEEP_VOLUME",
+        "vtype": "uint8",
+        "order": 10,
+        "default": 5
+      },
+      "sitl": {
+        "name": "BEEP_VOLUME"
+      },
+      "factory": {
+        "key": "beep_volume"
+      }
+    },
+    "telemetry30ms": {
+      "offset": 31,
+      "size": 1,
+      "type": "uint8",
+      "name": "30ms Interval Telemetry",
+      "description": "Telemetry timing. 0 uses the default; 1 enables the ~30 ms interval; values 2 or more add to the interval to stagger telemetry between ESCs on a shared bus.",
+      "alias": [
+        "INTERVAL_TELEMETRY"
+      ],
+      "default": {
+        "raw": 0
+      },
+      "raw": {
+        "min": 0,
+        "max": 255
+      },
+      "ui": {
+        "widget": "checkbox"
+      },
+      "sitl": {
+        "name": "TELEMETRY_ON_INTERVAL"
+      },
+      "factory": {
+        "key": "telemetry_on_interval"
+      }
+    },
+    "servoLowThreshold": {
+      "offset": 32,
+      "size": 1,
+      "type": "number",
+      "name": "Servo Low Threshold",
+      "description": "Minimum servo pulse width for zero throttle",
+      "unit": "us",
+      "raw": {
+        "min": 0,
+        "max": 250
+      },
+      "display": {
+        "min": 750,
+        "max": 1250,
+        "factor": 2,
+        "offset": 750,
+        "decimals": 0
+      },
+      "alias": [
+        "SERVO_LOW_THRESHOLD"
+      ],
+      "default": {
+        "raw": 128
+      },
+      "sitl": {
+        "name": "SERVO_LOW_THRESHOLD"
+      },
+      "factory": {
+        "key": "pwm_input_min_us"
+      }
+    },
+    "servoHighThreshold": {
+      "offset": 33,
+      "size": 1,
+      "type": "number",
+      "name": "Servo High Threshold",
+      "description": "Maximum servo pulse width for full throttle",
+      "unit": "us",
+      "raw": {
+        "min": 0,
+        "max": 250
+      },
+      "display": {
+        "min": 1750,
+        "max": 2250,
+        "factor": 2,
+        "offset": 1750,
+        "decimals": 0
+      },
+      "alias": [
+        "SERVO_HIGH_THRESHOLD"
+      ],
+      "default": {
+        "raw": 128
+      },
+      "sitl": {
+        "name": "SERVO_HIGH_THRESHOLD"
+      },
+      "factory": {
+        "key": "pwm_input_max_us"
+      }
+    },
+    "servoNeutral": {
+      "offset": 34,
+      "size": 1,
+      "type": "number",
+      "name": "Servo Neutral",
+      "description": "Servo pulse width for neutral position (3D mode)",
+      "unit": "us",
+      "raw": {
+        "min": 0,
+        "max": 255
+      },
+      "display": {
+        "min": 1374,
+        "max": 1629,
+        "factor": 1,
+        "offset": 1374,
+        "decimals": 0
+      },
+      "alias": [
+        "SERVO_NEUTRAL"
+      ],
+      "default": {
+        "raw": 128
+      },
+      "sitl": {
+        "name": "SERVO_NEUTRAL"
+      },
+      "factory": {
+        "key": "pwm_input_neutral_us"
+      }
+    },
+    "servoDeadband": {
+      "offset": 35,
+      "size": 1,
+      "type": "uint8",
+      "name": "Servo Deadband",
+      "description": "Deadband around neutral position",
+      "raw": {
+        "min": 0,
+        "max": 100
+      },
+      "alias": [
+        "SERVO_DEAD_BAND"
+      ],
+      "default": {
+        "raw": 50
+      },
+      "sitl": {
+        "name": "SERVO_DEAD_BAND"
+      },
+      "factory": {
+        "key": "pwm_input_deadband"
+      }
+    },
+    "lowVoltageCutoff": {
+      "offset": 36,
+      "size": 1,
+      "type": "enum",
+      "name": "Low Voltage Cutoff",
+      "description": "Low voltage protection mode",
+      "versions": {
+        "default": {
+          "values": [
+            {
+              "raw": 0,
+              "name": "Off",
+              "description": "No low voltage protection"
+            },
+            {
+              "raw": 1,
+              "name": "On",
+              "description": "Cell-based voltage cutoff"
+            }
+          ],
+          "raw": {
+            "min": 0,
+            "max": 1
+          }
+        },
+        "firmware:2.19+": {
+          "values": [
+            {
+              "raw": 0,
+              "name": "Off",
+              "description": "No low voltage protection"
+            },
+            {
+              "raw": 1,
+              "name": "Cell Based",
+              "description": "Per-cell voltage threshold"
+            },
+            {
+              "raw": 2,
+              "name": "Absolute",
+              "description": "Fixed voltage threshold"
+            }
+          ],
+          "raw": {
+            "min": 0,
+            "max": 2
+          }
+        }
+      },
+      "alias": [
+        "LOW_VOLTAGE_CUTOFF"
+      ],
+      "default": {
+        "raw": 0
+      },
+      "dronecan": {
+        "name": "LOW_VOLTAGE_CUTOFF",
+        "vtype": "uint8",
+        "order": 23,
+        "default": 0
+      },
+      "sitl": {
+        "name": "LOW_VOLTAGE_CUTOFF"
+      },
+      "factory": {
+        "key": "low_voltage_cut_off"
+      }
+    },
+    "lowVoltageThreshold": {
+      "offset": 37,
+      "size": 1,
+      "type": "number",
+      "name": "Low Voltage Threshold",
+      "description": "Per-cell voltage cutoff threshold",
+      "unit": "V",
+      "raw": {
+        "min": 0,
+        "max": 100
+      },
+      "display": {
+        "min": 2.5,
+        "max": 3.5,
+        "factor": 0.01,
+        "offset": 2.5,
+        "decimals": 2
+      },
+      "alias": [
+        "LOW_VOLTAGE_THRESHOLD"
+      ],
+      "default": {
+        "raw": 50
+      },
+      "ui": {
+        "visibleWhen": {
+          "field": "lowVoltageCutoff",
+          "op": "eq",
+          "raw": 1
+        }
+      },
+      "dronecan": {
+        "name": "CELL_VOLTAGE_THRESHOLD",
+        "vtype": "uint16",
+        "order": 24,
+        "default": 300,
+        "ptr": "runtime:low_cell_volt_cutoff",
+        "min": 250,
+        "max": 350
+      },
+      "sitl": {
+        "name": "LOW_CELL_VOLTAGE"
+      },
+      "factory": {
+        "key": "low_cell_voltage_v"
+      }
+    },
+    "rcCarReversing": {
+      "offset": 38,
+      "size": 1,
+      "type": "bool",
+      "name": "RC Car Reversing",
+      "description": "Enable RC car style brake-then-reverse behavior",
+      "alias": [
+        "RC_CAR_REVERSING"
+      ],
+      "default": {
+        "raw": 0
+      },
+      "raw": {
+        "min": 0,
+        "max": 1
+      },
+      "sitl": {
+        "name": "RC_CAR_REVERSE"
+      }
+    },
+    "hallSensors": {
+      "offset": 39,
+      "size": 1,
+      "type": "bool",
+      "name": "Hall Sensors",
+      "description": "Use hall sensor feedback for commutation",
+      "alias": [
+        "USE_HALL_SENSORS"
+      ],
+      "default": {
+        "raw": 0
+      },
+      "raw": {
+        "min": 0,
+        "max": 1
+      },
+      "sitl": {
+        "name": "USE_HALL_SENSORS"
+      }
+    },
+    "sineModeRange": {
+      "offset": 40,
+      "size": 1,
+      "type": "uint8",
+      "name": "Sine Mode Range",
+      "description": "Throttle range for sine mode operation",
+      "unit": "%",
+      "raw": {
+        "min": 5,
+        "max": 25
+      },
+      "alias": [
+        "SINE_MODE_RANGE"
+      ],
+      "default": {
+        "raw": 15
+      },
+      "onLoad": "clamp",
+      "onLoadFallbackRaw": 5,
+      "ui": {
+        "disabledWhen": {
+          "any": [
+            {
+              "field": "sineStartup",
+              "op": "eq",
+              "raw": 0
+            },
+            {
+              "field": "rcCarReversing",
+              "op": "ne",
+              "raw": 0
+            }
+          ]
+        }
+      },
+      "sitl": {
+        "name": "SINE_MODE_CHANGEOVER"
+      },
+      "factory": {
+        "key": "sine_mode_changeover_throttle_level"
+      }
+    },
+    "dragBrakeStrength": {
+      "offset": 41,
+      "size": 1,
+      "type": "uint8",
+      "name": "Drag Brake Strength",
+      "description": "Brake strength when throttle released",
+      "raw": {
+        "min": 1,
+        "max": 10
+      },
+      "alias": [
+        "BRAKE_STRENGTH"
+      ],
+      "default": {
+        "raw": 10
+      },
+      "onLoad": "clamp",
+      "onLoadFallbackRaw": 10,
+      "ui": {
+        "disabledWhen": {
+          "any": [
+            {
+              "field": "brakeOnStop",
+              "op": "eq",
+              "raw": 0
+            },
+            {
+              "field": "rcCarReversing",
+              "op": "ne",
+              "raw": 0
+            }
+          ]
+        }
+      },
+      "dronecan": {
+        "name": "DRAG_BRAKE_STRENGTH",
+        "vtype": "uint8",
+        "order": 27,
+        "default": 10
+      },
+      "sitl": {
+        "name": "DRAG_BRAKE_STRENGTH"
+      },
+      "factory": {
+        "key": "drag_brake_strength"
+      }
+    },
+    "runningBrakeLevel": {
+      "offset": 42,
+      "size": 1,
+      "type": "uint8",
+      "name": "Running Brake Level",
+      "description": "Brake level during deceleration",
+      "raw": {
+        "min": 1,
+        "max": 10
+      },
+      "alias": [
+        "RUNNING_BRAKE_LEVEL"
+      ],
+      "default": {
+        "raw": 10
+      },
+      "onLoad": "clamp",
+      "onLoadFallbackRaw": 10,
+      "ui": {
+        "disabledWhen": {
+          "field": "rcCarReversing",
+          "op": "ne",
+          "raw": 0
+        }
+      },
+      "dronecan": {
+        "name": "DRIVING_BRAKE_STRENGTH",
+        "vtype": "uint8",
+        "order": 26,
+        "default": 10
+      },
+      "sitl": {
+        "name": "DRIVING_BRAKE_STRENGTH"
+      },
+      "factory": {
+        "key": "driving_brake_strength"
+      }
+    },
+    "temperatureLimit": {
+      "offset": 43,
+      "size": 1,
+      "type": "uint8",
+      "name": "Temperature Limit",
+      "description": "Maximum ESC temperature before throttling",
+      "unit": "°C",
+      "raw": {
+        "min": 70,
+        "max": 140
+      },
+      "disabledValue": {
+        "raw": 255,
+        "display": "Disabled"
+      },
+      "alias": [
+        "TEMPERATURE_LIMIT"
+      ],
+      "default": {
+        "raw": 141
+      },
+      "onLoad": "disable",
+      "dronecan": {
+        "name": "TEMPERATURE_LIMIT",
+        "vtype": "uint8",
+        "order": 22,
+        "default": 255,
+        "min": 70,
+        "max": 255
+      },
+      "sitl": {
+        "name": "TEMPERATURE_LIMIT"
+      },
+      "factory": {
+        "key": "temperature_limit"
+      }
+    },
+    "currentLimit": {
+      "offset": 44,
+      "size": 1,
+      "type": "number",
+      "name": "Current Limit",
+      "description": "Maximum motor current",
+      "unit": "A",
+      "raw": {
+        "min": 0,
+        "max": 100
+      },
+      "display": {
+        "min": 0,
+        "max": 200,
+        "factor": 2,
+        "offset": 0,
+        "decimals": 0
+      },
+      "disabledValue": {
+        "raw": 0,
+        "display": "Disabled"
+      },
+      "alias": [
+        "CURRENT_LIMIT"
+      ],
+      "default": {
+        "raw": 102
+      },
+      "onLoad": "keep",
+      "dronecan": {
+        "name": "CURRENT_LIMIT",
+        "vtype": "uint8",
+        "order": 21,
+        "default": 0,
+        "min": 0,
+        "max": 200
+      },
+      "sitl": {
+        "name": "CURRENT_LIMIT"
+      },
+      "factory": {
+        "key": "current_limit"
+      }
+    },
+    "sineModePower": {
+      "offset": 45,
+      "size": 1,
+      "type": "uint8",
+      "name": "Sine Mode Power",
+      "description": "Power level during sine mode startup",
+      "raw": {
+        "min": 1,
+        "max": 10
+      },
+      "alias": [
+        "SINE_MODE_POWER"
+      ],
+      "default": {
+        "raw": 6
+      },
+      "onLoad": "clamp",
+      "onLoadFallbackRaw": 5,
+      "ui": {
+        "disabledWhen": {
+          "any": [
+            {
+              "field": "sineStartup",
+              "op": "eq",
+              "raw": 0
+            },
+            {
+              "field": "rcCarReversing",
+              "op": "ne",
+              "raw": 0
+            }
+          ]
+        }
+      },
+      "sitl": {
+        "name": "SINE_MODE_POWER"
+      },
+      "factory": {
+        "key": "sine_mode_power"
+      }
+    },
+    "inputType": {
+      "offset": 46,
+      "size": 1,
+      "type": "enum",
+      "name": "Input Type",
+      "description": "ESC input protocol",
+      "values": [
+        {
+          "raw": 0,
+          "name": "Auto",
+          "description": "Automatically detect input protocol"
+        },
+        {
+          "raw": 1,
+          "name": "DShot",
+          "description": "DShot digital protocol"
+        },
+        {
+          "raw": 2,
+          "name": "Servo",
+          "description": "Standard PWM servo signal"
+        },
+        {
+          "raw": 3,
+          "name": "Serial",
+          "description": "Serial communication"
+        },
+        {
+          "raw": 4,
+          "name": "EDT ARM",
+          "description": "EDT arming protocol"
+        },
+        {
+          "raw": 5,
+          "name": "DroneCAN",
+          "description": "DroneCAN input protocol"
+        }
+      ],
+      "alias": [
+        "ESC_PROTOCOL"
+      ],
+      "default": {
+        "raw": 1
+      },
+      "raw": {
+        "min": 0,
+        "max": 5
+      },
+      "ui": {
+        "widget": "select"
+      },
+      "dronecan": {
+        "name": "INPUT_SIGNAL_TYPE",
+        "vtype": "uint8",
+        "order": 28,
+        "default": 5
+      },
+      "sitl": {
+        "name": "INPUT_SIGNAL_TYPE"
+      },
+      "factory": {
+        "key": "input_type"
+      }
+    },
+    "autoTiming": {
+      "offset": 47,
+      "size": 1,
+      "type": "bool",
+      "name": "Auto Timing",
+      "description": "Automatically adjust commutation timing",
+      "minFirmwareVersion": "2.16",
+      "alias": [
+        "AUTO_ADVANCE"
+      ],
+      "default": {
+        "raw": 0
+      },
+      "raw": {
+        "min": 0,
+        "max": 1
+      },
+      "dronecan": {
+        "name": "AUTO_ADVANCE",
+        "vtype": "bool",
+        "order": 19,
+        "default": 0
+      },
+      "sitl": {
+        "name": "AUTO_ADVANCE"
+      },
+      "factory": {
+        "key": "auto_advance"
+      }
+    },
+    "startupMelody": {
+      "offset": 48,
+      "size": 128,
+      "type": "bluejay",
+      "name": "Startup Melody",
+      "description": "Startup tune stored as a 128-byte Bluejay binary blob (custom 8-bit frequency/duration encoding, not ASCII RTTTL)",
+      "alias": [
+        "STARTUP_MELODY"
+      ],
+      "dronecan": {
+        "name": "STARTUP_TUNE",
+        "vtype": "string",
+        "order": 31,
+        "default": 0,
+        "min": 0,
+        "max": 4
+      }
+    },
+    "canNode": {
+      "offset": 176,
+      "size": 1,
+      "type": "uint8",
+      "name": "CAN Node ID",
+      "description": "CAN bus node identifier",
+      "raw": {
+        "min": 0,
+        "max": 127
+      },
+      "preserveOnDefaults": true,
+      "dronecan": {
+        "name": "CAN_NODE",
+        "vtype": "uint8",
+        "order": 0,
+        "default": 0
+      },
+      "sitl": {
+        "name": "CAN_NODE"
+      }
+    },
+    "canEscIndex": {
+      "offset": 177,
+      "size": 1,
+      "type": "uint8",
+      "name": "CAN ESC Index",
+      "description": "ESC index for CAN communication",
+      "raw": {
+        "min": 0,
+        "max": 31
+      },
+      "preserveOnDefaults": true,
+      "dronecan": {
+        "name": "ESC_INDEX",
+        "vtype": "uint8",
+        "order": 1,
+        "default": 0
+      },
+      "sitl": {
+        "name": "ESC_INDEX"
+      }
+    },
+    "canRequireArming": {
+      "offset": 178,
+      "size": 1,
+      "type": "bool",
+      "name": "CAN Require Arming",
+      "description": "Require arming command before motor start",
+      "preserveOnDefaults": true,
+      "raw": {
+        "min": 0,
+        "max": 1
+      },
+      "dronecan": {
+        "name": "REQUIRE_ARMING",
+        "vtype": "bool",
+        "order": 4,
+        "default": 1
+      },
+      "sitl": {
+        "name": "REQUIRE_ARMING"
+      }
+    },
+    "canTelemRate": {
+      "offset": 179,
+      "size": 1,
+      "type": "uint8",
+      "name": "CAN Telemetry Rate",
+      "description": "CAN telemetry transmission rate",
+      "unit": "Hz",
+      "raw": {
+        "min": 0,
+        "max": 200
+      },
+      "preserveOnDefaults": true,
+      "dronecan": {
+        "name": "TELEM_RATE",
+        "vtype": "uint8",
+        "order": 2,
+        "default": 25
+      },
+      "sitl": {
+        "name": "TELEM_RATE"
+      }
+    },
+    "canRequireZeroThrottle": {
+      "offset": 180,
+      "size": 1,
+      "type": "bool",
+      "name": "CAN Require Zero Throttle",
+      "description": "Require zero throttle before arming",
+      "preserveOnDefaults": true,
+      "raw": {
+        "min": 0,
+        "max": 1
+      },
+      "dronecan": {
+        "name": "REQUIRE_ZERO_THROTTLE",
+        "vtype": "bool",
+        "order": 5,
+        "default": 1
+      },
+      "sitl": {
+        "name": "REQUIRE_ZERO_THROTTLE"
+      }
+    },
+    "canFilterHz": {
+      "offset": 181,
+      "size": 1,
+      "type": "uint8",
+      "name": "CAN Filter Hz",
+      "description": "CAN input filter frequency",
+      "unit": "Hz",
+      "raw": {
+        "min": 0,
+        "max": 100
+      },
+      "preserveOnDefaults": true,
+      "dronecan": {
+        "name": "INPUT_FILTER_HZ",
+        "vtype": "uint8",
+        "order": 29,
+        "default": 0
+      },
+      "sitl": {
+        "name": "FILTER_HZ"
+      }
+    },
+    "canDebugRate": {
+      "offset": 182,
+      "size": 1,
+      "type": "uint8",
+      "name": "CAN Debug Rate",
+      "description": "CAN debug message rate",
+      "unit": "Hz",
+      "raw": {
+        "min": 0,
+        "max": 200
+      },
+      "preserveOnDefaults": true,
+      "dronecan": {
+        "name": "DEBUG_RATE",
+        "vtype": "uint8",
+        "order": 3,
+        "default": 0
+      },
+      "sitl": {
+        "name": "DEBUG_RATE"
+      }
+    },
+    "canTermEnable": {
+      "offset": 183,
+      "size": 1,
+      "type": "bool",
+      "name": "CAN Termination Enable",
+      "description": "Enable CAN bus termination resistor",
+      "preserveOnDefaults": true,
+      "raw": {
+        "min": 0,
+        "max": 1
+      },
+      "dronecan": {
+        "name": "CAN_TERM_ENABLE",
+        "vtype": "bool",
+        "order": 30,
+        "default": 0,
+        "ifdef": "CAN_TERM_PIN"
+      },
+      "sitl": {
+        "name": "TERM_ENABLE"
+      }
+    },
+    "canReserved": {
+      "offset": 184,
+      "size": 8,
+      "type": "reserved",
+      "name": "CAN Reserved",
+      "description": "Reserved bytes for future CAN settings",
+      "preserveOnDefaults": true,
+      "hidden": true
+    }
+  },
+  "groups": {
+    "essentials": {
+      "name": "Essentials",
+      "panel": "settings",
+      "fields": [
+        "inputType",
+        "disableStickCalibration"
+      ]
+    },
+    "motor": {
+      "name": "Motor Settings",
+      "fields": [
+        "stuckRotorProtection",
+        "stallProtection",
+        "hallSensors",
+        "telemetry30ms",
+        "variablePwmFreq",
+        "complementaryPwm",
+        "autoTiming",
+        "timingAdvance",
+        "startupPower",
+        "motorKv",
+        "motorPoles",
+        "beepVolume",
+        "pwmFrequency"
+      ],
+      "description": "Motor configuration and commutation settings",
+      "panel": "settings"
+    },
+    "extended": {
+      "name": "Extended Settings",
+      "fields": [
+        "maxRampSpeed",
+        "minDutyCycle"
+      ],
+      "description": "Extended motor control settings (EEPROM v3+)",
+      "panel": "settings",
+      "minEepromVersion": 3
+    },
+    "limits": {
+      "name": "Limits",
+      "fields": [
+        "temperatureLimit",
+        "currentLimit",
+        "lowVoltageCutoff",
+        "lowVoltageThreshold",
+        "absoluteVoltageCutoff"
+      ],
+      "description": "Protection limits and cutoffs",
+      "panel": "settings"
+    },
+    "currentControl": {
+      "name": "Current Control",
+      "fields": [
+        "currentPidP",
+        "currentPidI",
+        "currentPidD"
+      ],
+      "description": "Current control PID tuning (EEPROM v3+)",
+      "panel": "settings",
+      "minEepromVersion": 3,
+      "ui": {
+        "disabledWhen": {
+          "any": [
+            {
+              "field": "currentLimit",
+              "op": "eq",
+              "raw": 0
+            },
+            {
+              "field": "currentLimit",
+              "op": "gt",
+              "raw": 100
+            }
+          ]
+        }
+      }
+    },
+    "sineStartup": {
+      "name": "Sinusoidal Startup",
+      "fields": [
+        "sineStartup",
+        "sineModeRange",
+        "sineModePower"
+      ],
+      "description": "Sinusoidal startup mode settings",
+      "panel": "settings"
+    },
+    "brake": {
+      "name": "Brake",
+      "fields": [
+        "brakeOnStop",
+        "rcCarReversing",
+        "dragBrakeStrength",
+        "runningBrakeLevel",
+        "activeBrakePower"
+      ],
+      "description": "Braking behavior settings",
+      "panel": "settings"
+    },
+    "servo": {
+      "name": "Servo Settings",
+      "fields": [
+        "servoLowThreshold",
+        "servoHighThreshold",
+        "servoNeutral",
+        "servoDeadband"
+      ],
+      "description": "PWM servo input calibration",
+      "panel": "settings"
+    },
+    "tune": {
+      "name": "Tune",
+      "panel": "tune",
+      "fields": [
+        "startupMelody"
+      ]
+    },
+    "esc": {
+      "name": "Esc",
+      "panel": "esc",
+      "fields": [
+        "directionReversed",
+        "bidirectionalMode"
+      ]
+    },
+    "info": {
+      "name": "ESC Information",
+      "fields": [
+        "bootByte",
+        "eepromVersion",
+        "bootloaderVersion",
+        "firmwareMajor",
+        "firmwareMinor"
+      ],
+      "description": "Read-only ESC identification and version information",
+      "panel": "none"
+    },
+    "can": {
+      "name": "CAN Bus",
+      "fields": [
+        "canNode",
+        "canEscIndex",
+        "canRequireArming",
+        "canTelemRate",
+        "canRequireZeroThrottle",
+        "canFilterHz",
+        "canDebugRate",
+        "canTermEnable"
+      ],
+      "description": "CAN bus communication settings (also available on ARK32 layout 3)",
+      "panel": "none"
+    }
+  },
+  "meta": {
+    "maintainer": "ARK Electronics",
+    "repository": "https://github.com/ARK-Electronics/ARK32",
+    "license": "GPL-3.0",
+    "lastUpdated": "2026-09-04",
+    "consumers": [
+      {
+        "name": "AM32 Firmware",
+        "language": "C",
+        "usage": "Source of truth for EEPROM struct layout"
+      },
+      {
+        "name": "AM32 Configurator",
+        "language": "TypeScript/Vue",
+        "usage": "Web-based ESC configuration tool"
+      },
+      {
+        "name": "QGroundControl",
+        "language": "C++/QML",
+        "usage": "Ground control station ESC settings"
+      }
+    ]
+  },
+  "bufferSize": 192,
+  "groupOrder": [
+    "essentials",
+    "motor",
+    "extended",
+    "limits",
+    "currentControl",
+    "sineStartup",
+    "brake",
+    "servo"
+  ]
+}

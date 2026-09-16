@@ -1,4 +1,5 @@
 #include "eeprom.h"
+#include "main.h"
 #include "targets.h"
 
 #include <string.h>

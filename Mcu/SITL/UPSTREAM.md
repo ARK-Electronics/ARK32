@@ -61,8 +61,10 @@ small ARK adapter retains these deliberate differences:
 - Zero-throttle CAN keepalives during parameter round trips, because ARK
   resets after input timeout.
 - ARK firmware version defaults are selected before ESCSim imports its
-  parameter generator; all three ARK and three upstream model/parameter pairs
-  are checked.
+  parameter generator. Its defaults reader is connected to ARK's schema-backed
+  defaults because the literal C array has been replaced by a generated header.
+  Upstream parameter parsing and image construction remain in use; all three
+  ARK and three upstream model/parameter pairs are checked.
 - CAN dependencies and multicast startup failures fail the suite. Sanitizer
   diagnostics in the child log also fail the suite.
 
