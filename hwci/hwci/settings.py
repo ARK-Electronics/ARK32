@@ -63,33 +63,41 @@ class Field:
     hi: int
     description: str
     size: int = 1
+    # Generated C member, when different from the stable tuning/profile name.
+    c_member: str | None = None
 
 
-# Tunable settings, offsets/ranges from Inc/eeprom.h comments and the
-# validation code in Src/main.c loadEEpromSettings(). ``lo``/``hi`` are the
+# Tunable settings, offsets/ranges from schema/eeprom.json and the
+# validation code in Src/settings.c loadEEpromSettings(). ``lo``/``hi`` are the
 # FIRMWARE-accepted ranges; a tune spec may (and should) sweep a narrower
 # window - e.g. pwm_frequency is valid 8..144 but sensibly tuned 8..48.
 EEPROM_FIELDS: dict[str, Field] = {f.name: f for f in [
     Field("max_ramp", 5, 1, 255,
-          "throttle ramp limit, 0.1%/ms steps up to 25%/ms (default 160)"),
+          "throttle ramp limit, 0.1%/ms steps up to 25%/ms (default 160)",
+          c_member="max_ramp_speed"),
     # loadEEpromSettings: 1..50 accepted (value*10 duty counts of 2000);
     # 0 or >=51 fall back to zero floor (firmware default path).
     Field("minimum_duty_cycle", 6, 1, 50,
-          "min PWM duty floor, eeprom units of 0.5% (1=0.5% .. 50=25%)"),
+          "min PWM duty floor, eeprom units of 0.5% (1=0.5% .. 50=25%)",
+          c_member="min_duty_cycle"),
     Field("variable_pwm", 21, 0, 2,
-          "0=fixed PWM, 1=RPM-scaled within pwm_frequency range, 2=auto range"),
+          "0=fixed PWM, 1=RPM-scaled within pwm_frequency range, 2=auto range",
+          c_member="variable_pwm_freq"),
     Field("advance_level", 23, 10, 42,
-          "timing advance, value-10 degrees*(48/32) (16 = firmware fallback)"),
+          "timing advance, value-10 degrees*(48/32) (16 = firmware fallback)",
+          c_member="timing_advance"),
     Field("pwm_frequency", 24, 8, 144,
           "PWM frequency in kHz; firmware accepts 8..144, tune 8..48"),
     Field("startup_power", 25, 50, 150,
           "startup duty boost; firmware accepts 50..150"),
     Field("auto_advance", 47, 0, 1,
-          "1 = firmware maps advance from duty cycle, ignoring advance_level"),
+          "1 = firmware maps advance from duty cycle, ignoring advance_level",
+          c_member="auto_timing"),
     Field("brake_on_stop", 28, 0, 2,
           "0=coast (allOff), 1=full brake, 2=active brake"),
     Field("rc_car_reverse", 38, 0, 1,
-          "1 = RC-car reverse / proportional prop brake"),
+          "1 = RC-car reverse / proportional prop brake",
+          c_member="rc_car_reversing"),
 ]}
 
 # Identity/version bytes that a settings write must NEVER change: a mismatch
@@ -292,6 +300,8 @@ def check_eeprom_layout(elf_path: str) -> None:
     canonical offsets in this module still apply), but DWARF that lacks the
     ``EEprom_u`` union entirely, or disagrees on an offset, fails hard -
     that is exactly the firmware/host drift this check exists to catch.
+    Tuning/profile names stay stable across the generated C member rename;
+    accept legacy members too so older firmware can still be compared.
     """
     try:
         members = {m.name: m for m in elf.union_layout(elf_path, UNION_TAG)}
@@ -302,7 +312,9 @@ def check_eeprom_layout(elf_path: str) -> None:
                       "the canonical offsets in hwci/hwci/settings.py")
         return
     for f in EEPROM_FIELDS.values():
-        m = members.get(f.name)
+        m = members.get(f.c_member or f.name)
+        if m is None and f.c_member is not None:
+            m = members.get(f.name)
         if m is None or m.offset != f.offset or m.size != f.size:
             raise SettingsError(
                 f"firmware/host EEprom layout mismatch at {f.name!r}: "

@@ -51,6 +51,12 @@
 #	define CURRENT_OFFSET 0
 #	define CURRENT_AUTO_OFFSET
 #	define TARGET_MIN_BEMF_COUNTS 3
+/* Model the ARK protection envelope: the SITL seed image and a DroneCAN param
+ * erase must land where a shipped ARK ESC does, or the duty-limit tests verify
+ * a board nobody ships. Same values as the ARK_G431_CAN block below. */
+#	define TARGET_DEFAULT_TEMPERATURE_LIMIT 105
+#	define TARGET_DEFAULT_CURRENT_LIMIT 100
+#	define TARGET_DEFAULT_TEMP_DERATE_BAND 15
 #endif
 
 #ifdef ARK_G431_CAN

@@ -102,7 +102,6 @@ extern void playBeaconTune3(void);
 
 extern volatile char dshot_telemetry;
 extern volatile char armed;
-extern char dir_reversed;
 extern char buffer_divider;
 extern uint8_t last_dshot_command;
 extern volatile uint32_t commutation_interval;

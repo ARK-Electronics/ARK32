@@ -6,14 +6,15 @@ silently changes a shipped ESC's protection envelope:
 
   1. Inc/targets.h            TARGET_DEFAULT_{TEMPERATURE_LIMIT,CURRENT_LIMIT,
                               TEMP_DERATE_BAND} for the product
-  2. Src/DroneCAN/DroneCAN.c  default_settings[43]/[44] - the bytes an ERASE
-                              memcpy's back over the page (must be literals:
-                              Mcu/SITL/sitl_params.py parses this array)
+  2. Src/DroneCAN/DroneCAN.c  apply_post_skeleton_defaults() - what an ERASE
+                              re-applies on top of the generated configurator
+                              skeleton, which still carries upstream's
+                              protection-disabled bytes
   3. factory/<PRODUCT>_eeprom_defaults.json   what production actually flashes
 
-Byte 184 (the foldback band) lives past the 48-byte skeleton and is written
-by apply_post_skeleton_defaults() from the macro, so it is checked against
-the macro and the JSON but not against the array.
+The skeleton itself is the AM32 configurator image and is deliberately left
+alone (schema/eeprom-defaults.hex is golden-pinned), so every value below is
+checked against the post-skeleton restore rather than the skeleton bytes.
 
 Only DroneCAN products can reach the erase path, so only those are checked;
 the array is compiled into DroneCAN.c and is unreachable on the 4IN1.
@@ -30,16 +31,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# (macro suffix, DroneCAN.c eeprom offset or None, JSON key, JSON scale)
+# (macro suffix, C member restored post-skeleton or None, JSON key, JSON scale)
 # scale converts the human JSON unit to the stored byte; max_ramp is the one
 # field the JSON expresses in %/ms rather than raw counts.
 FIELDS = (
-    ("TEMPERATURE_LIMIT", 43, "temperature_limit", 1),
-    ("CURRENT_LIMIT", 44, "current_limit", 1),
-    ("TEMP_DERATE_BAND", None, "temperature_derate_band", 1),
-    # offset None: default_settings[5] still carries upstream's 160 on
-    # purpose (see the MAX_RAMP note in DroneCAN.c), so only the macro and
-    # the product JSON are held together here.
+    ("TEMPERATURE_LIMIT", "temperature_limit", "temperature_limit", 1),
+    ("CURRENT_LIMIT", "current_limit", "current_limit", 0.5),
+    ("TEMP_DERATE_BAND", "can_temp_derate_band", "temperature_derate_band", 1),
+    # member None: the skeleton still carries upstream's 160 on purpose (see
+    # the MAX_RAMP note in DroneCAN.c) and nothing restores it, so only the
+    # macro and the product JSON are held together here.
     ("MAX_RAMP", None, "max_ramp_percent_per_ms", 10),
 )
 
@@ -55,7 +56,7 @@ def target_macros(product: str) -> dict[str, int]:
     nxt = text.find("\n#ifdef ", start + 1)
     block = text[start:nxt if nxt > 0 else len(text)]
     out = {}
-    for suffix, _off, _key, _scale in FIELDS:
+    for suffix, _member, _key, _scale in FIELDS:
         m = re.search(r"#\s*define\s+TARGET_DEFAULT_%s\s+(\d+)" % suffix, block)
         if m:
             out[suffix] = int(m.group(1))
@@ -63,23 +64,37 @@ def target_macros(product: str) -> dict[str, int]:
 
 
 def erase_bytes() -> bytes:
+    # The skeleton is generated from the schema now, so read it from the same
+    # source the build does rather than re-parsing a C literal.
+    sys.path.insert(0, str(ROOT / "scripts" / "eeprom"))
+    from schema import build_context, default_bytes, load_schema  # noqa: E402
+    layout, firmware = build_context()
+    return default_bytes(load_schema(), layout, firmware)
+
+
+def post_skeleton_restores() -> dict[str, str]:
+    """C member -> the TARGET_DEFAULT_* suffix apply_post_skeleton_defaults()
+    assigns it, so a member that quietly stops being restored is caught."""
     text = (ROOT / "Src" / "DroneCAN" / "DroneCAN.c").read_text(encoding="utf-8")
-    m = re.search(r"default_settings\[\]\s*=\s*\{(.*?)\}\s*;", text, re.S)
+    m = re.search(r"static void apply_post_skeleton_defaults\(void\)\s*\{(.*?)\n\}",
+                  text, re.S)
     if not m:
-        raise SystemExit("error: no default_settings[] in Src/DroneCAN/DroneCAN.c")
-    return bytes(int(v, 16) for v in re.findall(r"0x([0-9a-fA-F]+)", m.group(1)))
+        raise SystemExit(
+            "error: no apply_post_skeleton_defaults() in Src/DroneCAN/DroneCAN.c")
+    return dict((member, macro) for member, macro in re.findall(
+        r"eepromBuffer\.(\w+)\s*=\s*TARGET_DEFAULT_(\w+)\s*;", m.group(1)))
 
 
 def check(product: str) -> list[str]:
     errors: list[str] = []
     macros = target_macros(product)
-    arr = erase_bytes()
+    restores = post_skeleton_restores()
     jpath = ROOT / "factory" / ("%s_eeprom_defaults.json" % product)
     if not jpath.is_file():
         return ["%s: missing %s" % (product, jpath)]
     settings = json.loads(jpath.read_text(encoding="utf-8"))["settings"]
 
-    for suffix, off, key, scale in FIELDS:
+    for suffix, member, key, scale in FIELDS:
         macro = "TARGET_DEFAULT_%s" % suffix
         if suffix not in macros:
             errors.append(
@@ -96,15 +111,11 @@ def check(product: str) -> list[str]:
             if shipped != want:
                 errors.append("%s: factory JSON %s=%s (stored %d) but %s=%d"
                               % (product, key, settings[key], shipped, macro, want))
-        if off is not None:
-            if off >= len(arr):
-                errors.append("%s: default_settings[] too short for byte %d"
-                              % (product, off))
-            elif arr[off] != want:
-                errors.append(
-                    "%s: default_settings[%d]=%d but %s=%d - a param ERASE "
-                    "would not restore the shipped value"
-                    % (product, off, arr[off], macro, want))
+        if member is not None and restores.get(member) != suffix:
+            errors.append(
+                "%s: apply_post_skeleton_defaults() does not set %s from %s - "
+                "a param ERASE would leave the configurator skeleton's value"
+                % (product, member, macro))
 
     # An erase must leave both limiters ARMED, per Src/settings.c ranges.
     t = macros.get("TEMPERATURE_LIMIT")

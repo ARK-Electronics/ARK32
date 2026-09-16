@@ -459,7 +459,7 @@ static void fd_select_initial_rate(void)
 		want = 0;
 	}
 #	else
-	const uint8_t want = eepromBuffer.can.fd_mbps;
+	const uint8_t want = eepromBuffer.can_fd_mbps;
 #	endif
 	const int8_t idx = fd_idx_for_mbps(want);
 	if (want == 0 || idx < 0) {

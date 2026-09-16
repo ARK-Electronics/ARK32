@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include "main.h"
 #include "eeprom.h"
 
 #pragma once

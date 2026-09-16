@@ -234,116 +234,16 @@ static void set_input(uint16_t input);
 /*
   the set of parameters to present to the user over DroneCAN
 */
-static const struct parameter {
+struct parameter {
 	char *name;
 	enum VarType vtype;
 	uint16_t min_value;
 	uint16_t max_value;
 	uint16_t default_value;
 	void *ptr;
-} parameters[] = {
-	// list of settable parameters
-	// dronecan specific parameters
-	{"CAN_NODE", T_UINT8, 0, 127, 0, &eepromBuffer.can.can_node},
-	{"ESC_INDEX", T_UINT8, 0, 32, 0, &eepromBuffer.can.esc_index},
-	{"TELEM_RATE", T_UINT8, 0, 200, 25, &eepromBuffer.can.telem_rate},
-	{"DEBUG_RATE", T_UINT8, 0, 200, 0, &eepromBuffer.can.debug_rate},
-	{"REQUIRE_ARMING", T_BOOL, 0, 1, 1, &eepromBuffer.can.require_arming},
-	{"REQUIRE_ZERO_THROTTLE", T_BOOL, 0, 1, 1, &eepromBuffer.can.require_zero_throttle},
-	{"MOTOR_KV", T_UINT16, 20, 10220, 2000, &motor_kv},
-	{"MOTOR_POLES", T_UINT8, MOTOR_POLES_MIN, MOTOR_POLES_MAX, 14, &eepromBuffer.motor_poles},
-
-	// motor_kv, low_cell_volt_cutoff, STARTUP_TUNE, CURRENT_LIMIT value need to adjust to dronecan gui tool
-	// motor_kv 1k/V
-	// CURRENT_LIMIT A, range 0 ~ 200, 0 to disable
-	// TEMPERATURE_LIMIT degrees celsius, range 70 ~ 141, 0 to disable
-	// low_cell_volt_cutoff 10mV, range 250 ~ 350
-	// STARTUP_TUNE RTTTL string
-
-	{"DIR_REVERSED", T_BOOL, 0, 1, 0, &eepromBuffer.dir_reversed},
-	{"BI_DIRECTIONAL", T_BOOL, 0, 1, 0, &eepromBuffer.bi_direction},
-	{"BEEP_VOLUME", T_UINT8, 0, 11, 5, &eepromBuffer.beep_volume},
-	{"VARIABLE_PWM", T_UINT8, 0, 2, 1, &eepromBuffer.variable_pwm},
-	{"PWM_FREQUENCY", T_UINT8, 8, 144, 24, &eepromBuffer.pwm_frequency},
-	/* Still upstream's 160 (16 %/ms), NOT the 5 the 12S board ships. Moving
-	 * it means an erase also changes the SITL seed image, and six
-	 * fault-injection tests provoke desync by slewing fast - at 0.5 %/ms
-	 * they cannot create the condition they assert about. Fixing that
-	 * means pinning the ramp inside those tests, which is the right change
-	 * but not this one. Until then an erase widens the ramp 32x. */
-	{"MAX_RAMP", T_UINT8, 1, 200, 160, &eepromBuffer.max_ramp},
-	{"MIN_DUTY_CYCLE", T_UINT8, 0, 50, 4, &eepromBuffer.minimum_duty_cycle},
-	{"COMP_PWM", T_BOOL, 0, 1, 1, &eepromBuffer.comp_pwm},
-	{"ADVANCE_LEVEL", T_UINT8, 0, 30, 26, &eepromBuffer.advance_level},
-	{"AUTO_ADVANCE", T_BOOL, 0, 1, 0, &eepromBuffer.auto_advance},
-	/* Was 10, below this parameter's own minimum of 50: an out-of-range
-	 * stored byte got "repaired" to another out-of-range value. */
-	{"STARTUP_POWER", T_UINT8, 50, 150, 100, &eepromBuffer.startup_power},
-	{"STALL_PROTECTION", T_UINT8, 0, 3, 0, &eepromBuffer.stall_protection},
-	{"STUCK_ROTOR_PROTECTION", T_BOOL, 0, 1, 1, &eepromBuffer.stuck_rotor_protection},
-	{"DISABLE_STICK_CALIBRATION", T_BOOL, 0, 1, 0, &eepromBuffer.disable_stick_calibration},
-	{"SERVO_LOW_THRESHOLD", T_UINT8, 0, 250, 128, &eepromBuffer.servo.low_threshold},
-	{"SERVO_HIGH_THRESHOLD", T_UINT8, 0, 250, 128, &eepromBuffer.servo.high_threshold},
-	{"SERVO_NEUTRAL", T_UINT8, 0, 250, 128, &eepromBuffer.servo.neutral},
-	{"SERVO_DEAD_BAND", T_UINT8, 0, 250, 50, &eepromBuffer.servo.dead_band},
-	/* 0 = off, 1 = per-cell, 2 = absolute. settings.c reads all three, but
-	 * this was exposed as a bool, so mode 2 was unreachable over CAN. */
-	{"LOW_VOLTAGE_CUTOFF", T_UINT8, 0, 2, 0, &eepromBuffer.low_voltage_cut_off},
-	{"CELL_VOLTAGE_THRESHOLD", T_UINT16, 250, 350, 300, &low_cell_volt_cutoff},
-	{"ABSOLUTE_VOLTAGE_CUTOFF", T_UINT8, 1, 100, 10, &eepromBuffer.absolute_voltage_cutoff},
-	/* Defaults are the stored encoding, which for CURRENT_LIMIT is 2 A per
-	 * count: 100 = 200 A (also the largest value settings.c will arm). Both
-	 * match default_settings[43]/[44] - load_settings() falls back to these
-	 * when the stored byte is out of range, and an out-of-range byte must
-	 * not be a back door to a disabled limiter. 255 remains settable to
-	 * turn the thermal derate off deliberately. */
-	{"CURRENT_LIMIT", T_UINT8, 0, 200, 100, &eepromBuffer.limits.current},
-	/* The current-limit PID in the units the loop uses: settings.c computes
-	 * Kp = current_P * 2 and Kd = current_D * 2, so these scale x2 on read
-	 * and /2 on write exactly like CURRENT_LIMIT - hence max 510 for a
-	 * byte-backed field, and the uint16 max_value in load_settings.
-	 *
-	 * Read the dead-zone note in control_loop.c before lowering Kp: the
-	 * ceiling moves by pid_output/10000 duty units per tick, and that
-	 * integer divide means the loop is inert until the overshoot exceeds
-	 * 5000/Kp centiamps. Kp 200 resolves ~0.5 A; Kp 10 needs 10 A, and
-	 * measured in SITL it fails to hold the limit at all. */
-	{"CURRENT_P", T_UINT8, 0, 510, 200, &eepromBuffer.current_P},
-	{"CURRENT_I", T_UINT8, 0, 255, 0, &eepromBuffer.current_I},
-	{"CURRENT_D", T_UINT8, 0, 510, 100, &eepromBuffer.current_D},
-	{"TEMPERATURE_LIMIT", T_UINT8, THERMAL_LIMIT_MIN_C, 255, TARGET_DEFAULT_TEMPERATURE_LIMIT, &eepromBuffer.limits.temperature},
-	/* Foldback slope: degrees from the onset to full derate. The response
-	 * is always a ramp - there is no hard-cut mode to select, because
-	 * dropping a motor outright on a multirotor is worse than flying on a
-	 * derated one. This is the knob that sets how abrupt the ramp is. */
-	{"TEMP_DERATE_BAND", T_UINT8, 5, 40, 15, &eepromBuffer.can.temp_derate_band},
-	/* 0 = off, 1 = brake, 2 = active brake (requires arming) - also was a
-	 * bool, so mode 2 could not be selected over CAN. */
-	{"BRAKE_ON_STOP", T_UINT8, 0, 2, 0, &eepromBuffer.brake_on_stop},
-	{"DRIVING_BRAKE_STRENGTH", T_UINT8, 1, 10, 10, &eepromBuffer.driving_brake_strength},
-	{"DRAG_BRAKE_STRENGTH", T_UINT8, 1, 10, 10, &eepromBuffer.drag_brake_strength},
-	{"ACTIVE_BRAKE_POWER", T_UINT8, 0, 5, 2, &eepromBuffer.active_brake_power},
-	{"RC_CAR_REVERSE", T_BOOL, 0, 1, 0, &eepromBuffer.rc_car_reverse},
-	{"USE_SIN_START", T_BOOL, 0, 1, 0, &eepromBuffer.use_sine_start},
-	{"SINE_MODE_CHANGEOVER_THROTTLE", T_UINT8, 5, 25, 15, &eepromBuffer.sine_mode_changeover_thottle_level},
-	{"SINE_MODE_POWER", T_UINT8, 1, 10, 6, &eepromBuffer.sine_mode_power},
-	{"USE_HALL_SENSORS", T_BOOL, 0, 1, 0, &eepromBuffer.use_hall_sensors},
-	{"SERIAL_TELEM_INTERVAL", T_UINT8, 0, 255, 0, &eepromBuffer.telemetry_on_interval},
-	/* 0=AUTO (detect DShot/PWM; DroneCAN wins while RawCommand is live),
-	 * 1=DSHOT, 2=SERVO, 3=SERIAL, 4=EDT_ARM, 5=DRONECAN-only (DShot/PWM IRQ off). */
-	{"INPUT_SIGNAL_TYPE", T_UINT8, 0, 5, 0, &eepromBuffer.input_type},
-	{"INPUT_FILTER_HZ", T_UINT8, 0, 100, 0, &eepromBuffer.can.filter_hz},
-#	ifdef CAN_TERM_PIN
-	{"CAN_TERM_ENABLE", T_BOOL, 0, 1, 0, &eepromBuffer.can.term_enable},
-#	endif
-#	ifdef MCU_G431
-	/* 0 = auto-match host CAN FD data bitrate (1/2/4/5 Mbps). 1/2/4/5 pins
-	 * the data phase. Product max is 5 Mbps. Status/telemetry TX is CAN FD
-	 * once locked; DNA stays classic. */
-	{"CAN_FD_MBPS", T_UINT8, 0, 5, 0, &eepromBuffer.can.fd_mbps},
-#	endif
-	{"STARTUP_TUNE", T_STRING, 0, 4, 0, &eepromBuffer.tune},
 };
+
+#	include "eeprom_params.c"
 
 /*
   get settings from eeprom
@@ -367,10 +267,10 @@ static void load_settings(void)
 				uint8_t *pvalue = (uint8_t *)p->ptr;
 				/* uint16: CURRENT_P/D advertise 510 (Kp = byte * 2). */
 				uint16_t max_value = p->max_value;
-				if (pvalue == &eepromBuffer.limits.current) {
+				if (pvalue == &eepromBuffer.current_limit) {
 					max_value = max_value / 2;
 				}
-				if (pvalue == &eepromBuffer.advance_level) {
+				if (pvalue == &eepromBuffer.timing_advance) {
 					max_value = max_value + 10;
 				}
 				if (*pvalue < p->min_value || *pvalue > max_value) {
@@ -478,17 +378,23 @@ static uint32_t millis32(void)
   default settings, based on public/assets/eeprom_default.bin in AM32 configurator
   update to 2.19 default
  */
-/* Byte 46 = input_type: AUTO_IN (0) — first available of DShot/PWM; DroneCAN
- * prioritised while RawCommand stream is live (see DroneCAN_active).
+/* The erase skeleton is generated from schema/eeprom.json: the 48 byte AM32
+ * configurator image, byte-for-byte, so schema/eeprom-defaults.hex and the
+ * factory pages stay what the configurator expects.
  *
- * Bytes 43/44 = temperature/current limit, and they are ARK values, not the
- * configurator's. Upstream ships 0x8d (141) and 0x66 (102), which are both
- * just OUTSIDE the ranges settings.c arms (70..140 C, 1..100 raw = 2..200 A),
- * so the stock eeprom silently disables both limiters. That is where the
- * factory JSONs got their disabled values from, by copying this skeleton.
- * A DroneCAN param ERASE memcpy's this array over the whole page, so leaving
- * it stock would mean a "restore defaults" quietly turns the protections off
- * on a shipped ESC - the one config change nobody would think to re-check.
+ * It is NOT the protection envelope this product ships. Upstream carries
+ * 0x8d (141) and 0x66 (102) at bytes 43/44, both just OUTSIDE the ranges
+ * settings.c arms (70..140 C, 1..100 raw = 2..200 A), so the stock image
+ * silently disables both limiters - and a DroneCAN param ERASE memcpy's it
+ * back over the page. Leaving it at that would mean "restore defaults"
+ * quietly turns the protections off on a shipped ESC: the one config change
+ * nobody would think to re-check. Byte 46 (input_type) is upstream's DShot,
+ * which on a CAN-only board would take the ESC off the bus.
+ *
+ * apply_post_skeleton_defaults() therefore re-applies this target's shipped
+ * values from the TARGET_DEFAULT_* macros in targets.h after the memcpy. It
+ * is per-target on purpose: SITL keeps the generic defaults, ARK_G431_CAN
+ * gets 105 C over a 15 C band and 100 raw = 200 A.
  *
  * 105 C: foldback onset, in line with professional 12S practice (APD/T-Motor
  * derate around 110) and inside the G4 die sensor's factory calibration span
@@ -499,42 +405,52 @@ static uint32_t millis32(void)
  * shunt rating, and above anything a healthy craft draws - a backstop, not a
  * flight limiter.
  *
- * The foldback WIDTH (byte 184) is past the end of this array, so an erase
- * leaves it 0xFF and settings.c coerces it to the 15 C default.
+ * Agreement between the macros and each product JSON is gated by
+ * scripts/check-erase-defaults.py in CI.
  *
- * NOTE this array is still upstream's everywhere else, so an erase also
+ * NOTE the skeleton is still upstream's everywhere else, so an erase also
  * reverts e.g. byte 5 max_ramp to 0xa0 (16 %/ms) rather than the ARK 2 %/ms.
  * That is a pre-existing hole in the erase path and wants its own fix.
  */
-static const uint8_t default_settings[] = {0x01, 0x03, 0x01, 0x01, 0x23, 0xa0, 0x04, 0x00, 0x0a, 0x64, 0x00, 0x32, 0x02, 0x30, 0x35, 0x31,
-					   0x20, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x1a, 0x18, 0x64, 0x37, 0x0e, 0x00, 0x00, 0x05, 0x00,
-					   0x80, 0x80, 0x80, 0x32, 0x00, 0x32, 0x00, 0x00, 0x0f, 0x0a, 0x0a, 0x69, 0x64, 0x06, 0x00, 0x00};
-/* Bytes 43/44 above are TARGET_DEFAULT_TEMPERATURE_LIMIT / _CURRENT_LIMIT
-   (105, 100) spelled as literals on purpose: Mcu/SITL/sitl_params.py parses
-   this array to build eeprom images, so it has to stay pure hex. Agreement
-   with the macros and with each product JSON is gated by
-   scripts/check-erase-defaults.py in CI. */
+#	include "eeprom_defaults.h"
 
 /*
-  Bytes the erase has to restore that live PAST the 48-byte configurator
-  skeleton. Without this the band would come back 0xFF and settings.c would
-  coerce it to the compile-time default - which happens to equal what
-  ARK_G431_CAN ships, so the behaviour is right today by coincidence and
-  would break silently the first time a product shipped a different band.
-  Keep the skeleton itself 48 bytes so it stays configurator-compatible.
+  Bytes an erase has to restore that the 48 byte configurator skeleton either
+  gets wrong for this product (43/44/46) or does not reach at all (184).
+  Keep the skeleton itself untouched so it stays configurator-compatible.
  */
 static void apply_post_skeleton_defaults(void)
 {
-	eepromBuffer.can.temp_derate_band = TARGET_DEFAULT_TEMP_DERATE_BAND;
+	eepromBuffer.temperature_limit = TARGET_DEFAULT_TEMPERATURE_LIMIT;
+	eepromBuffer.current_limit = TARGET_DEFAULT_CURRENT_LIMIT;
+	eepromBuffer.can_temp_derate_band = TARGET_DEFAULT_TEMP_DERATE_BAND;
+	/* AUTO: first available of DShot/PWM, with DroneCAN prioritised while the
+	 * RawCommand stream is live (see DroneCAN_active). Never leave a CAN-only
+	 * board on upstream's DShot default. */
+	eepromBuffer.input_type = 0;
 }
 
 #	ifdef MCU_SITL
-// let the SITL eeprom emulation seed a missing eeprom file with defaults
+/* Seed a missing SITL eeprom file the way a factory-flashed ESC comes up:
+ * the configurator skeleton with this target's protection envelope applied,
+ * i.e. exactly what a DroneCAN param erase leaves behind. Seeding the bare
+ * skeleton instead would boot SITL with the limiters disabled. */
 const uint8_t *DroneCAN_default_settings(unsigned *len);
 const uint8_t *DroneCAN_default_settings(unsigned *len)
 {
-	*len = sizeof(default_settings);
-	return default_settings;
+	static uint8_t seeded[EEPROM_SIZE];
+	static uint8_t built;
+	if (!built) {
+		EEprom_t saved = eepromBuffer;
+		memset(eepromBuffer.buffer, 0xff, sizeof(eepromBuffer.buffer));
+		memcpy(eepromBuffer.buffer, default_settings, sizeof(default_settings));
+		apply_post_skeleton_defaults();
+		memcpy(seeded, eepromBuffer.buffer, sizeof(seeded));
+		eepromBuffer = saved;
+		built = 1;
+	}
+	*len = sizeof(seeded);
+	return seeded;
 }
 #	endif
 
@@ -673,8 +589,8 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 		p = &parameters[req.index];
 	}
 	if (p != NULL && req.name.len != 0 && req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_EMPTY) {
-		const char last_dir_reversed = eepromBuffer.dir_reversed;
-		const char last_bi_direction = eepromBuffer.bi_direction;
+		const char last_dir_reversed = eepromBuffer.direction_reversed;
+		const char last_bi_direction = eepromBuffer.bidirectional_mode;
 		int32_t set_log_val = 0;
 		uint8_t set_log_is_str = 0;
 
@@ -684,15 +600,15 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 		switch (p->vtype) {
 			case T_UINT8: {
 				uint8_t *ptr8 = (uint8_t *)p->ptr;
-				if (ptr8 == &eepromBuffer.limits.current || ptr8 == &eepromBuffer.current_P ||
-				    ptr8 == &eepromBuffer.current_D) {
+				if (ptr8 == &eepromBuffer.current_limit || ptr8 == &eepromBuffer.current_pid_p ||
+				    ptr8 == &eepromBuffer.current_pid_d) {
 					*ptr8 = req.value.integer_value / 2;
 					set_log_val = (int32_t)req.value.integer_value; /* user-facing amps */
 				} else {
 					*ptr8 = req.value.integer_value;
 					set_log_val = (int32_t)req.value.integer_value;
 				}
-				if (ptr8 == &eepromBuffer.advance_level) {
+				if (ptr8 == &eepromBuffer.timing_advance) {
 					*ptr8 = req.value.integer_value + 10; // adjust for advance level offset for eeprom v3
 					set_log_val = (int32_t)req.value.integer_value;
 				}
@@ -711,7 +627,7 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 					 * old kV — refresh them now (AM32 identity tables). */
 					applyMotorIdentitySettings();
 				} else if (ptr16 == &low_cell_volt_cutoff) {
-					eepromBuffer.low_cell_volt_cutoff = (uint8_t)(*ptr16 - 250);
+					eepromBuffer.low_voltage_threshold = (uint8_t)(*ptr16 - 250);
 				}
 				break;
 			}
@@ -721,12 +637,12 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				break;
 			case T_STRING:
 				if (req.value.union_tag == UAVCAN_PROTOCOL_PARAM_VALUE_STRING_VALUE) {
-					if (p->ptr == (void *)eepromBuffer.tune) {
-						for (size_t i = 0; i < sizeof(eepromBuffer.tune); i++) {
+					if (p->ptr == (void *)eepromBuffer.startup_melody) {
+						for (size_t i = 0; i < sizeof(eepromBuffer.startup_melody); i++) {
 							if (i < req.value.string_value.len) {
-								eepromBuffer.tune[i] = req.value.string_value.data[i];
+								eepromBuffer.startup_melody[i] = req.value.string_value.data[i];
 							} else {
-								eepromBuffer.tune[i] = 0xFF;
+								eepromBuffer.startup_melody[i] = 0xFF;
 							}
 						}
 						set_log_is_str = 1;
@@ -753,10 +669,10 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 		(void)set_log_is_str;
 #	endif
 
-		if (last_dir_reversed != eepromBuffer.dir_reversed || last_bi_direction != eepromBuffer.bi_direction) {
+		if (last_dir_reversed != eepromBuffer.direction_reversed || last_bi_direction != eepromBuffer.bidirectional_mode) {
 			// make dir_reversed and bi_direction change work without
 			// reboot
-			forward = 1 - eepromBuffer.dir_reversed;
+			forward = 1 - eepromBuffer.direction_reversed;
 			running = 0;
 			armed = 0;
 			set_input(0);
@@ -790,12 +706,12 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				pkt.min_value.integer_value = p->min_value;
 
 				// special case scaling
-				if ((uint8_t *)p->ptr == &eepromBuffer.limits.current || (uint8_t *)p->ptr == &eepromBuffer.current_P ||
-				    (uint8_t *)p->ptr == &eepromBuffer.current_D) {
+				if ((uint8_t *)p->ptr == &eepromBuffer.current_limit || (uint8_t *)p->ptr == &eepromBuffer.current_pid_p ||
+				    (uint8_t *)p->ptr == &eepromBuffer.current_pid_d) {
 					pkt.default_value.integer_value *= 2;
 					pkt.value.integer_value *= 2;
 				}
-				if ((uint8_t *)p->ptr == &eepromBuffer.advance_level) {
+				if ((uint8_t *)p->ptr == &eepromBuffer.timing_advance) {
 					// automatically remap old values
 					if ((uint64_t)pkt.value.integer_value < sizeof(advance_level_v3_remap)) {
 						pkt.value.integer_value = advance_level_v3_remap[pkt.value.integer_value];
@@ -818,13 +734,13 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				break;
 			case T_STRING:
 				pkt.value.union_tag = UAVCAN_PROTOCOL_PARAM_VALUE_STRING_VALUE;
-				if (p->ptr == (void *)eepromBuffer.tune) {
-					pkt.value.string_value.len = sizeof(eepromBuffer.tune);
+				if (p->ptr == (void *)eepromBuffer.startup_melody) {
+					pkt.value.string_value.len = sizeof(eepromBuffer.startup_melody);
 					if (pkt.value.string_value.len > sizeof(pkt.value.string_value.data)) {
 						pkt.value.string_value.len = sizeof(pkt.value.string_value.data);
 					}
 					for (size_t i = 0; i < pkt.value.string_value.len; i++) {
-						pkt.value.string_value.data[i] = eepromBuffer.tune[i];
+						pkt.value.string_value.data[i] = eepromBuffer.startup_melody[i];
 					}
 				}
 				break;
@@ -937,7 +853,7 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
 	sys_can_getUniqueID(pkt.hardware_version.unique_id);
 
 #	ifdef DRONECAN_NODE_NAME
-	snprintf((char *)pkt.name.data, sizeof(pkt.name.data), "%s#M%u", DRONECAN_NODE_NAME, eepromBuffer.can.esc_index + 1);
+	snprintf((char *)pkt.name.data, sizeof(pkt.name.data), "%s#M%u", DRONECAN_NODE_NAME, eepromBuffer.can_esc_index + 1);
 #	else
 	strncpy((char *)pkt.name.data, FIRMWARE_NAME, sizeof(pkt.name.data));
 #	endif
@@ -957,14 +873,14 @@ extern void setInput();
  */
 static void set_input(uint16_t input)
 {
-	if (!armed && input != 0 && eepromBuffer.can.require_arming && dronecan_armed && !eepromBuffer.can.require_zero_throttle) {
+	if (!armed && input != 0 && eepromBuffer.can_require_arming && dronecan_armed && !eepromBuffer.can_require_zero_throttle) {
 		// allow restart if unexpected ESC reboot in flight
 		faultErrorCountReset(); // armed 0->1: per-arm error_count (DSDL)
 		armed = 1;
 	}
 
-	const uint16_t unfiltered_input = (dronecan_armed || !eepromBuffer.can.require_arming) ? input : 0;
-	const uint16_t filtered_input = Filter2P_apply(unfiltered_input, eepromBuffer.can.filter_hz, 1000);
+	const uint16_t unfiltered_input = (dronecan_armed || !eepromBuffer.can_require_arming) ? input : 0;
+	const uint16_t filtered_input = Filter2P_apply(unfiltered_input, eepromBuffer.can_filter_hz, 1000);
 
 	newinput = filtered_input;
 	last_can_input = unfiltered_input;
@@ -978,7 +894,7 @@ static void set_input(uint16_t input)
 	 * `dshot = bi_direction` used to force dshot=0 whenever reverse
 	 * was off and permanently stole the wire path.
 	 */
-	if (eepromBuffer.bi_direction) {
+	if (eepromBuffer.bidirectional_mode) {
 		dshot = 1;
 	}
 
@@ -998,13 +914,13 @@ static void handle_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer)
 		return;
 	}
 	// see if it is for us
-	if (cmd.cmd.len <= eepromBuffer.can.esc_index) {
+	if (cmd.cmd.len <= eepromBuffer.can_esc_index) {
 		return;
 	}
 
 	// throttle demand is a value from -8191 to 8191. Negative values
 	// are for reverse throttle
-	const int16_t input_can = cmd.cmd.data[(unsigned)eepromBuffer.can.esc_index];
+	const int16_t input_can = cmd.cmd.data[(unsigned)eepromBuffer.can_esc_index];
 
 	/*
       we need to map onto the AM32 expected range, which is a 11 bit number, where:
@@ -1015,7 +931,7 @@ static void handle_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer)
 	uint16_t this_input = 0;
 	if (input_can == 0) {
 		this_input = 0;
-	} else if (eepromBuffer.bi_direction) {
+	} else if (eepromBuffer.bidirectional_mode) {
 		const float scaled_value = input_can * (1000.0 / 8192);
 		if (scaled_value >= 0) {
 			this_input = (uint16_t)(1047 + scaled_value);
@@ -1054,7 +970,7 @@ static void handle_ArmingStatus(CanardInstance *ins, CanardRxTransfer *transfer)
 	if (dronecan_armed && !was_armed) {
 		faultErrorCountReset();
 	}
-	if (!dronecan_armed && eepromBuffer.can.require_arming && canstats.last_raw_command_us != 0) {
+	if (!dronecan_armed && eepromBuffer.can_require_arming && canstats.last_raw_command_us != 0) {
 		set_input(0);
 	}
 }
@@ -1381,7 +1297,7 @@ static void process1HzTasks(uint64_t timestamp_usec)
 	send_NodeStatus();
 
 #	ifdef CAN_TERM_PIN
-	setup_portpin(CAN_TERM_PIN, eepromBuffer.can.term_enable ? CAN_TERM_POLARITY : !CAN_TERM_POLARITY);
+	setup_portpin(CAN_TERM_PIN, eepromBuffer.can_term_enable ? CAN_TERM_POLARITY : !CAN_TERM_POLARITY);
 #	endif
 }
 
@@ -1415,7 +1331,7 @@ static void send_ESCStatus(void)
 		}
 		pkt.power_rating_pct = (uint8_t)pct;
 	}
-	pkt.esc_index = eepromBuffer.can.esc_index;
+	pkt.esc_index = eepromBuffer.can_esc_index;
 
 	uint32_t len = DC_ENCODE(uavcan_equipment_esc_Status_encode, &pkt, buffer);
 
@@ -1528,8 +1444,8 @@ static void DroneCAN_Startup(void)
 		   shouldAcceptTransfer, // Callback, see CanardShouldAcceptTransfer
 		   NULL);
 
-	if (eepromBuffer.can.can_node != 0) {
-		canardSetLocalNodeID(&canard, eepromBuffer.can.can_node);
+	if (eepromBuffer.can_node != 0) {
+		canardSetLocalNodeID(&canard, eepromBuffer.can_node);
 	}
 
 	// initialise low level CAN peripheral hardware
@@ -1605,12 +1521,12 @@ void DroneCAN_update()
 		next_1hz_service_at += 1000000ULL;
 		process1HzTasks(ts);
 	}
-	if (eepromBuffer.can.telem_rate > 0 && ts >= next_telem_service_at) {
-		next_telem_service_at += 1000000ULL / eepromBuffer.can.telem_rate;
+	if (eepromBuffer.can_telem_rate > 0 && ts >= next_telem_service_at) {
+		next_telem_service_at += 1000000ULL / eepromBuffer.can_telem_rate;
 		send_ESCStatus();
 	}
-	if (eepromBuffer.can.debug_rate > 0 && ts >= next_flexdebug_at) {
-		next_flexdebug_at += 1000000ULL / eepromBuffer.can.debug_rate;
+	if (eepromBuffer.can_debug_rate > 0 && ts >= next_flexdebug_at) {
+		next_flexdebug_at += 1000000ULL / eepromBuffer.can_debug_rate;
 		send_FlexDebug();
 	}
 

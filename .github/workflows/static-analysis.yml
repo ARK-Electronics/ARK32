@@ -30,6 +30,19 @@ jobs:
           hwci/tests/test_gd_nfault_integration.py
           hwci/tests/test_debug_uart.py
 
+  eeprom-schema:
+    name: EEPROM schema and generators
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-eeprom
+      - run: make eeprom-check
+      - run: python3 -m unittest discover -s scripts/eeprom/tests -v
+      - name: Install host layout test dependencies
+        run: python3 -m pip install -e ./hwci pytest
+      - name: Check HWCI EEPROM compatibility
+        run: python3 -m pytest -q hwci/tests/test_settings.py
+
   format:
     name: clang-format (check_format)
     runs-on: ubuntu-latest
@@ -45,6 +58,9 @@ jobs:
       - name: Check formatting
         run: make check_format
 
+      - name: Test formatting hooks
+        run: python3 -m unittest discover -s scripts/tests -p test_format_hooks.py -v
+
   cppcheck:
     name: cppcheck (ARK F051 control path)
     runs-on: ubuntu-latest
@@ -56,6 +72,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cppcheck
           cppcheck --version
+
+      - uses: ./.github/actions/setup-eeprom
 
       - name: Run cppcheck
         run: make cppcheck

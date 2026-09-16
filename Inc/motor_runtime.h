@@ -133,7 +133,7 @@ extern volatile uint16_t duty_limit_ceiling;
 extern volatile int16_t degrees_celsius_filtered;
 /*
  * Thermal foldback ramp width, in C below full derate. The onset is
- * eepromBuffer.limits.temperature; authority falls linearly from there to
+ * eepromBuffer.temperature_limit; authority falls linearly from there to
  * THERMAL_CEIL_FLOOR over this many degrees. Tunable (DroneCAN
  * TEMP_DERATE_BAND) because the right slope depends on how hard the
  * airframe loads the ESC: a wide band trades a longer partial-power

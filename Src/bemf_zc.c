@@ -180,7 +180,7 @@ RAM_FUNC void PeriodElapsedCallback()
 		predicted = (uint32_t)((int32_t)commutation_interval + corr);
 	}
 	zc_predicted = predicted;
-	if (!eepromBuffer.auto_advance) {
+	if (!eepromBuffer.auto_timing) {
 		advance = (predicted * temp_advance) >> 6; // 60 divde 64 0.9375 degree increments
 	} else {
 		advance = (predicted * auto_advance_level) >> 6; // 60 divde 64 0.9375 degree increments

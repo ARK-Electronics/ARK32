@@ -16,3 +16,5 @@ numpy           # pyqtgraph and the model fitting
 dronecan        # DroneCAN comms to the simulated ESC
 pymavlink       # mavcan transport and FC telemetry
 pyserial        # serial port discovery and slcan / mavcan links
+
+-r ../../scripts/eeprom/requirements.txt

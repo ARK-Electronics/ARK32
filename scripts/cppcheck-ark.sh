@@ -51,6 +51,7 @@ cppcheck \
   -D__GNUC__=11 \
   -D__ARM_ARCH_6M__=1 \
   -I Inc \
+  -I obj/generated \
   -I Mcu/f051/Inc \
   -I Mcu/f051/Drivers/STM32F0xx_HAL_Driver/Inc \
   -I Mcu/f051/Drivers/CMSIS/Include \

@@ -2,3 +2,5 @@
 dronecan
 pytest>=7.0
 pyserial
+
+-r ../../scripts/eeprom/requirements.txt

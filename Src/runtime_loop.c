@@ -149,11 +149,11 @@ uint8_t adv_kerpm_hold_ms;
 
 void runtimeUpdateVariablePwm(uint16_t *last_tim1_arr)
 {
-	uint16_t next_tim1_arr = tim1_arr;    // unchanged unless variable_pwm recomputes it below
-	if (eepromBuffer.variable_pwm == 1) { // uses range defined by pwm frequency setting
+	uint16_t next_tim1_arr = tim1_arr;	   // unchanged unless variable_pwm recomputes it below
+	if (eepromBuffer.variable_pwm_freq == 1) { // uses range defined by pwm frequency setting
 		next_tim1_arr = map(commutation_interval, 96, 200, TIMER1_MAX_ARR / 2, TIMER1_MAX_ARR);
 	}
-	if (eepromBuffer.variable_pwm == 2) { // uses automatic range
+	if (eepromBuffer.variable_pwm_freq == 2) { // uses automatic range
 		if (average_interval < 250 && average_interval > 100) {
 			next_tim1_arr = average_interval * (CPU_FREQUENCY_MHZ / 9);
 		}
@@ -285,7 +285,7 @@ void runtimeProcessDesyncCheck(void)
 #if defined(USE_DRV_NFAULT)
 				/* This branch already ends the failed run. A gate-driver
 				 * warning plus that loss must not start another powered try. */
-				if (((!eepromBuffer.bi_direction && input > DSHOT_CMD_MAX) || commutation_interval > 1000) &&
+				if (((!eepromBuffer.bidirectional_mode && input > DSHOT_CMD_MAX) || commutation_interval > 1000) &&
 				    faultGateDriverLatchOnDriveLoss()) {
 					desync_check = 0;
 					return;
@@ -294,7 +294,7 @@ void runtimeProcessDesyncCheck(void)
 				if (!commanded_stop) {
 					faultDesyncEpisodeCharge(DESYNC_EPISODE_JUMP);
 				}
-				if ((!eepromBuffer.bi_direction && (input > DSHOT_CMD_MAX)) || commutation_interval > 1000) {
+				if ((!eepromBuffer.bidirectional_mode && (input > DSHOT_CMD_MAX)) || commutation_interval > 1000) {
 					running = 0;
 				}
 #ifndef MCU_F051
@@ -467,7 +467,7 @@ void runtimeThermalLimitTick(void)
 	 * is what a bench or a test compares against. */
 	degrees_celsius_filtered = (int16_t)((temp_q + (1 << (THERMAL_FILT_Q - 1))) >> THERMAL_FILT_Q);
 
-	const int32_t over_q = temp_q - ((int32_t)eepromBuffer.limits.temperature << THERMAL_FILT_Q);
+	const int32_t over_q = temp_q - ((int32_t)eepromBuffer.temperature_limit << THERMAL_FILT_Q);
 	if (over_q <= 0) {
 		thermal_duty_ceiling = 2000;
 		return;
@@ -720,7 +720,7 @@ void runtimeProcessAdcAndProtections(void)
 #ifndef BRUSHED_MODE
 		runtimeTransientGovernorTick();
 #endif
-		if (eepromBuffer.low_voltage_cut_off == 1) {
+		if (eepromBuffer.low_voltage_cutoff == 1) {
 			if (battery_voltage < (cell_count * low_cell_volt_cutoff)) {
 				low_voltage_count++;
 			} else {
@@ -729,7 +729,7 @@ void runtimeProcessAdcAndProtections(void)
 				}
 			}
 		}
-		if (eepromBuffer.low_voltage_cut_off == 2) { // absolute cut off
+		if (eepromBuffer.low_voltage_cutoff == 2) { // absolute cut off
 			if (battery_voltage < (eepromBuffer.absolute_voltage_cutoff * 50)) {
 				low_voltage_count++;
 			} else {
@@ -856,7 +856,7 @@ void runtimeMotorModeTick(void)
 			filter_level = ZC_FILTER_FAST;
 		}
 
-		if (eepromBuffer.auto_advance) {
+		if (eepromBuffer.auto_timing) {
 			/*
 			 * Commutation lag is dominated by the phase lag of current behind
 			 * applied voltage, atan(w*L/R), so what the advance schedule
