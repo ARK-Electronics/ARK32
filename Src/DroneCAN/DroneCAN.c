@@ -419,15 +419,15 @@ static uint32_t millis32(void)
   gets wrong for this product (43/44/46) or does not reach at all (184).
   Keep the skeleton itself untouched so it stays configurator-compatible.
  */
-static void apply_post_skeleton_defaults(void)
+static void apply_post_skeleton_defaults(EEprom_t *e)
 {
-	eepromBuffer.temperature_limit = TARGET_DEFAULT_TEMPERATURE_LIMIT;
-	eepromBuffer.current_limit = TARGET_DEFAULT_CURRENT_LIMIT;
-	eepromBuffer.can_temp_derate_band = TARGET_DEFAULT_TEMP_DERATE_BAND;
+	e->temperature_limit = TARGET_DEFAULT_TEMPERATURE_LIMIT;
+	e->current_limit = TARGET_DEFAULT_CURRENT_LIMIT;
+	e->can_temp_derate_band = TARGET_DEFAULT_TEMP_DERATE_BAND;
 	/* AUTO: first available of DShot/PWM, with DroneCAN prioritised while the
 	 * RawCommand stream is live (see DroneCAN_active). Never leave a CAN-only
 	 * board on upstream's DShot default. */
-	eepromBuffer.input_type = 0;
+	e->input_type = 0;
 }
 
 #	ifdef MCU_SITL
@@ -438,19 +438,16 @@ static void apply_post_skeleton_defaults(void)
 const uint8_t *DroneCAN_default_settings(unsigned *len);
 const uint8_t *DroneCAN_default_settings(unsigned *len)
 {
-	static uint8_t seeded[EEPROM_SIZE];
+	static EEprom_t seeded;
 	static uint8_t built;
 	if (!built) {
-		EEprom_t saved = eepromBuffer;
-		memset(eepromBuffer.buffer, 0xff, sizeof(eepromBuffer.buffer));
-		memcpy(eepromBuffer.buffer, default_settings, sizeof(default_settings));
-		apply_post_skeleton_defaults();
-		memcpy(seeded, eepromBuffer.buffer, sizeof(seeded));
-		eepromBuffer = saved;
+		memset(seeded.buffer, 0xff, sizeof(seeded.buffer));
+		memcpy(seeded.buffer, default_settings, sizeof(default_settings));
+		apply_post_skeleton_defaults(&seeded);
 		built = 1;
 	}
-	*len = sizeof(seeded);
-	return seeded;
+	*len = sizeof(seeded.buffer);
+	return seeded.buffer;
 }
 #	endif
 
@@ -789,7 +786,7 @@ static void handle_param_ExecuteOpcode(CanardInstance *ins, CanardRxTransfer *tr
 			can_printf("resetting to defaults");
 			memset(eepromBuffer.buffer, 0xff, sizeof(eepromBuffer.buffer));
 			memcpy(eepromBuffer.buffer, default_settings, sizeof(default_settings));
-			apply_post_skeleton_defaults();
+			apply_post_skeleton_defaults(&eepromBuffer);
 			save_flash_nolib(eepromBuffer.buffer, sizeof(eepromBuffer.buffer), eeprom_address);
 			loadEEpromSettings();
 			load_settings();

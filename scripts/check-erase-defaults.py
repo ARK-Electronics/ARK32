@@ -76,13 +76,13 @@ def post_skeleton_restores() -> dict[str, str]:
     """C member -> the TARGET_DEFAULT_* suffix apply_post_skeleton_defaults()
     assigns it, so a member that quietly stops being restored is caught."""
     text = (ROOT / "Src" / "DroneCAN" / "DroneCAN.c").read_text(encoding="utf-8")
-    m = re.search(r"static void apply_post_skeleton_defaults\(void\)\s*\{(.*?)\n\}",
+    m = re.search(r"static void apply_post_skeleton_defaults\(EEprom_t \*e\)\s*\{(.*?)\n\}",
                   text, re.S)
     if not m:
         raise SystemExit(
             "error: no apply_post_skeleton_defaults() in Src/DroneCAN/DroneCAN.c")
     return dict((member, macro) for member, macro in re.findall(
-        r"eepromBuffer\.(\w+)\s*=\s*TARGET_DEFAULT_(\w+)\s*;", m.group(1)))
+        r"e->(\w+)\s*=\s*TARGET_DEFAULT_(\w+)\s*;", m.group(1)))
 
 
 def check(product: str) -> list[str]:
