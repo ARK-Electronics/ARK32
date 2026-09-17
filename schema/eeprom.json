@@ -198,6 +198,14 @@
       },
       "factory": {
         "key": "disable_stick_calibration"
+      },
+      "dronecan": {
+        "name": "DISABLE_STICK_CALIBRATION",
+        "vtype": "bool",
+        "order": 33,
+        "default": 0,
+        "min": 0,
+        "max": 1
       }
     },
     "absoluteVoltageCutoff": {
@@ -237,6 +245,14 @@
       },
       "factory": {
         "key": "absolute_voltage_cutoff"
+      },
+      "dronecan": {
+        "name": "ABSOLUTE_VOLTAGE_CUTOFF",
+        "vtype": "uint8",
+        "order": 34,
+        "default": 10,
+        "min": 1,
+        "max": 100
       }
     },
     "currentPidP": {
@@ -261,6 +277,14 @@
       },
       "factory": {
         "key": "current_P"
+      },
+      "dronecan": {
+        "name": "CURRENT_P",
+        "vtype": "uint8",
+        "order": 35,
+        "default": 200,
+        "min": 0,
+        "max": 510
       }
     },
     "currentPidI": {
@@ -285,6 +309,14 @@
       },
       "factory": {
         "key": "current_I"
+      },
+      "dronecan": {
+        "name": "CURRENT_I",
+        "vtype": "uint8",
+        "order": 36,
+        "default": 0,
+        "min": 0,
+        "max": 255
       }
     },
     "currentPidD": {
@@ -309,6 +341,14 @@
       },
       "factory": {
         "key": "current_D"
+      },
+      "dronecan": {
+        "name": "CURRENT_D",
+        "vtype": "uint8",
+        "order": 37,
+        "default": 100,
+        "min": 0,
+        "max": 510
       }
     },
     "activeBrakePower": {
@@ -341,6 +381,14 @@
       },
       "factory": {
         "key": "active_brake_power"
+      },
+      "dronecan": {
+        "name": "ACTIVE_BRAKE_POWER",
+        "vtype": "uint8",
+        "order": 38,
+        "default": 2,
+        "min": 0,
+        "max": 5
       }
     },
     "reserved0": {
@@ -534,7 +582,9 @@
         "name": "VARIABLE_PWM",
         "vtype": "uint8",
         "order": 11,
-        "default": 1
+        "default": 1,
+        "min": 0,
+        "max": 2
       },
       "sitl": {
         "name": "VARIABLE_PWM"
@@ -675,7 +725,9 @@
         "name": "PWM_FREQUENCY",
         "vtype": "uint8",
         "order": 12,
-        "default": 24
+        "default": 24,
+        "min": 8,
+        "max": 144
       },
       "sitl": {
         "name": "PWM_FREQUENCY"
@@ -849,7 +901,9 @@
         "name": "BRAKE_ON_STOP",
         "vtype": "uint8",
         "order": 25,
-        "default": 1
+        "default": 0,
+        "min": 0,
+        "max": 2
       },
       "sitl": {
         "name": "BRAKE_ON_STOP"
@@ -882,6 +936,14 @@
       },
       "factory": {
         "key": "stall_protection"
+      },
+      "dronecan": {
+        "name": "STALL_PROTECTION",
+        "vtype": "uint8",
+        "order": 32,
+        "default": 0,
+        "min": 0,
+        "max": 3
       }
     },
     "beepVolume": {
@@ -937,6 +999,14 @@
       },
       "factory": {
         "key": "telemetry_on_interval"
+      },
+      "dronecan": {
+        "name": "SERIAL_TELEM_INTERVAL",
+        "vtype": "uint8",
+        "order": 47,
+        "default": 0,
+        "min": 0,
+        "max": 255
       }
     },
     "servoLowThreshold": {
@@ -968,6 +1038,14 @@
       },
       "factory": {
         "key": "pwm_input_min_us"
+      },
+      "dronecan": {
+        "name": "SERVO_LOW_THRESHOLD",
+        "vtype": "uint8",
+        "order": 39,
+        "default": 128,
+        "min": 0,
+        "max": 250
       }
     },
     "servoHighThreshold": {
@@ -999,6 +1077,14 @@
       },
       "factory": {
         "key": "pwm_input_max_us"
+      },
+      "dronecan": {
+        "name": "SERVO_HIGH_THRESHOLD",
+        "vtype": "uint8",
+        "order": 40,
+        "default": 128,
+        "min": 0,
+        "max": 250
       }
     },
     "servoNeutral": {
@@ -1030,6 +1116,14 @@
       },
       "factory": {
         "key": "pwm_input_neutral_us"
+      },
+      "dronecan": {
+        "name": "SERVO_NEUTRAL",
+        "vtype": "uint8",
+        "order": 41,
+        "default": 128,
+        "min": 0,
+        "max": 250
       }
     },
     "servoDeadband": {
@@ -1053,6 +1147,14 @@
       },
       "factory": {
         "key": "pwm_input_deadband"
+      },
+      "dronecan": {
+        "name": "SERVO_DEAD_BAND",
+        "vtype": "uint8",
+        "order": 42,
+        "default": 50,
+        "min": 0,
+        "max": 250
       }
     },
     "lowVoltageCutoff": {
@@ -1114,7 +1216,9 @@
         "name": "LOW_VOLTAGE_CUTOFF",
         "vtype": "uint8",
         "order": 23,
-        "default": 0
+        "default": 0,
+        "min": 0,
+        "max": 2
       },
       "sitl": {
         "name": "LOW_VOLTAGE_CUTOFF"
@@ -1188,6 +1292,14 @@
       },
       "sitl": {
         "name": "RC_CAR_REVERSE"
+      },
+      "dronecan": {
+        "name": "RC_CAR_REVERSE",
+        "vtype": "bool",
+        "order": 43,
+        "default": 0,
+        "min": 0,
+        "max": 1
       }
     },
     "hallSensors": {
@@ -1208,6 +1320,14 @@
       },
       "sitl": {
         "name": "USE_HALL_SENSORS"
+      },
+      "dronecan": {
+        "name": "USE_HALL_SENSORS",
+        "vtype": "bool",
+        "order": 46,
+        "default": 0,
+        "min": 0,
+        "max": 1
       }
     },
     "sineModeRange": {
@@ -1250,6 +1370,14 @@
       },
       "factory": {
         "key": "sine_mode_changeover_throttle_level"
+      },
+      "dronecan": {
+        "name": "SINE_MODE_CHANGEOVER_THROTTLE",
+        "vtype": "uint8",
+        "order": 44,
+        "default": 15,
+        "min": 5,
+        "max": 25
       }
     },
     "dragBrakeStrength": {
@@ -1358,13 +1486,13 @@
       "default": {
         "raw": 141
       },
-      "onLoad": "disable",
+      "onLoad": "keep",
       "dronecan": {
         "name": "TEMPERATURE_LIMIT",
         "vtype": "uint8",
         "order": 22,
-        "default": 255,
-        "min": 70,
+        "default": "TARGET_DEFAULT_TEMPERATURE_LIMIT",
+        "min": "THERMAL_LIMIT_MIN_C",
         "max": 255
       },
       "sitl": {
@@ -1407,7 +1535,7 @@
         "name": "CURRENT_LIMIT",
         "vtype": "uint8",
         "order": 21,
-        "default": 0,
+        "default": 100,
         "min": 0,
         "max": 200
       },
@@ -1457,6 +1585,14 @@
       },
       "factory": {
         "key": "sine_mode_power"
+      },
+      "dronecan": {
+        "name": "SINE_MODE_POWER",
+        "vtype": "uint8",
+        "order": 45,
+        "default": 6,
+        "min": 1,
+        "max": 10
       }
     },
     "inputType": {
@@ -1514,7 +1650,7 @@
         "name": "INPUT_SIGNAL_TYPE",
         "vtype": "uint8",
         "order": 28,
-        "default": 5
+        "default": 0
       },
       "sitl": {
         "name": "INPUT_SIGNAL_TYPE"
@@ -1607,7 +1743,9 @@
         "name": "ESC_INDEX",
         "vtype": "uint8",
         "order": 1,
-        "default": 0
+        "default": 0,
+        "min": 0,
+        "max": 31
       },
       "sitl": {
         "name": "ESC_INDEX"
@@ -1744,13 +1882,66 @@
       }
     },
     "canReserved": {
-      "offset": 184,
-      "size": 8,
+      "offset": 186,
+      "size": 6,
       "type": "reserved",
       "name": "CAN Reserved",
       "description": "Reserved bytes for future CAN settings",
       "preserveOnDefaults": true,
       "hidden": true
+    },
+    "canTempDerateBand": {
+      "offset": 184,
+      "size": 1,
+      "type": "uint8",
+      "name": "CAN Temp Derate Band",
+      "description": "Degrees from the thermal onset to full derate",
+      "unit": "°C",
+      "raw": {
+        "min": 5,
+        "max": 40
+      },
+      "preserveOnDefaults": true,
+      "dronecan": {
+        "name": "TEMP_DERATE_BAND",
+        "vtype": "uint8",
+        "order": 48,
+        "default": 15,
+        "min": 5,
+        "max": 40
+      },
+      "sitl": {
+        "name": "TEMP_DERATE_BAND"
+      },
+      "factory": {
+        "key": "temperature_derate_band",
+        "optional": true
+      }
+    },
+    "canFdMbps": {
+      "offset": 185,
+      "size": 1,
+      "type": "uint8",
+      "name": "CAN FD Data Bitrate",
+      "description": "0 = auto-match the host (1/2/4/5 Mbps); 1/2/4/5 pins the data phase",
+      "unit": "Mbps",
+      "raw": {
+        "min": 0,
+        "max": 5
+      },
+      "preserveOnDefaults": true,
+      "dronecan": {
+        "name": "CAN_FD_MBPS",
+        "vtype": "uint8",
+        "order": 49,
+        "default": 0,
+        "min": 0,
+        "max": 5,
+        "ifdef": "MCU_G431"
+      },
+      "sitl": {
+        "name": "CAN_FD_MBPS"
+      }
     }
   },
   "groups": {
@@ -1796,6 +1987,7 @@
       "name": "Limits",
       "fields": [
         "temperatureLimit",
+        "canTempDerateBand",
         "currentLimit",
         "lowVoltageCutoff",
         "lowVoltageThreshold",
@@ -1901,7 +2093,8 @@
         "canRequireZeroThrottle",
         "canFilterHz",
         "canDebugRate",
-        "canTermEnable"
+        "canTermEnable",
+        "canFdMbps"
       ],
       "description": "CAN bus communication settings (also available on ARK32 layout 3)",
       "panel": "none"

@@ -92,9 +92,20 @@ RAM_FUNC void commutate()
 	// it too). Established closed loop never exits here - a missed
 	// crossing is one blind step (PeriodElapsedCallback) and false locks
 	// are the trust rail's job (runtimeProcessDesyncCheck).
+#	if defined(MCU_G431)
+	/* Re-enter poll more readily during acquisition after stall/desync.
+	 * Mask COMP IRQs so interrupt-ZC and poll-ZC cannot fight. */
+	if (zero_crosses < 100 && (average_interval > polling_mode_changeover + 500 || zero_crosses < 40)) {
+		if (!old_routine) {
+			maskPhaseInterrupts();
+		}
+		old_routine = 1;
+	}
+#	else
 	if (zero_crosses < 100 && average_interval > polling_mode_changeover + 500) {
 		old_routine = 1;
 	}
+#	endif
 #endif
 	bemfcounter = 0;
 	zcfound = 0;
@@ -197,10 +208,27 @@ void zcfoundroutine()
 			enableCompInterrupts(); // enable interrupt
 		}
 	} else {
+#	if defined(MCU_G431)
+		/*
+		 * ARK 12S CAN (G4 dual-COMP): PWM/comparator noise can shrink
+		 * commutation_interval below POLLING_MODE_THRESHOLD before the
+		 * rotor is actually spinning. F051 (single COMP + runtime hyst)
+		 * does not show that false-CI handoff. Require a longer clean
+		 * poll run before interrupt mode, else closed-loop arms on a
+		 * noise CI (~1.3k ticks vs true ~3k+ free-run), stalls, and
+		 * OPEN↔CLOSED stutters (stand: 55 closed→open / 31 desync per
+		 * startup matrix).
+		 */
+		if (zero_crosses >= 40 && commutation_interval < polling_mode_changeover) {
+			old_routine = 0;
+			enableCompInterrupts(); // enable interrupt
+		}
+#	else
 		if (commutation_interval < polling_mode_changeover) {
 			old_routine = 0;
 			enableCompInterrupts(); // enable interrupt
 		}
+#	endif
 	}
 #endif
 	if (!old_routine) {

@@ -13,6 +13,7 @@ show what the simulated motor needs.
 '''
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -112,8 +113,41 @@ def mismatches(image, model):
 EEPROM_SIZE = _SCHEMA['bufferSize']
 
 
+def _post_skeleton_defaults():
+    '''the bytes Src/DroneCAN/DroneCAN.c apply_post_skeleton_defaults()
+    writes on top of the configurator skeleton, resolved for the SITL
+    target, so an image built here is the one the firmware would seed'''
+    root = Path(__file__).resolve().parents[2]
+    source = (root / 'Src/DroneCAN/DroneCAN.c').read_text()
+    body = re.search(r'apply_post_skeleton_defaults\(EEprom_t \*e\)\s*\{(.*?)\n\}',
+                     source, re.S)
+    targets = (root / 'Inc/targets.h').read_text()
+    block = targets[targets.index('#ifdef AM32_SITL_CAN\n'):]
+    block = block[:block.index('\n#ifdef ')]
+    out = {}
+    if body:
+        for member, suffix in re.findall(
+                r'e->(\w+)\s*=\s*TARGET_DEFAULT_(\w+)\s*;', body.group(1)):
+            for text in (block, targets):
+                m = re.search(r'#\s*define\s+TARGET_DEFAULT_%s\s+(\d+)' % suffix, text)
+                if m:
+                    out[member] = int(m.group(1))
+                    break
+    return out
+
+
 def _firmware_defaults():
-    return default_bytes(_SCHEMA, _LAYOUT, _FIRMWARE)
+    '''the full page a factory-flashed ESC boots with: the configurator
+    skeleton, erased past it, then the target's own corrections - the same
+    image DroneCAN.c erase_image() builds'''
+    prefix = default_bytes(_SCHEMA, _LAYOUT, _FIRMWARE)
+    image = bytearray(b'\xff' * EEPROM_SIZE)
+    image[:len(prefix)] = prefix
+    for member, value in _post_skeleton_defaults().items():
+        field = _FIELDS.get(re.sub(r'_(\w)', lambda m: m[1].upper(), member))
+        if field is not None:
+            image[field['offset']] = value
+    return bytes(image)
 
 
 def base_image():

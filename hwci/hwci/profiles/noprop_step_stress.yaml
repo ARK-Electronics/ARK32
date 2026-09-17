@@ -1,0 +1,31 @@
+name: noprop_step_stress
+description: >
+  Free-run step stress for BEMF re-acquire after snaps (no prop). Instant
+  steps 10↔60/80/100 — low bus current, exercises commutation handoff and
+  demag detectors without prop inertia. ~45 s.
+sample_rate_hz: 200
+arm_settle_s: 3.0
+demag_rpm_drop_fraction: 0.30
+demag_commutation_spike: 3.0
+steady_tail_fraction: 0.5
+
+safety:
+  max_current_a: 8.0
+  max_thrust_n: 3.0
+  max_rpm: 55000
+  max_motor_temp_c: 90.0
+
+segments:
+  - {label: idle,    throttle: 0.00, duration_s: 2.0}
+  - {label: pre,     throttle: 0.10, duration_s: 3.0, ramp: true}
+  - {label: step60a, throttle: 0.60, duration_s: 2.5}
+  - {label: drop10a, throttle: 0.10, duration_s: 2.5}
+  - {label: step80a, throttle: 0.80, duration_s: 2.5}
+  - {label: drop10b, throttle: 0.10, duration_s: 2.5}
+  - {label: step100, throttle: 1.00, duration_s: 2.5}
+  - {label: drop10c, throttle: 0.10, duration_s: 2.5}
+  - {label: step80b, throttle: 0.80, duration_s: 2.5}
+  - {label: drop05,  throttle: 0.05, duration_s: 2.5}
+  - {label: step60b, throttle: 0.60, duration_s: 2.5}
+  - {label: rampdn,  throttle: 0.00, duration_s: 3.0, ramp: true}
+  - {label: stop,    throttle: 0.00, duration_s: 2.0}

@@ -13,15 +13,29 @@ class BuildArtifacts:
     hex: Path
 
 
-def find_artifact(obj_dir: Path, target: str, ext: str) -> Path | None:
-    """Newest ``obj/ARK32_<target>_*.<ext>`` build artifact, or None.
+# Sidecar images share the ``ARK32_<target>_<ver>`` prefix. A glob of ``*.bin``
+# must not pick ``.eeprom.bin`` / ``.uavcan.bin`` (or ``.factory.hex`` for
+# ``*.hex``) — flashing those at the app base overwrites vectors. Observed
+# 2026-08-14: hwci ci programmed the 2 KiB EEPROM dump at 0x08004000.
+_SIDECAR_MARKERS = (".eeprom.", ".factory.", ".uavcan.")
 
-    The single place that knows the Makefile's artifact naming; RigConfig's
-    ELF resolution reuses it so the flashed binary and the parsed ELF can
-    never be picked by two different rules.
+
+def find_artifact(obj_dir: Path, target: str, ext: str) -> Path | None:
+    """Newest ``obj/ARK32_<target>_*.<ext>`` firmware image, or None.
+
+    Ignores factory/EEPROM/UAVCAN sidecars. Newest is by mtime so a rebuild
+    wins over an older version sitting in ``obj/``. RigConfig ELF resolution
+    uses this too, so the flashed binary and the parsed ELF cannot diverge.
     """
-    hits = sorted(obj_dir.glob(f"ARK32_{target}_*.{ext}"))
-    return hits[-1] if hits else None
+    ext = ext.lstrip(".")
+    hits = [
+        p for p in Path(obj_dir).glob(f"ARK32_{target}_*.{ext}")
+        if p.is_file() and not any(m in p.name for m in _SIDECAR_MARKERS)
+    ]
+    if not hits:
+        return None
+    hits.sort(key=lambda p: p.stat().st_mtime)
+    return hits[-1]
 
 
 def build_firmware(repo_root: str | Path, target: str, *,
