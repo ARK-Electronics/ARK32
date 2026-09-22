@@ -87,7 +87,7 @@ Field bootloaders and app-side BL update use **[ARK32-bootloader](https://github
 | Branch | Role |
 |--------|------|
 | **`main`** | ARK integration line — open product PRs here |
-| `upstream-main` | Tracks upstream AM32 `main` |
+| `upstream_main` | Tracks upstream AM32 `main` |
 | Feature branches | Short-lived; rebase onto `main` unless targeting pure upstream work |
 
 ---
