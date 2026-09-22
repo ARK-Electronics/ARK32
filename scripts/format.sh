@@ -134,9 +134,9 @@ collect_all() {
 }
 
 if [[ "$CHANGED_ONLY" -eq 1 ]]; then
-  # Prefer merge-base with origin/ark-release or origin/main when present.
+  # Prefer merge-base with origin/main when present.
   base=""
-  for cand in origin/ark-release origin/main; do
+  for cand in origin/main; do
     if git rev-parse --verify "$cand" >/dev/null 2>&1; then
       base="$(git merge-base HEAD "$cand" 2>/dev/null || true)"
       [[ -n "$base" ]] && break

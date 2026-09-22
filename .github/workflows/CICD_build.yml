@@ -7,20 +7,21 @@ name: CI Build Linux
 # the Linux xPack toolchain. (Windows host cross-builds currently overflow F051
 # FLASH; native SITL on Windows is covered by the SITL workflow.)
 #
-# - Push/PR on ark-release: build + artifact.
+# - Push/PR on main: build + artifact.
 # - Version tags (vMAJOR.MINOR[-suffix]): GitHub Release with obj/*.hex.
-# - schedule / optional dispatch: rolling `nightly` prerelease (assets replaced).
+# - schedule: rolling `nightly` prerelease (assets replaced), skipped when main has
+#   not moved since the last one. Dispatch with publish_nightly always publishes.
 
 on:
   push:
-    branches: ["ark-release", "dakejahl/version-32"]
+    branches: ["main", "dakejahl/version-32"]
     tags:
       # Matches v32.0, v32.1-rc1, etc. (glob, not full regex).
       - "v[0-9]*.[0-9]*"
   pull_request:
-    branches: ["ark-release", "dakejahl/version-32"]
+    branches: ["main", "dakejahl/version-32"]
   schedule:
-    # Rolling nightly at 06:00 UTC on the default branch (ark-release).
+    # Rolling nightly at 06:00 UTC on the default branch (main).
     - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
@@ -34,7 +35,28 @@ permissions:
   contents: write
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          build=true
+          if [ "${{ github.event_name }}" = schedule ]; then
+            published=$(gh api "repos/${{ github.repository }}/commits/nightly" --jq .sha 2>/dev/null || true)
+            if [ "$published" = "${{ github.sha }}" ]; then
+              echo "nightly is already ${{ github.sha }}; nothing to publish"
+              build=false
+            fi
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
 
     steps:

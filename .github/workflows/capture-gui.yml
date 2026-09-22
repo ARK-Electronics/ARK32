@@ -2,9 +2,9 @@ name: Capture GUI
 
 on:
   push:
-    branches: ["main", "ark-release"]
+    branches: ["main"]
   pull_request:
-    branches: ["main", "ark-release"]
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
