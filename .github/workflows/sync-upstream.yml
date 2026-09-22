@@ -1,0 +1,35 @@
+name: Sync upstream
+
+# Fast-forwards upstream_main to upstream's main every night. The default
+# GITHUB_TOKEN cannot push commits that change .github/workflows, so nights
+# where upstream touched a workflow need UPSTREAM_SYNC_TOKEN: a token with
+# Contents and Workflows write access to this repo.
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+
+jobs:
+  sync:
+    if: github.repository == 'ARK-Electronics/ARK32'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: upstream_main
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+
+      - name: Fast-forward upstream_main
+        run: |
+          git fetch --no-tags https://github.com/am32-firmware/AM32.git main
+          # No --force: a rewritten upstream history, or a commit made on
+          # upstream_main by hand, fails here instead of being overwritten.
+          git push origin FETCH_HEAD:refs/heads/upstream_main
