@@ -9,7 +9,8 @@ name: CI Build Linux
 #
 # - Push/PR on main: build + artifact.
 # - Version tags (vMAJOR.MINOR[-suffix]): GitHub Release with obj/*.hex.
-# - schedule / optional dispatch: rolling `nightly` prerelease (assets replaced).
+# - schedule: rolling `nightly` prerelease (assets replaced), skipped when main has
+#   not moved since the last one. Dispatch with publish_nightly always publishes.
 
 on:
   push:
@@ -34,7 +35,28 @@ permissions:
   contents: write
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          build=true
+          if [ "${{ github.event_name }}" = schedule ]; then
+            published=$(gh api "repos/${{ github.repository }}/commits/nightly" --jq .sha 2>/dev/null || true)
+            if [ "$published" = "${{ github.sha }}" ]; then
+              echo "nightly is already ${{ github.sha }}; nothing to publish"
+              build=false
+            fi
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
 
     steps:
