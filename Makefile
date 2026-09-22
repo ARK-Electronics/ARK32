@@ -305,7 +305,7 @@ factory-image-check: factory-image
 # different version. Optional pre-push hook setup is documented in README.md.
 #   make format          — rewrite sources in place
 #   make check_format    — CI: fail if any file would change
-#   make format_changed  — rewrite only files changed vs origin/ark-release
+#   make format_changed  — rewrite only files changed vs origin/main
 .PHONY : format check_format format_changed
 format:
 	$(QUIET)bash scripts/format.sh

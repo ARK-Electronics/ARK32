@@ -2,9 +2,9 @@ name: SITL Tests
 
 on:
   push:
-    branches: ["main", "ark-release", "dakejahl/version-32"]
+    branches: ["main", "dakejahl/version-32"]
   pull_request:
-    branches: ["main", "ark-release", "dakejahl/version-32"]
+    branches: ["main", "dakejahl/version-32"]
   workflow_dispatch:
 
 jobs:
