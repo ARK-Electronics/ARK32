@@ -10,7 +10,8 @@ name: CI Build Linux
 # - Push/PR on main: build + artifact.
 # - Version tags (vMAJOR.MINOR[-suffix]): publish app/factory/EEPROM images after all validation jobs pass.
 # - schedule: rolling `nightly` prerelease (assets replaced), skipped when main has
-#   not moved since the last one. Dispatch with publish_nightly always publishes.
+#   not moved since the last one. A dispatch runs the validation jobs as a dry run;
+#   publish_nightly also publishes.
 
 on:
   push:
@@ -35,7 +36,7 @@ permissions:
   contents: read
 
 # Serialize publication per ref. The event name keeps a queued nightly from
-# being replaced by a later ark-release push (one pending run per group).
+# being replaced by a later main push (one pending run per group).
 concurrency:
   group: firmware-release-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
@@ -61,24 +62,30 @@ jobs:
           echo "build=$build" >> "$GITHUB_OUTPUT"
 
   validate-static:
+    needs: changes
     if: >
+      needs.changes.outputs.build == 'true' &&
       github.repository == 'ARK-Electronics/ARK32' &&
       (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' ||
-       (github.event_name == 'workflow_dispatch' && inputs.publish_nightly))
+       github.event_name == 'workflow_dispatch')
     uses: ./.github/workflows/static-analysis.yml
 
   validate-sitl:
+    needs: changes
     if: >
+      needs.changes.outputs.build == 'true' &&
       github.repository == 'ARK-Electronics/ARK32' &&
       (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' ||
-       (github.event_name == 'workflow_dispatch' && inputs.publish_nightly))
+       github.event_name == 'workflow_dispatch')
     uses: ./.github/workflows/SITL.yml
 
   validate-calibration:
+    needs: changes
     if: >
+      needs.changes.outputs.build == 'true' &&
       github.repository == 'ARK-Electronics/ARK32' &&
       (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' ||
-       (github.event_name == 'workflow_dispatch' && inputs.publish_nightly))
+       github.event_name == 'workflow_dispatch')
     uses: ./.github/workflows/SITL-calibration.yml
 
   build:
