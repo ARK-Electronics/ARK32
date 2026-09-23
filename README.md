@@ -227,6 +227,8 @@ DShot commands run only when **armed**, **motor not running**, and the command i
 
 Other DShot commands (direction, bi-dir, EDT, programming mode, etc.) do **not** play a dedicated melody unless noted above. Direction set (7/8) has no confirmation beep.
 
+EEPROM writes over DShot (commands 36 and 37): [`doc/dshot-programming.md`](doc/dshot-programming.md).
+
 ### Beacon sweep detail
 
 **`playBeaconTune3`**: stepped descending pitch with phase stepping (~10 ms steps, prescaler from high down toward lower values). Used as DShot beacon 3 and as the “entered stick calibration” cue.

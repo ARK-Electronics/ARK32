@@ -130,7 +130,9 @@ void computeDshotDMA()
 				if (programming_mode == DSHOT_PROG_WAIT_COMMIT) {
 					/* RAM only; DSHOT_CMD_SAVE_SETTINGS makes it permanent. */
 					if (tocheck == DSHOT_CMD_EXIT_PROGRAMMING_MODE) {
-						eepromBuffer.buffer[position] = new_byte;
+						if (position < sizeof(eepromBuffer.buffer)) {
+							eepromBuffer.buffer[position] = new_byte;
+						}
 						programming_mode = DSHOT_PROG_IDLE;
 					}
 				}
