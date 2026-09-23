@@ -22,6 +22,7 @@ on:
       - "Makefile"
       - "*makefile.mk"
       - "make/**"
+      - "schema/**"
       - ".github/workflows/SITL-calibration.yml"
   pull_request:
     branches: ["main"]
@@ -33,6 +34,7 @@ on:
       - "Makefile"
       - "*makefile.mk"
       - "make/**"
+      - "schema/**"
       - ".github/workflows/SITL-calibration.yml"
   schedule:
     - cron: "17 2 * * *"
