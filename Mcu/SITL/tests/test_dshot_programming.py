@@ -25,8 +25,21 @@ def programmer(sitl_factory):
         try:
             watch.until(lambda: watch.values.get(0) == 1
                         and watch.values.get(1) == 0)
+            # Morse arming tones contain silent gaps. Keep sending stop until
+            # the tone has stayed quiet longer than a gap, with IRQs live.
+            quiet_since = time.monotonic()
+            deadline = quiet_since + 5
+            while time.monotonic() - quiet_since < 0.15:
+                assert time.monotonic() < deadline, sitl.log_tail()
+                watch.poll()
+                if watch.values.get(1):
+                    quiet_since = time.monotonic()
             tx.stop()
             ee = EepromClient(port=sitl.state_port)
+            # The last byte defaults to 255; seed it so writing 255 proves
+            # that the upper valid boundary actually reached the decoder.
+            ok, message = ee.set(191, [0])
+            assert ok, message
 
             def send(value, telem):
                 port.send_dshot(value, ptype=sd.TYPE_DSHOT600, telem=telem)
