@@ -657,6 +657,10 @@ RAM_FUNC void tenKhzRoutine()
 			PROCESS_ADC_FLAG = 1;		       // set flag to do new adc read at lower priority
 			one_khz_loop_counter = 0;
 			faultDesyncEpisodeTick1kHz();
+			/* Paused in sine start, where escIsDriving() already aborts programming. */
+			if (dshot_programming_ticks) {
+				dshot_programming_ticks--;
+			}
 			if (use_current_limit && escIsDriving()) {
 				use_current_limit_adjust -=
 					(int16_t)(doPidCalculations(&currentPid, actual_current, eepromBuffer.current_limit * 2 * 100) /

@@ -12,6 +12,7 @@
 #include "sounds.h"
 #include "targets.h"
 #include "hwci_perf.h"
+#include "esc_state.h"
 #if DRONECAN_SUPPORT
 #	include "DroneCAN/DroneCAN.h"
 #endif
@@ -63,7 +64,7 @@ uint16_t halfpulsetime = 0;
 uint8_t programming_mode;
 uint16_t position;
 uint8_t new_byte;
-volatile uint16_t dshot_programming_ticks;
+volatile uint8_t dshot_programming_ticks;
 
 void computeDshotDMA()
 {
@@ -118,37 +119,30 @@ void computeDshotDMA()
 				send_telemetry = 1;
 			}
 			if (programming_mode > DSHOT_PROG_IDLE) {
-				/* Expiry discards the late frame instead of interpreting it as throttle.
-				 * PX4 sets the telemetry bit on nonzero programming data, but sends
-				 * zero without it. Zero data and MOTOR_STOP are indistinguishable. */
-				if (!dshot_programming_ticks || !armed || running || (tocheck != 0 && !(frame & DSHOT_TELEMETRY_BIT))) {
-					programming_mode = DSHOT_PROG_IDLE;
+				/* Every frame ends the stage and only a valid one advances it, so
+				 * any bad stage aborts. Expiry discards the late frame instead of
+				 * interpreting it as throttle. PX4 sets the telemetry bit on nonzero
+				 * programming data, but sends zero without it. Zero data and
+				 * MOTOR_STOP are indistinguishable. */
+				const uint8_t stage = programming_mode;
+				programming_mode = DSHOT_PROG_IDLE;
+				if (!dshot_programming_ticks || !armed || escIsDriving() ||
+				    (tocheck != 0 && !(frame & DSHOT_TELEMETRY_BIT))) {
 					return;
 				}
-				if (programming_mode == DSHOT_PROG_WAIT_ADDRESS) {
-					if (tocheck >= (int)sizeof(eepromBuffer.buffer)) {
-						programming_mode = DSHOT_PROG_IDLE;
-						return;
+				if (stage == DSHOT_PROG_WAIT_ADDRESS) {
+					if (tocheck < (int)sizeof(eepromBuffer.buffer)) {
+						position = tocheck; /* eepromBuffer index */
+						programming_mode = DSHOT_PROG_WAIT_VALUE;
 					}
-					position = tocheck; /* eepromBuffer index */
-					programming_mode = DSHOT_PROG_WAIT_VALUE;
-					return;
-				}
-				if (programming_mode == DSHOT_PROG_WAIT_VALUE) {
-					if (tocheck > UINT8_MAX) {
-						programming_mode = DSHOT_PROG_IDLE;
-						return;
+				} else if (stage == DSHOT_PROG_WAIT_VALUE) {
+					if (tocheck <= UINT8_MAX) {
+						new_byte = tocheck;
+						programming_mode = DSHOT_PROG_WAIT_COMMIT;
 					}
-					new_byte = tocheck;
-					programming_mode = DSHOT_PROG_WAIT_COMMIT;
-					return;
-				}
-				if (programming_mode == DSHOT_PROG_WAIT_COMMIT) {
+				} else if (tocheck == DSHOT_CMD_EXIT_PROGRAMMING_MODE) {
 					/* RAM only; DSHOT_CMD_SAVE_SETTINGS makes it permanent. */
-					if (tocheck == DSHOT_CMD_EXIT_PROGRAMMING_MODE && position < sizeof(eepromBuffer.buffer)) {
-						eepromBuffer.buffer[position] = new_byte;
-					}
-					programming_mode = DSHOT_PROG_IDLE;
+					eepromBuffer.buffer[position] = new_byte;
 				}
 				return; /* ignore throttle / other commands while programming */
 			}
@@ -254,7 +248,7 @@ void computeDshotDMA()
 						case DSHOT_CMD_ENTER_PROGRAMMING_MODE:
 							if (frame & DSHOT_TELEMETRY_BIT) {
 								dshot_programming_ticks =
-									LOOP_FREQUENCY_HZ / 10; /* 100 ms total, not renewed by traffic */
+									100; /* 1 kHz ticks: ~100 ms total, not renewed by traffic */
 								programming_mode = DSHOT_PROG_WAIT_ADDRESS;
 							}
 							break;
