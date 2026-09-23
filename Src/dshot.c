@@ -138,7 +138,8 @@ void computeDshotDMA()
 					}
 				} else if (stage == DSHOT_PROG_WAIT_VALUE) {
 					if (tocheck <= UINT8_MAX) {
-						new_byte = position == offsetof(EEprom_t, motor_poles) ? sanitizeMotorPoles(tocheck) : tocheck;
+						new_byte =
+							position == offsetof(EEprom_t, motor_poles) ? sanitizeMotorPoles(tocheck) : tocheck;
 						programming_mode = DSHOT_PROG_WAIT_COMMIT;
 					}
 				} else if (tocheck == DSHOT_CMD_EXIT_PROGRAMMING_MODE) {
