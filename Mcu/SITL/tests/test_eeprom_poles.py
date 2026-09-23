@@ -1,12 +1,9 @@
 """Pole-count invariants at flash load and live protocol boundaries."""
 
-import time
-
 import pytest
-import sitl_dshot as sd
 import sitl_params
 from sitl_gui_backend import EepromClient
-from sitl_harness import Sender
+from test_dshot_programming import programmer
 
 
 @pytest.mark.parametrize('poles', [0, 1, 2, 14, 46, 128, 129, 255])
@@ -25,22 +22,24 @@ def test_flash_pole_count_is_sanitized(sitl_factory, workdir, poles):
     assert sitl.proc.poll() is None, sitl.log_tail()
 
 
-@pytest.mark.parametrize('poles', [0, 1, 128, 255])
-def test_dshot_cannot_publish_invalid_poles(sitl_factory, poles):
-    sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
-    tx = Sender('127.0.0.1', sitl.input_port, sd.TYPE_DSHOT600)
-    time.sleep(2.2)
-    tx.stop()
-    port = sd.InputPort('127.0.0.1', sitl.input_port)
-    try:
-        for word in [36] * 6 + [27, poles, 37]:
-            port.send_dshot(word, ptype=sd.TYPE_DSHOT600, telem=word != 0)
-            time.sleep(0.004)
-        result, _ = EepromClient(port=sitl.state_port).fetch()
-        assert result is not None, sitl.log_tail()
-        assert result[27] == (poles if 2 <= poles <= 128 else 14)
-    finally:
-        port.close()
+@pytest.mark.parametrize('telem', [False, True])
+@pytest.mark.parametrize('poles', [0, 1, 128, 255, 256, 257, 384, 2047])
+def test_dshot_cannot_publish_invalid_poles(programmer, poles, telem):
+    send, enter, ee, sitl, _ = programmer
+    # Seed a distinct value so sanitization cannot pass on a dropped write.
+    ok, message = ee.set(27, [22])
+    assert ok, message
+    before, _ = ee.fetch()
+    assert before is not None, sitl.log_tail()
+    enter(telem)
+    for word in (27, poles, 37):
+        send(word, telem)
+    result, _ = ee.fetch()
+    # Legacy DShot stores the low byte; validate that byte before publishing it.
+    stored_poles = poles & 0xff
+    expected = bytearray(before)
+    expected[27] = stored_poles if 2 <= stored_poles <= 128 else 14
+    assert result == bytes(expected), sitl.log_tail()
 
 
 @pytest.mark.parametrize('poles', [-1, 0, 1, 128, 129, 256, 65536])
