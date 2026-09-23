@@ -162,11 +162,7 @@ jobs:
         run: python3 -m unittest discover -s scripts/tests -p 'test_release_manifest.py'
 
       - name: Package release provenance and checksums
-        run: |
-          ver=$(sed -n 's/^XPACK_GCC_VER := //p' make/tools.mk)
-          sdk="tools/linux/xpack-arm-none-eabi-gcc-${ver}/bin/arm-none-eabi-gcc"
-          test -x "$sdk"
-          python3 scripts/release_manifest.py --compiler "$sdk"
+        run: make release-manifest
 
       - name: Archive build
         uses: actions/upload-artifact@v4
@@ -175,9 +171,9 @@ jobs:
           path: |
             obj/*.hex
             obj/*.bin
+            obj/eeprom.json
             obj/release-manifest.json
             obj/SHA256SUMS
-            schema/eeprom.json
           retention-days: 60
           if-no-files-found: error
 
@@ -210,9 +206,9 @@ jobs:
           files: |
             obj/*.hex
             obj/*.bin
+            obj/eeprom.json
             obj/release-manifest.json
             obj/SHA256SUMS
-            schema/eeprom.json
           fail_on_unmatched_files: true
           generate_release_notes: true
         env:
@@ -249,9 +245,9 @@ jobs:
           files: |
             obj/*.hex
             obj/*.bin
+            obj/eeprom.json
             obj/release-manifest.json
             obj/SHA256SUMS
-            schema/eeprom.json
           fail_on_unmatched_files: true
           body: |
             Rolling nightly firmware build for the ARK32 configurator and production line.
