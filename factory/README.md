@@ -89,14 +89,6 @@ The job fails if the 32 KiB layout is wrong or the EEPROM page drifts from `ARK_
 
 ## Release validation and provenance
 
-Tag and nightly publishing waits for static analysis (including size, codegen,
-and factory layout checks), SITL, and calibration on the same workflow commit.
-The publishing job verifies the downloaded build artifact with SHA256SUMS.
-Only that job receives contents-write permission.
+Tag and nightly publishing waits for static analysis (including size, codegen, and factory layout checks), SITL, and calibration on the same workflow commit. A manual dispatch runs the same validation without publishing unless `publish_nightly` is set. The publishing job verifies the downloaded build artifact with SHA256SUMS. Only that job receives contents-write permission.
 
-Every release includes application HEX/BIN, factory HEX/BIN, the EEPROM page,
-release-manifest.json, and SHA256SUMS. The manifest records the source commit,
-compiler version, bootloader hash, defaults hash, EEPROM layout, addresses,
-and each binary hash. The packager rejects missing, empty, or stale binaries.
-It currently supports the shipped ARK_4IN1_F051 product; adding a product must
-extend the manifest and its checks alongside the factory-image build.
+Every release includes application HEX/BIN, factory HEX/BIN, the EEPROM page, `eeprom.json`, `release-manifest.json`, and `SHA256SUMS`, all produced by `make release-manifest`. The manifest records the source commit, compiler version, bootloader hash, defaults hash, EEPROM layout, addresses, and each asset's hash; make supplies the compiler, bootloader, defaults and version the build used. The packager rejects missing, empty or stale binaries, and a factory image that does not start with the recorded bootloader. It currently supports the shipped ARK_4IN1_F051 product; adding a product must extend the manifest and its checks alongside the factory-image build.
