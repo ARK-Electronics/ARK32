@@ -1,0 +1,151 @@
+name: Flash usage analysis
+
+# Builds ARK_4IN1_F051 at the PR and at its base and keeps one comment on the
+# PR with the flash / static RAM delta. The comment is created the first time
+# the image changes and updated on every push after that, back to zero if the
+# change is reverted.
+
+on:
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "doc/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flash-analysis-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze ARK_4IN1_F051
+    runs-on: ubuntu-latest
+    outputs:
+      summary: ${{ steps.report.outputs.summary }}
+      gate: ${{ steps.report.outputs.gate }}
+      bloaty: ${{ steps.report.outputs.bloaty }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Install Arm toolchain
+        uses: ./.github/actions/setup-arm-sdk
+
+      - name: Put Arm toolchain on PATH
+        run: |
+          ver=$(sed -n 's/^XPACK_GCC_VER := //p' make/tools.mk)
+          echo "$PWD/tools/linux/xpack-arm-none-eabi-gcc-$ver/bin" >> "$GITHUB_PATH"
+
+      - name: Test and preserve the size reporter
+        # The base commit may not have this version of the reporter.
+        run: |
+          python3 -m unittest discover -s scripts/tests -p test_firmware_size.py
+          cp scripts/firmware_size.py "$RUNNER_TEMP/"
+
+      - name: Build PR
+        run: |
+          make ARK_4IN1_F051 -j"$(nproc)"
+          mkdir flash-analysis
+          cp obj/ARK32_ARK_4IN1_F051_*.elf flash-analysis/after.elf
+          bash scripts/check-size-ark.sh > flash-analysis/gate.txt 2>&1 || true
+
+      - name: Build base
+        # github.sha merges the PR into its base; the first parent is that base,
+        # which the base branch may have moved past since.
+        run: |
+          git checkout --quiet "${{ github.sha }}^1"
+          make clean
+          make arm_sdk_install
+          make ARK_4IN1_F051 -j"$(nproc)"
+          cp obj/ARK32_ARK_4IN1_F051_*.elf flash-analysis/before.elf
+
+      - name: Bloaty
+        id: bloaty
+        uses: PX4/bloaty-action@v1.0.0
+        with:
+          bloaty-file-args: flash-analysis/after.elf -- flash-analysis/before.elf
+          bloaty-additional-args: -d sections,symbols -s vm -n 20 --domain=vm
+          output-to-summary: true
+
+      - name: Report
+        id: report
+        env:
+          BLOATY: ${{ steps.bloaty.outputs.bloaty-output }}
+        run: |
+          summary=$(python3 "$RUNNER_TEMP/firmware_size.py" \
+            --before flash-analysis/before.elf --after flash-analysis/after.elf)
+          eof=$(openssl rand -hex 16)
+          {
+            echo "summary=$summary"
+            echo "gate<<$eof"
+            cat flash-analysis/gate.txt
+            echo "$eof"
+            echo "bloaty<<$eof"
+            printf '%s\n' "$BLOATY"
+            echo "$eof"
+          } >> "$GITHUB_OUTPUT"
+
+  comment:
+    name: Comment on PR
+    needs: analyze
+    # A fork PR's token cannot write to the PR; the bloaty breakdown is still in
+    # the analyze job summary.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Post or update comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SUMMARY: ${{ needs.analyze.outputs.summary }}
+          GATE: ${{ needs.analyze.outputs.gate }}
+          BLOATY: ${{ needs.analyze.outputs.bloaty }}
+        run: |
+          marker='<!-- flash-analysis -->'
+          id=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq \
+            ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))) | .id" \
+            | head -n1)
+          if [ -z "$id" ] && [ "$(jq -r .changed <<< "$SUMMARY")" != true ]; then
+            echo "Image unchanged; not commenting"
+            exit 0
+          fi
+
+          fence='```'
+          {
+            echo "$marker"
+            echo "## Flash and RAM analysis"
+            echo
+            echo "| Target | Flash change | Static RAM change |"
+            echo "| --- | ---: | ---: |"
+            echo "| ARK_4IN1_F051 | $(jq -r .flash <<< "$SUMMARY") | $(jq -r .ram <<< "$SUMMARY") |"
+            echo
+            echo "$fence"
+            printf '%s\n' "$GATE"
+            echo "$fence"
+            echo
+            echo "<details>"
+            echo "<summary>Bloaty section/symbol breakdown</summary>"
+            echo
+            echo "$fence"
+            printf '%s\n' "$BLOATY"
+            echo "$fence"
+            echo "</details>"
+            echo
+            echo "Built from $HEAD_SHA"
+          } > body.md
+
+          if [ -n "$id" ]; then
+            jq -n --rawfile body body.md '{body: $body}' \
+              | gh api -X PATCH "repos/$REPO/issues/comments/$id" --input - > /dev/null
+          else
+            jq -n --rawfile body body.md '{body: $body}' \
+              | gh api "repos/$REPO/issues/$PR/comments" --input - > /dev/null
+          fi
