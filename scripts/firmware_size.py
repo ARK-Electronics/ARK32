@@ -63,21 +63,28 @@ def format_change(before: int, after: int) -> str:
     return f"{indicator(delta)}{delta:+,} B ({percentage})"
 
 
-def summarize(before: dict[str, int], after: dict[str, int]) -> dict:
-    return {
-        "flash": format_change(before["flash"], after["flash"]),
-        "ram": format_change(before["ram"], after["ram"]),
-        # The build is reproducible, so any delta comes from the change.
-        "changed": before != after,
-    }
+def format_usage(used: int, capacity: int) -> str:
+    return f"{used:,} / {capacity:,} B ({used / capacity:.2%})"
+
+
+def summarize(before: dict[str, int], after: dict[str, int], capacity: dict[str, int]) -> dict:
+    # The build is reproducible, so any delta comes from the change.
+    summary = {"changed": before != after}
+    for key in ("flash", "ram"):
+        summary[key] = format_usage(after[key], capacity[key])
+        summary[f"{key}_change"] = format_change(before[key], after[key])
+    return summary
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--before", type=Path, required=True)
     parser.add_argument("--after", type=Path, required=True)
+    parser.add_argument("--flash-capacity", type=int, required=True)
+    parser.add_argument("--ram-capacity", type=int, required=True)
     args = parser.parse_args()
-    print(json.dumps(summarize(memory_usage(args.before), memory_usage(args.after))))
+    capacity = {"flash": args.flash_capacity, "ram": args.ram_capacity}
+    print(json.dumps(summarize(memory_usage(args.before), memory_usage(args.after), capacity)))
 
 
 if __name__ == "__main__":

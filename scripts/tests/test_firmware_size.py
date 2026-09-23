@@ -15,7 +15,7 @@ import unittest
 SCRIPT = Path(__file__).resolve().parents[1] / "firmware_size.py"
 sys.path.insert(0, str(SCRIPT.parent))
 
-from firmware_size import format_change, memory_usage, summarize
+from firmware_size import format_change, format_usage, memory_usage, summarize
 
 # .file_name sits at a fixed address past the end of FLASH, as on the F051.
 LINKER_SCRIPT = """
@@ -81,11 +81,16 @@ class FirmwareSizeTest(unittest.TestCase):
                 self.assertEqual({key: after[key] - before[key] for key in after}, expected)
 
     def test_summary(self):
-        result = summarize({"flash": 1024, "ram": 1024}, {"flash": 1088, "ram": 960})
+        capacity = {"flash": 2048, "ram": 4096}
+        result = summarize({"flash": 1024, "ram": 1024}, {"flash": 1088, "ram": 960}, capacity)
         self.assertEqual(result, {
-            "flash": "🟡 +64 B (+6.25%)", "ram": "🟢 -64 B (-6.25%)", "changed": True,
+            "flash": "1,088 / 2,048 B (53.12%)", "flash_change": "🟡 +64 B (+6.25%)",
+            "ram": "960 / 4,096 B (23.44%)", "ram_change": "🟢 -64 B (-6.25%)",
+            "changed": True,
         })
-        self.assertFalse(summarize({"flash": 8, "ram": 8}, {"flash": 8, "ram": 8})["changed"])
+        unchanged = {"flash": 8, "ram": 8}
+        self.assertFalse(summarize(unchanged, unchanged, capacity)["changed"])
+        self.assertEqual(format_usage(26592, 27648), "26,592 / 27,648 B (96.18%)")
         self.assertEqual(format_change(1000, 1000), "+0 B (+0.00%)")
         self.assertEqual(format_change(1000, 1256), "🟡 +256 B (+25.60%)")
         self.assertEqual(format_change(1000, 1257), "🔴 +257 B (+25.70%)")
@@ -95,9 +100,12 @@ class FirmwareSizeTest(unittest.TestCase):
         after = self.build("after", bss=96)
         output = subprocess.check_output([
             sys.executable, str(SCRIPT), "--before", str(before), "--after", str(after),
+            "--flash-capacity", "1024", "--ram-capacity", "1024",
         ], cwd=self.root, text=True)
         self.assertEqual(json.loads(output), {
-            "flash": "+0 B (+0.00%)", "ram": "🟡 +64 B (+133.33%)", "changed": True,
+            "flash": "112 / 1,024 B (10.94%)", "flash_change": "+0 B (+0.00%)",
+            "ram": "112 / 1,024 B (10.94%)", "ram_change": "🟡 +64 B (+133.33%)",
+            "changed": True,
         })
 
 
