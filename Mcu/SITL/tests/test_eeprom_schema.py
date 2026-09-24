@@ -58,18 +58,22 @@ def _wait_for_esc(uri, our_id):
 def zero_throttle_can(uri, node_id=124):
     """Keep firmware alive while the test blocks on UDP or a codec subprocess.
 
-    Use a separate node owned entirely by this thread. pydronecan nodes are
-    not shared with the foreground GetSet client.
+    pydronecan nodes are not shared with the foreground GetSet client, so
+    this node is used only by the worker below. Create it here, before that
+    worker starts: make_node forks an IO process, and a fork from the worker
+    races free_udp_port() on this thread. The child inherits the ephemeral
+    socket held open during the reservation and keeps the port, SITL's state
+    bind fails with EADDRINUSE, and EEPROM fetches time out while CAN still
+    answers.
     """
     import dronecan
 
+    node = dronecan.make_node(uri, node_id=node_id, bitrate=1000000)
     stopped = threading.Event()
     errors = []
 
     def run():
-        node = None
         try:
-            node = dronecan.make_node(uri, node_id=node_id, bitrate=1000000)
             while not stopped.is_set():
                 node.broadcast(dronecan.uavcan.equipment.safety.ArmingStatus(status=255))
                 node.broadcast(dronecan.uavcan.equipment.esc.RawCommand(cmd=[0] * 20))
@@ -78,8 +82,7 @@ def zero_throttle_can(uri, node_id=124):
         except Exception as error:
             errors.append(error)
         finally:
-            if node is not None:
-                node.close()
+            node.close()
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()

@@ -7,7 +7,7 @@ Firmware for ARM-based brushless ESC (electronic speed controllers).
 | | Upstream AM32 | ARK32 |
 |--|----------|-----------|
 | Remote | [am32-firmware/AM32](https://github.com/am32-firmware/AM32) | [ARK-Electronics/ARK32](https://github.com/ARK-Electronics/ARK32) |
-| Product branch | `main` | **`ark-release`** |
+| Product branch | `main` | **`main`** |
 | Focus | Multi-vendor ESC firmware | ARK targets + maintainability + CI |
 
 For stock AM32 releases, configurators, Discord, and community support, prefer **[am32.ca](https://am32.ca)** and the [upstream project](https://github.com/am32-firmware/AM32).
@@ -90,9 +90,9 @@ Field bootloaders and app-side BL update use **[ARK32-bootloader](https://github
 
 | Branch | Role |
 |--------|------|
-| **`ark-release`** | ARK integration line — open product PRs here |
-| `main` | Mirrors / tracks upstream AM32 more closely |
-| Feature branches | Short-lived; rebase onto `ark-release` unless targeting pure upstream work |
+| **`main`** | ARK integration line — open product PRs here |
+| `upstream_main` | Tracks upstream AM32 `main` |
+| Feature branches | Short-lived; rebase onto `main` unless targeting pure upstream work |
 
 ---
 
@@ -141,7 +141,7 @@ Optional static analysis / size / format helpers:
 ```bash
 make format            # apply clang-format (.clang-format) to app + MCU sources
 make check_format      # fail if sources need formatting (used in PR CI)
-make format_changed    # format only files changed vs origin/ark-release
+make format_changed    # format only files changed vs origin/main
 make cppcheck          # static analysis of the ARK F051 control path
 make size-check-ark    # ARK F051 flash/RAM gate (HWCI+embed worst case, then release)
 ```
@@ -230,6 +230,8 @@ DShot commands run only when **armed**, **motor not running**, and the command i
 | **12** | `1 + dir_reversed` | Rising if direction normal, falling if reversed | **Save settings** confirmation |
 
 Other DShot commands (direction, bi-dir, EDT, programming mode, etc.) do **not** play a dedicated melody unless noted above. Direction set (7/8) has no confirmation beep.
+
+EEPROM writes over DShot (commands 36 and 37): [`doc/dshot-programming.md`](doc/dshot-programming.md).
 
 ### Beacon sweep detail
 
@@ -325,7 +327,7 @@ ARK32 ships the **ARK 4IN1** (four STM32F051 channels, DRV8328). SITL is a host 
 
 | Topic | Where |
 |-------|--------|
-| **ARK32** | [ARK-Electronics/ARK32](https://github.com/ARK-Electronics/ARK32) issues and PRs on `ark-release` |
+| **ARK32** | [ARK-Electronics/ARK32](https://github.com/ARK-Electronics/ARK32) issues and PRs on `main` |
 | **Upstream AM32** | [Discord](https://discord.gg/h7ddYMmEVV), [Patreon](https://www.patreon.com/user?u=44228479), [am32.ca](https://am32.ca) |
 
 ---

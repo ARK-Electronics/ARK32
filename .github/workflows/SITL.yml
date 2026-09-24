@@ -2,9 +2,9 @@ name: SITL Tests
 
 on:
   push:
-    branches: ["main", "ark-release", "dakejahl/version-32"]
+    branches: ["main", "dakejahl/version-32"]
   pull_request:
-    branches: ["main", "ark-release", "dakejahl/version-32"]
+    branches: ["main", "dakejahl/version-32"]
   workflow_dispatch:
 
 jobs:
@@ -104,6 +104,7 @@ jobs:
         run: |
           upstream-venv/bin/python -m pytest -q \
             Mcu/SITL/tests/test_upstream_adapter.py Mcu/SITL/tests/test_state_protocol.py \
+            Mcu/SITL/tests/test_dshot_programming.py \
             --sitl "$GITHUB_WORKSPACE"/obj/ARK32_AM32_SITL_CAN_*.elf
       - name: Upload upstream test log
         if: always()
