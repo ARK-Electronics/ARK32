@@ -16,13 +16,14 @@ from __future__ import annotations
 import time
 
 import pytest
+from sitl_test_requirements import unavailable_can, require_dronecan
 
 import sitl_dshot as sd
 from sitl_harness import Sender, rpm_from_state, wait_for_state
 
 
 def _need_dronecan():
-    return pytest.importorskip('dronecan')
+    return require_dronecan()
 
 
 def _assert_stopped(sim, label, window=0.5, limit=200.0):
@@ -161,7 +162,7 @@ def test_dronecan_high_throttle_from_boot_does_not_spin(
         extra_args=['--node-id', '10'], can_uri=mcast_uri, wait_s=1.0)
     sim = state_stream(sitl)
     if not wait_for_state(sim, timeout=5.0):
-        pytest.skip('multicast unavailable\n' + sitl.log_tail())
+        unavailable_can('multicast unavailable\n' + sitl.log_tail())
 
     node = dronecan.make_node(mcast_uri, node_id=120, bitrate=1000000)
     try:
@@ -180,7 +181,7 @@ def test_dronecan_arms_after_zero_then_spins(
         extra_args=['--node-id', '10'], can_uri=mcast_uri, wait_s=1.0)
     sim = state_stream(sitl)
     if not wait_for_state(sim, timeout=5.0):
-        pytest.skip('multicast unavailable\n' + sitl.log_tail())
+        unavailable_can('multicast unavailable\n' + sitl.log_tail())
 
     node = dronecan.make_node(mcast_uri, node_id=121, bitrate=1000000)
     try:
@@ -212,7 +213,7 @@ def test_dronecan_disarm_zeros_input(
         extra_args=['--node-id', '10'], can_uri=mcast_uri, wait_s=1.0)
     sim = state_stream(sitl)
     if not wait_for_state(sim, timeout=5.0):
-        pytest.skip('multicast unavailable\n' + sitl.log_tail())
+        unavailable_can('multicast unavailable\n' + sitl.log_tail())
 
     node = dronecan.make_node(mcast_uri, node_id=122, bitrate=1000000)
     try:

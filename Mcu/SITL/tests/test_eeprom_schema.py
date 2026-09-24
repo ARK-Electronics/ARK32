@@ -17,6 +17,7 @@ sys.path.insert(0, str(REPO_ROOT / 'scripts' / 'eeprom'))
 from schema import default_bytes, load_schema, resolve_schema, snake_case  # noqa: E402
 from sitl_gui_backend import EepromClient  # noqa: E402
 from sitl_harness import Sender  # noqa: E402
+from sitl_test_requirements import require_dronecan  # noqa: E402
 import sitl_dshot as sd  # noqa: E402
 
 
@@ -178,7 +179,7 @@ def test_eeprom_load_policies(sitl_factory, current_schema, key, raw, expected):
 
 
 def test_eeprom_can_save_survives_restart(sitl_can_factory, mcast_uri):
-    dronecan = pytest.importorskip('dronecan')
+    dronecan = require_dronecan()
     from test_params import _get_param, _request_wait, _set_param
 
     with zero_throttle_can(mcast_uri):
@@ -212,7 +213,7 @@ def test_eeprom_can_save_survives_restart(sitl_can_factory, mcast_uri):
 
 
 def test_dronecan_schema_ranges_and_integer_stores(sitl_can_factory, mcast_uri):
-    dronecan = pytest.importorskip('dronecan')
+    dronecan = require_dronecan()
     from test_params import _get_param, _request_wait, _set_param
 
     with zero_throttle_can(mcast_uri):

@@ -308,3 +308,15 @@ Upstream's GUI and tests now live in ESCSim. The simulator supports its
 variable watches, deferred reset command and opt-in v3 demagnetization scope;
 the ARK GUI and tests remain here. ARK fault-injection commands moved to
 `0x80`–`0x82` to avoid upstream's watch/reset command IDs.
+
+### Required CAN tests in CI
+
+The Linux pytest job sets `SITL_REQUIRE_CAN=1`. Missing DroneCAN dependencies,
+failed multicast startup, absent state streams, and undiscovered ESC nodes
+fail that job instead of silently skipping protocol and safety coverage.
+Local hosts without multicast can omit the variable to retain optional skips.
+Run the strict suite locally with:
+
+```sh
+SITL_REQUIRE_CAN=1 python3 Mcu/SITL/run_ci_tests.py --sitl obj/ARK32_AM32_SITL_CAN_*.elf
+```
