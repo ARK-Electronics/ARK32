@@ -179,9 +179,10 @@ void loadEEpromSettings(void)
 			}
 		}
 
-		if (motor_kv < 300) {
-			low_rpm_throttle_limit = 0;
-		}
+		/* Raw zero encodes the 20 kV protection bypass. Use the unscaled
+		 * stored setting so target-specific kV scaling cannot disable the
+		 * limiter for other motors. Assign both states for settings reloads. */
+		low_rpm_throttle_limit = (eepromBuffer.motor_kv != 0);
 		/* Throttle-restriction envelope in kerpm, scaled from kv and pole
 		 * count. The envelope is (kv / N) * (motor_poles / 32): multiply
 		 * before dividing so the pole term keeps its fractional part -
@@ -227,10 +228,10 @@ void loadEEpromSettings(void)
 	 * high end is a realistic free-run ceiling; map() still clamps anything
 	 * above it to 23, so a motor that truly hits ideal stays at the top.
 	 * Computed after motor_kv has taken its final value (the cell-count
-	 * reductions above). Left at 0 - meaning "use the duty proxy" - for a kV
-	 * below the range the throttle limiter already treats as unusable, or a
-	 * pole count outside the MOTOR_POLES_MIN..MOTOR_POLES_MAX the DroneCAN
-	 * MOTOR_POLES parameter accepts (an erased eeprom reads 0 or 0xff).
+	 * reductions above). Keep the duty proxy below 300 kV: extending this
+	 * timing schedule to low-kV motors needs separate validation from the
+	 * throttle limiter. Also leave the scale at 0 for a pole count outside
+	 * MOTOR_POLES_MIN..MOTOR_POLES_MAX (an erased eeprom reads 0 or 0xff).
 	 *
 	 * The reduced 256/12500 form above is the one evaluated below rather than
 	 * the equivalent 4096/200000: both are the same rational number (divided
