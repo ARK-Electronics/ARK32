@@ -1,17 +1,36 @@
 # Low-kV RPM-dependent duty limit
 
 The stored 20 kV setting (EEPROM byte 26 equal to zero) disables the low-RPM
-duty ceiling. Other stored values enable it, including 60, 100, 140, 180,
-220 and 260 kV, which previously bypassed it. The bypass uses the stored
-byte so target-specific kV scaling cannot turn another setting into an
-opt-out. RC-car mode retains its existing startup override of this flag.
+duty ceiling, as in upstream AM32. Other stored values enable it, including
+60, 100, 140, 180, 220 and 260 kV, which previously bypassed it. The opt-out
+uses the stored byte so target-specific kV scaling cannot turn another
+setting into an opt-out. RC-car mode forces the limiter on with a 1000/2000
+low-speed ceiling.
+
+Only an explicit 20 kV selects the opt-out over DroneCAN: `MOTOR_KV` writes
+of 21–59 kV are stored as 60 kV, and writes outside 20–10220 kV are ignored
+rather than wrapped into the byte (10260 kV used to store zero). The
+configurator rounds to the nearest 40 kV step, so enter 60 for a motor
+under 60 kV to keep the limiter.
 
 ARK32 keeps its existing envelope calculation, including support for pole
 counts above 32. At low speed the nominal ceiling is 400/2000 duty (20%);
 it rises to 2000/2000 (100%) through the configured electrical-RPM range.
-Running-brake dead-time compensation can raise the low-speed ceiling,
-and stall protection can add duty after the clamp. This is separate from
-the first-commutations startup cap and the current limit.
+Running-brake dead-time compensation raises the low-speed ceiling by the
+added dead time, and stall protection can add duty after the clamp. This is
+separate from the first-commutations startup cap and the current limit.
+
+The low-speed ceiling is never below the startup floor, `min_startup_duty`
+(Minimum duty cycle × 10 + Startup power, plus any dead-time compensation).
+The startup code clamps its floor to the ceiling, so a lower ceiling would
+override the configured minimum duty and startup power. For example,
+Minimum duty cycle 30 and Startup power 150 give a 450/2000 ceiling.
+
+Every settings load starts from the power-on values (limiter on, 400/2000
+ceiling, no current limit), so a reload through the SITL EEPROM editor or a
+DroneCAN reset to defaults matches a boot with the same EEPROM. The PWM
+dead-time register is only ever ORed, so a Running brake level change
+still needs a restart to reach the timer.
 
 For a 160 kV, 42-pole motor configured with byte 26 equal to 4, the stored
 value is **180 kV**. On a target without kV scaling, its envelope is

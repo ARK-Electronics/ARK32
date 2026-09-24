@@ -348,10 +348,25 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 			}
 			case T_UINT16: {
 				uint16_t *ptr16 = (uint16_t *)p->ptr;
-				*ptr16 = req.value.integer_value;
 				if (ptr16 == &motor_kv) {
-					eepromBuffer.motor_kv = (uint8_t)((*(uint16_t *)p->ptr - 20) / 40);
-				} else if (ptr16 == &low_cell_volt_cutoff) {
+					/* Stored as (kv - 20) / 40. Ignore out-of-range requests
+					 * instead of wrapping them into the byte (10260 would
+					 * store 0). Raw 0 opts out of low-RPM protection
+					 * (settings.c), so only an explicit 20 kV selects it;
+					 * 21-59 kV store 60 kV and keep the limiter. */
+					const int64_t kv = req.value.integer_value;
+					if (kv >= p->min_value && kv <= p->max_value) {
+						uint8_t raw = (uint8_t)((kv - 20) / 40);
+						if (raw == 0 && kv > 20) {
+							raw = 1;
+						}
+						motor_kv = (uint16_t)kv;
+						eepromBuffer.motor_kv = raw;
+					}
+					break;
+				}
+				*ptr16 = req.value.integer_value;
+				if (ptr16 == &low_cell_volt_cutoff) {
 					eepromBuffer.low_voltage_threshold = (uint8_t)(*ptr16 - 250);
 				}
 				break;
