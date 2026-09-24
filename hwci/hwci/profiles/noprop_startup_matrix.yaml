@@ -1,0 +1,78 @@
+name: noprop_startup_matrix
+description: >
+  Free-run BEMF/startup data collection: repeated cold starts at several
+  low throttle levels (6/8/10/12/15/20%). No propeller — 25 V / 3 A brick
+  friendly. Host metrics (startup_stats) count success and time-to-run per
+  start*; pair with debug_uart.log for OPEN_LOOP/CLOSED_LOOP/desync lines.
+  ~4.5 min.
+sample_rate_hz: 100
+arm_settle_s: 3.0
+steady_tail_fraction: 0.5
+demag_rpm_drop_fraction: 0.30
+demag_commutation_spike: 3.0
+
+safety:
+  max_current_a: 8.0
+  max_thrust_n: 3.0
+  max_rpm: 25000
+  max_motor_temp_c: 90.0
+
+# start* labels drive metrics.startup_stats (success = running + eRPM>=1000)
+segments:
+  - {label: idle, throttle: 0.00, duration_s: 2.0}
+
+  # --- 6% (weakest BEMF start) × 4 ---
+  - {label: start06a, throttle: 0.06, duration_s: 3.0}
+  - {label: off06a,   throttle: 0.00, duration_s: 2.5}
+  - {label: start06b, throttle: 0.06, duration_s: 3.0}
+  - {label: off06b,   throttle: 0.00, duration_s: 2.5}
+  - {label: start06c, throttle: 0.06, duration_s: 3.0}
+  - {label: off06c,   throttle: 0.00, duration_s: 2.5}
+  - {label: start06d, throttle: 0.06, duration_s: 3.0}
+  - {label: off06d,   throttle: 0.00, duration_s: 2.5}
+
+  # --- 8% × 4 ---
+  - {label: start08a, throttle: 0.08, duration_s: 3.0}
+  - {label: off08a,   throttle: 0.00, duration_s: 2.5}
+  - {label: start08b, throttle: 0.08, duration_s: 3.0}
+  - {label: off08b,   throttle: 0.00, duration_s: 2.5}
+  - {label: start08c, throttle: 0.08, duration_s: 3.0}
+  - {label: off08c,   throttle: 0.00, duration_s: 2.5}
+  - {label: start08d, throttle: 0.08, duration_s: 3.0}
+  - {label: off08d,   throttle: 0.00, duration_s: 2.5}
+
+  # --- 10% × 4 ---
+  - {label: start10a, throttle: 0.10, duration_s: 3.0}
+  - {label: off10a,   throttle: 0.00, duration_s: 2.5}
+  - {label: start10b, throttle: 0.10, duration_s: 3.0}
+  - {label: off10b,   throttle: 0.00, duration_s: 2.5}
+  - {label: start10c, throttle: 0.10, duration_s: 3.0}
+  - {label: off10c,   throttle: 0.00, duration_s: 2.5}
+  - {label: start10d, throttle: 0.10, duration_s: 3.0}
+  - {label: off10d,   throttle: 0.00, duration_s: 2.5}
+
+  # --- 12% × 3 ---
+  - {label: start12a, throttle: 0.12, duration_s: 3.0}
+  - {label: off12a,   throttle: 0.00, duration_s: 2.5}
+  - {label: start12b, throttle: 0.12, duration_s: 3.0}
+  - {label: off12b,   throttle: 0.00, duration_s: 2.5}
+  - {label: start12c, throttle: 0.12, duration_s: 3.0}
+  - {label: off12c,   throttle: 0.00, duration_s: 2.5}
+
+  # --- 15% × 3 ---
+  - {label: start15a, throttle: 0.15, duration_s: 3.0}
+  - {label: off15a,   throttle: 0.00, duration_s: 2.5}
+  - {label: start15b, throttle: 0.15, duration_s: 3.0}
+  - {label: off15b,   throttle: 0.00, duration_s: 2.5}
+  - {label: start15c, throttle: 0.15, duration_s: 3.0}
+  - {label: off15c,   throttle: 0.00, duration_s: 2.5}
+
+  # --- 20% × 3 ---
+  - {label: start20a, throttle: 0.20, duration_s: 3.0}
+  - {label: off20a,   throttle: 0.00, duration_s: 2.5}
+  - {label: start20b, throttle: 0.20, duration_s: 3.0}
+  - {label: off20b,   throttle: 0.00, duration_s: 2.5}
+  - {label: start20c, throttle: 0.20, duration_s: 3.0}
+  - {label: off20c,   throttle: 0.00, duration_s: 2.5}
+
+  - {label: stop, throttle: 0.00, duration_s: 2.0}

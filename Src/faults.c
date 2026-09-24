@@ -12,13 +12,18 @@
 #include "peripherals.h"
 #include "functions.h"
 #include "eeprom.h"
+#include "dshot.h"
 #include "signal.h"
 #include "commutation.h"
 #include "bemf_zc.h"
 #include "targets.h"
 #include "esc_state.h"
+#include "gate_driver.h"
+#include "debug_uart.h"
 #include "IO.h"
 #include "sounds.h"
+/* commutation_interval for stall debug line */
+#include "motor_runtime.h"
 
 #ifdef USE_RGB_LED
 extern void setIndividualRGBLed(uint8_t, uint8_t, uint8_t);
@@ -30,12 +35,240 @@ extern void resetInputCaptureTimer(void);
 
 /* See the comments on the declarations in faults.h. */
 volatile uint32_t fault_stall_trips = 0;
+volatile uint8_t fault_run_established = 0;
 
 /* Acquisition-rail early-desync count (see faultNoteEarlyDesync). */
 static uint8_t acq_fail_desyncs;
 
 /* "Start resisted" counter (see the declaration in faults.h). */
 volatile uint8_t fault_acq_resist_events;
+
+#if defined(MCU_G431)
+/*
+ * ARK 12S CAN acquisition grace budget (see faultUpdateBemfTimeoutPolicy).
+ * Sized above one startup-matrix start segment (3.0 s of continuous
+ * throttle) so a tier that never acquires is still measured, while any
+ * genuinely locked rotor latches once the budget runs out. Throttle
+ * returns to zero between starts, which rearms the full budget.
+ * Clocked in faultDesyncEpisodeTick1kHz.
+ */
+#	define ACQ_GRACE_MS_MAX 4000u
+/* Above this, acquisition should be near instant; a jam here is the
+ * dangerous case, so it gets no grace at all. Well above the 447 seen at
+ * the matrix's top 20% tier. */
+#	define ACQ_GRACE_MAX_INPUT 1000
+static uint16_t acq_grace_ms;
+#endif
+
+#if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
+#	define FAULT_HAS_DRV_NFAULT 1
+#else
+#	define FAULT_HAS_DRV_NFAULT 0
+#endif
+
+#if defined(USE_DRV_NFAULT)
+/*
+ * DRV8350H has one ORed nFAULT output and no status register. OTW leaves
+ * the bridge driving. VDS protection can retry on every PWM rising edge
+ * (CBC), so pulse length and shunt current cannot distinguish it from OTW.
+ * Never end a run based on this pin, current, temperature, or a timer alone.
+ *
+ * Remember warnings so the existing BEMF stall / hard-desync decisions can
+ * latch a failed run BEFORE they restart it. Pin release does not authorize
+ * another start: only a sustained zero-throttle command clears that latch.
+ */
+#	define GD_CLASSIFY_MS 12u
+#	define GD_UVLO_CV 800u
+#	define GD_THERMAL_C 100
+/* Correlation window only: this timer never cuts or restarts a motor. */
+#	define GD_FAULT_RECENT_MS 100u
+#	define GD_RETRY_LOG_MS 200u
+#	define GD_WARN_LOG_MS 200u
+#	define GD_REARM_ZERO_MS 100u
+
+enum {
+	GD_NF_IDLE = 0,
+	GD_NF_CLASSIFY,
+	GD_NF_WARN,
+	GD_NF_LATCH,
+};
+
+static volatile uint8_t gd_state;
+static fault_id_t gd_cause;
+static uint16_t gd_t0;
+static uint16_t gd_retry_log_t0;
+static uint8_t gd_retry_logged;
+static uint16_t gd_warn_log_t0;
+static uint8_t gd_warn_logged;
+static uint8_t gd_fault_seen;
+/* Saturate the age so a fault from 65 seconds ago cannot become recent. */
+static volatile uint16_t gd_fault_age_ms;
+static volatile uint16_t gd_zero_ms;
+static uint8_t gd_log_level;
+static fault_id_t gd_log_cause;
+static volatile uint16_t gd_ms;
+
+static void gd_queue_log(uint8_t level, fault_id_t cause)
+{
+	/* Upgrade only: same-level must not clobber (ERROR UVLO → ERROR UNKNOWN). */
+	if (level > gd_log_level) {
+		gd_log_level = level;
+		gd_log_cause = cause;
+	}
+}
+
+/* Wrap-safe rate limit. First event always logs (*have_logged == 0); no
+ * t0==0 sentinel, so a gd_ms wrap cannot look like "never logged". */
+static uint8_t gd_rate_due(uint16_t now, uint8_t *have_logged, uint16_t *t0, uint16_t period)
+{
+	if (!*have_logged || (uint16_t)(now - *t0) >= period) {
+		*have_logged = 1;
+		*t0 = now;
+		return 1;
+	}
+	return 0;
+}
+
+#	ifdef USE_DEBUG_UART
+static uint8_t gd_dbg_event(fault_id_t cause, uint8_t warning)
+{
+	if (warning) {
+		return (cause == FAULT_GD_OCP) ? DBG_EVT_NFAULT_RETRY : DBG_EVT_NFAULT_WARNING;
+	}
+	switch (cause) {
+		case FAULT_GD_UVLO:
+			return DBG_EVT_NFAULT_UVLO;
+		case FAULT_GD_OCP:
+			return DBG_EVT_NFAULT_OCP;
+		case FAULT_GD_OTSD:
+			return DBG_EVT_NFAULT_OTSD;
+		default:
+			return DBG_EVT_NFAULT;
+	}
+}
+#	endif
+
+static void gd_hold_cut(void)
+{
+	/* Publish the stop flags before touching GPIO, so a pending commutation
+	 * cannot re-enable the bridge after allOff(). The input/20 kHz paths also
+	 * honor gd_state directly, without waiting for esc_state reconciliation. */
+	running = 0;
+	stepper_sine = 0;
+	prop_brake_active = 0;
+	DISABLE_COM_TIMER_INT();
+	maskPhaseInterrupts();
+	allOff();
+	SET_DUTY_CYCLE_ALL(0);
+	input = 0;
+	duty_cycle_setpoint = 0;
+	duty_cycle = 0;
+	last_duty_cycle = 0;
+	zero_crosses = 0;
+	bemfZcResetTrend();
+}
+
+static void gd_enter_latch(fault_id_t cause)
+{
+	gd_state = GD_NF_LATCH;
+	gd_zero_ms = 0;
+	gd_hold_cut();
+	gd_cause = cause;
+	gd_queue_log(FAULT_GD_LOG_ERROR, cause);
+#	ifdef USE_DEBUG_UART
+	debugUartLogEvent(gd_dbg_event(cause, 0));
+#	endif
+	escToFaultStuck();
+#	ifdef USE_RGB_LED
+	setIndividualRGBLed(1, 0, 0);
+#	endif
+}
+
+static void gd_enter_warn(uint16_t now)
+{
+	/* OTW is possible, not proven. Do not label an ORed pin as a status bit. */
+	gd_cause = FAULT_GD_UNKNOWN;
+	gd_state = GD_NF_WARN;
+	if (gd_rate_due(now, &gd_warn_logged, &gd_warn_log_t0, GD_WARN_LOG_MS)) {
+		gd_queue_log(FAULT_GD_LOG_WARNING, gd_cause);
+#	ifdef USE_DEBUG_UART
+		debugUartLogEvent(gd_dbg_event(gd_cause, 1));
+#	endif
+	}
+}
+
+static void gd_note_retry(uint16_t now)
+{
+	/* Observed pulses are advisory too. CBC releases may be too short for
+	 * the main loop to see; neither their count nor width proves drive loss. */
+	if (gd_rate_due(now, &gd_retry_logged, &gd_retry_log_t0, GD_RETRY_LOG_MS)) {
+		gd_queue_log(FAULT_GD_LOG_WARNING, FAULT_GD_OCP);
+#	ifdef USE_DEBUG_UART
+		debugUartLogEvent(gd_dbg_event(FAULT_GD_OCP, 1));
+#	endif
+	}
+}
+
+#elif defined(USE_DRV8328_NFAULT)
+/*
+ * DRV8328 (ARK 4IN1). Every nFAULT disables the gate drivers (no OTW-only
+ * report, no 8 ms VDS retry). VDS / OTSD / GDF stay latched until nSLEEP
+ * is pulled low — sleep-on-idle already does that. Firmware: cut PWM, latch
+ * stuck until zero throttle. Ignore the pin while asleep (nSLEEP UVLO).
+ */
+static uint8_t drv_nfault_latched;
+static fault_id_t drv_nfault_cause;
+#endif
+
+const char *faultGateDriverCauseName(fault_id_t cause)
+{
+	switch (cause) {
+		case FAULT_GD_UVLO:
+			return "UVLO";
+		case FAULT_GD_OCP:
+			return "OCP";
+		case FAULT_GD_OTW:
+			return "OTW";
+		case FAULT_GD_OTSD:
+			return "OTSD";
+		case FAULT_GD_UNKNOWN:
+			return "nFAULT";
+		default:
+			return "";
+	}
+}
+
+fault_id_t faultGateDriverCause(void)
+{
+#if defined(USE_DRV_NFAULT)
+	if (gd_state != GD_NF_IDLE) {
+		return gd_cause;
+	}
+#elif defined(USE_DRV8328_NFAULT)
+	if (drv_nfault_latched) {
+		return drv_nfault_cause;
+	}
+#endif
+	return FAULT_NONE;
+}
+
+uint8_t faultGateDriverConsumeLog(fault_id_t *cause)
+{
+#if defined(USE_DRV_NFAULT)
+	const uint8_t level = gd_log_level;
+	if (cause) {
+		*cause = (level != FAULT_GD_LOG_NONE) ? gd_log_cause : FAULT_NONE;
+	}
+	gd_log_level = FAULT_GD_LOG_NONE;
+	gd_log_cause = FAULT_NONE;
+	return level;
+#else
+	if (cause) {
+		*cause = FAULT_NONE;
+	}
+	return FAULT_GD_LOG_NONE;
+#endif
+}
 
 uint32_t faultErrorCount(void)
 {
@@ -48,14 +281,191 @@ void faultErrorCountReset(void)
 	fault_stall_trips = 0;
 	desync_happened = 0;
 	acq_fail_desyncs = 0;
+	/* Lifetimes must match the counters this latch gates. */
+	fault_run_established = 0;
+}
+
+uint8_t faultGateDriverFaultActive(void)
+{
+#if defined(USE_DRV_NFAULT)
+	return (uint8_t)(gd_state == GD_NF_LATCH);
+#elif defined(USE_DRV8328_NFAULT)
+	return drv_nfault_latched;
+#else
+	return 0;
+#endif
+}
+
+uint8_t faultGateDriverWarningActive(void)
+{
+#if defined(USE_DRV_NFAULT)
+	return (uint8_t)(gd_state == GD_NF_WARN);
+#else
+	return 0;
+#endif
+}
+
+void faultGateDriverTick1kHz(void)
+{
+#if defined(USE_DRV_NFAULT)
+	gd_ms++;
+	if (gd_fault_age_ms <= GD_FAULT_RECENT_MS) {
+		gd_fault_age_ms++;
+	}
+	/* input is forced to zero by the latch; adjusted_input is pilot demand. */
+	if (gd_state == GD_NF_LATCH && adjusted_input == 0) {
+		if (gd_zero_ms < GD_REARM_ZERO_MS) {
+			gd_zero_ms++;
+		}
+	} else {
+		gd_zero_ms = 0;
+	}
+#endif
+}
+
+uint8_t faultGateDriverLatchOnDriveLoss(void)
+{
+#if defined(USE_DRV_NFAULT)
+	if (gd_state == GD_NF_LATCH) {
+		return 1;
+	}
+	/* Called only where the motor controller has already decided to stop
+	 * or forcibly commutate after losing BEMF. A commanded coast is normal. */
+	if (adjusted_input == 0 || input < DSHOT_MIN_THROTTLE) {
+		return 0;
+	}
+	if (gateDriverNfaultPinTrusted() && (NFAULT_PORT->IDR & NFAULT_PIN) == 0u) {
+		gd_fault_seen = 1;
+		gd_fault_age_ms = 0;
+	}
+	if (!gd_fault_seen || gd_fault_age_ms > GD_FAULT_RECENT_MS) {
+		return 0;
+	}
+	fault_id_t cause = FAULT_GD_UNKNOWN;
+	/* Voltage and MCU temperature select a log label, never the action. */
+	if (battery_voltage > 0u && battery_voltage < GD_UVLO_CV) {
+		cause = FAULT_GD_UVLO;
+	} else if (degrees_celsius >= GD_THERMAL_C) {
+		cause = FAULT_GD_OTSD;
+	}
+	gd_enter_latch(cause);
+	return 1;
+#else
+	return 0;
+#endif
+}
+
+void faultPollGateDriver(void)
+{
+#if defined(USE_DRV_NFAULT)
+	if (gd_state == GD_NF_LATCH) {
+		gd_hold_cut();
+		/* Sleep resets the hardware latch, but does not clear the software
+		 * restart inhibit until the pilot holds zero for a full interval. */
+		gateDriverSleep();
+		if (adjusted_input == 0 && gd_zero_ms >= GD_REARM_ZERO_MS) {
+			gd_cause = FAULT_NONE;
+			gd_fault_seen = 0;
+			gd_zero_ms = 0;
+			gd_state = GD_NF_IDLE;
+		}
+		return;
+	}
+	if (!gateDriverIsAwake()) {
+		gd_state = GD_NF_IDLE;
+		gd_cause = FAULT_NONE;
+		gd_fault_seen = 0;
+		return;
+	}
+
+	gateDriverNfaultGraceTick();
+	if (!gateDriverNfaultPinTrusted()) {
+		return;
+	}
+
+	const uint8_t pin_low = (uint8_t)((NFAULT_PORT->IDR & NFAULT_PIN) == 0u);
+	const uint16_t now = gd_ms;
+	if (pin_low) {
+		gd_fault_seen = 1;
+		gd_fault_age_ms = 0;
+	}
+	switch (gd_state) {
+		case GD_NF_IDLE:
+			if (pin_low) {
+				gd_t0 = now;
+				gd_state = GD_NF_CLASSIFY;
+			}
+			break;
+		case GD_NF_CLASSIFY:
+			if (!pin_low) {
+				gd_state = GD_NF_IDLE;
+				gd_note_retry(now);
+			} else if ((uint16_t)(now - gd_t0) >= GD_CLASSIFY_MS) {
+				gd_enter_warn(now);
+			}
+			break;
+		case GD_NF_WARN:
+			if (!pin_low) {
+				gd_state = GD_NF_IDLE;
+				gd_cause = FAULT_NONE;
+			}
+			break;
+		default:
+			break;
+	}
+
+#elif defined(USE_DRV8328_NFAULT)
+	if (!gateDriverIsAwake()) {
+		if (drv_nfault_latched && adjusted_input == 0) {
+			drv_nfault_latched = 0;
+			drv_nfault_cause = FAULT_NONE;
+		}
+		return;
+	}
+
+	gateDriverNfaultGraceTick();
+	if (!gateDriverNfaultPinTrusted()) {
+		return;
+	}
+
+	if ((NFAULT_PORT->IDR & NFAULT_PIN) == 0u) {
+		if (!drv_nfault_latched) {
+			drv_nfault_cause = (battery_voltage > 0u && battery_voltage < 800u) ? FAULT_GD_UVLO : FAULT_GD_UNKNOWN;
+			drv_nfault_latched = 1;
+		}
+		allOff();
+		maskPhaseInterrupts();
+		SET_DUTY_CYCLE_ALL(0);
+		running = 0;
+		stepper_sine = 0;
+		if (escGetState() != ESC_FAULT_STUCK) {
+			escToFaultStuck();
+		}
+	} else if (drv_nfault_latched && adjusted_input == 0) {
+		drv_nfault_latched = 0;
+		drv_nfault_cause = FAULT_NONE;
+	}
+#endif
 }
 
 uint8_t faultHandleStuckRotorIfNeeded(void)
 {
 #ifndef BRUSHED_MODE
+#	if FAULT_HAS_DRV_NFAULT
+	/* Gate-driver latch: do not map throttle onto the bridge. */
+	if (faultGateDriverFaultActive()) {
+		allOff();
+		maskPhaseInterrupts();
+		return 1;
+	}
+#	endif
 	if ((bemf_timeout_happened > bemf_timeout) && eepromBuffer.stuck_rotor_protection) {
 		allOff();
 		maskPhaseInterrupts();
+		/* Log once on entry — this path runs every main-loop tick while latched. */
+		if (escGetState() != ESC_FAULT_STUCK) {
+			debugUartLogEvent(DBG_EVT_STUCK);
+		}
 		escToFaultStuck();
 #	ifdef USE_RGB_LED
 		setIndividualRGBLed(1, 0, 0);
@@ -89,6 +499,8 @@ void faultPollSignalTimeout(void)
 	if (signaltimeout > (LOOP_FREQUENCY_HZ >> 1)) { // half second timeout when armed;
 		if (escIsArmed()) {
 			allOff();
+			debugUartLogEvent(DBG_EVT_SIGNAL);
+			debugUartService(); /* flush before reset */
 			escToFaultSignal();
 			zero_input_count = 0;
 			SET_DUTY_CYCLE_ALL(0);
@@ -101,6 +513,8 @@ void faultPollSignalTimeout(void)
 		}
 		if (signaltimeout > LOOP_FREQUENCY_HZ << 1) { // 2 second when not armed
 			allOff();
+			debugUartLogEvent(DBG_EVT_SIGNAL);
+			debugUartService();
 			escToFaultSignal();
 			zero_input_count = 0;
 			SET_DUTY_CYCLE_ALL(0);
@@ -135,6 +549,32 @@ void faultUpdateBemfTimeoutPolicy(void)
 		desync_restart_holdoff_ms = 0;
 		acq_fail_desyncs = 0;
 	}
+#	if defined(MCU_G431)
+	/*
+	 * ARK 12S CAN free-run restarts thrash in the acquisition window
+	 * (zero_crosses reset each stall) while still commanded throttle.
+	 * Accumulating bemf_timeout_happened across those kicks latched
+	 * stuck_rotor after a few start* cycles on the stand. F051 4IN1 does
+	 * not show this with the same shared rails. Forgive acquisition-only
+	 * stalls; keep the counter once the loop is established (zc > 100).
+	 *
+	 * Time-bounded on purpose. A truly locked rotor never reaches
+	 * zc >= 100, so an unbounded clear disables stuck_rotor entirely
+	 * during acquisition -- and, because ESC_STUCK_LATCH is itself carried
+	 * in bemf_timeout_happened, silently wipes an already-latched stuck
+	 * fault too (bench 2026-08: 16 FAULT_STUCK entries that all recovered
+	 * within one tick). A jammed 12S prop would re-kick forever.
+	 *
+	 * A plain throttle gate does not work either: it has to sit above the
+	 * highest tier being characterized, and the startup matrix reaches
+	 * input 447 at its 20% tier, so any threshold low enough to be useful
+	 * lands mid-sweep. Bound the grace in time instead -- start attempts
+	 * are short and separated by zero throttle, a jam is continuous.
+	 */
+	if (zero_crosses < 100 && acq_grace_ms < ACQ_GRACE_MS_MAX && adjusted_input < ACQ_GRACE_MAX_INPUT) {
+		bemf_timeout_happened = 0;
+	}
+#	endif
 	if (zero_crosses > 100 && adjusted_input < 200) {
 		bemf_timeout_happened = 0;
 	}
@@ -142,11 +582,26 @@ void faultUpdateBemfTimeoutPolicy(void)
 		bemf_timeout_happened = 0;
 	}
 
+#	if defined(MCU_G431)
+	/*
+		 * ARK 12S CAN (G4): free-run high-KV crawl lives above DShot~150 while
+		 * BEMF is still weak. F051 gets clean edges from COMP hysteresis there;
+		 * until G4 hysteresis settles, keep the soft stall budget (100) out to
+		 * input 400 so restart thrash does not latch stuck_rotor in 10 kicks.
+		 * Established high-throttle stuck detection still uses 10.
+		 */
+	if (adjusted_input < 400) {
+		bemf_timeout = 100;
+	} else {
+		bemf_timeout = 10;
+	}
+#	else
 	if (adjusted_input < 150) { // startup duty cycle should be low enough to not burn motor
 		bemf_timeout = 100;
 	} else {
 		bemf_timeout = 10;
 	}
+#	endif
 #endif
 }
 
@@ -290,6 +745,9 @@ void faultDesyncEpisodeCharge(desync_episode_kind_t kind)
 	if (desync_episode_bucket >= DESYNC_EPISODE_LIMIT) {
 		allOff();
 		maskPhaseInterrupts();
+		if (escGetState() != ESC_FAULT_STUCK) {
+			debugUartLogEvent(DBG_EVT_STUCK);
+		}
 		escToFaultStuck();
 #	ifdef USE_RGB_LED
 		setIndividualRGBLed(1, 0, 0);
@@ -307,6 +765,7 @@ void faultNoteEarlyDesync(void)
 		return;
 	}
 	acq_fail_desyncs = 0;
+	debugUartLogEvent(DBG_EVT_ACQ_DESYNC);
 	faultDesyncEpisodeCharge(DESYNC_EPISODE_ACQ_FAIL);
 #endif
 }
@@ -319,6 +778,15 @@ void faultDesyncEpisodeTick1kHz(void)
 	if (zero_crosses > ACQ_FAIL_CLEAR_ZC) {
 		acq_fail_desyncs = 0;
 	}
+#	if defined(MCU_G431)
+	/* Acquisition grace clock. Runs only while throttle is commanded and
+	 * the loop has not established; pilot cut or a real acquire rearms it. */
+	if (zero_crosses >= 100 || adjusted_input == 0) {
+		acq_grace_ms = 0;
+	} else if (acq_grace_ms < ACQ_GRACE_MS_MAX) {
+		acq_grace_ms++;
+	}
+#	endif
 	if (desync_restart_holdoff_ms > 0) {
 		desync_restart_holdoff_ms--;
 	}
@@ -350,28 +818,58 @@ void faultHandleBemfIntervalStall(void)
 {
 	/* Six-step only (not sine soft-start). */
 	if (INTERVAL_TIMER_COUNT > BEMF_STALL_TICKS && (escInOpenLoop() || escInClosedLoop())) {
-		bemf_timeout_happened++;
+		/* Commanded stop (input < 48 == escNoteStallOrDesync): duty already
+		 * zero, running still set while BEMF dies — INTERVAL_TIMER expiry
+		 * is expected, not a stall. Skip trip count / log / episode charge. */
+		const uint8_t commanded_stop = (input < 48);
+#if defined(USE_DRV_NFAULT)
+		if (!commanded_stop && faultGateDriverLatchOnDriveLoss()) {
+			return;
+		}
+#endif
 
 		maskPhaseInterrupts();
-		// Charge the episode rail only when this run was ESTABLISHED
-		// before it died (the bad-tune restart->spool->desync cycle
-		// always reaches closed loop first). A start attempt that never
-		// got going is the legacy stuck-rotor rail's job, with its
-		// throttle-scaled tolerance (bemf_timeout 100 below input 150) -
-		// heavy props legitimately kick many times at low throttle, and
-		// charging those latched the ESC on the 4th kick. This gate also
-		// covers the blind/miss-limit handoff (bemf_zc kicks
-		// INTERVAL_TIMER past BEMF_STALL_TICKS with comparator interrupts masked, so
-		// this rail is guaranteed to run next pass): blind stepping only
-		// arms at zero_crosses >= 100, so those episodes always charge.
-		if (zero_crosses > 100) {
-			/* Established run died here. This is the ONLY place the
-			 * stall rail is counted, and it is the aggregation point
-			 * for the dead-reckoning budget handoff in bemf_zc.c,
-			 * both of which reach the loop through this trip - see
-			 * faultErrorCount(). */
-			fault_stall_trips++;
-			faultDesyncEpisodeCharge(DESYNC_EPISODE_STALL_RAIL);
+		if (!commanded_stop) {
+			bemf_timeout_happened++;
+			// Charge the episode rail only when this run was ESTABLISHED
+			// before it died (the bad-tune restart->spool->desync cycle
+			// always reaches closed loop first). A start attempt that never
+			// got going is the legacy stuck-rotor rail's job, with its
+			// throttle-scaled tolerance (bemf_timeout 100 below input 150) -
+			// heavy props legitimately kick many times at low throttle, and
+			// charging those latched the ESC on the 4th kick. This gate also
+			// covers the blind/miss-limit handoff (bemf_zc kicks
+			// INTERVAL_TIMER past BEMF_STALL_TICKS with comparator interrupts masked, so
+			// this rail is guaranteed to run next pass): blind stepping only
+			// arms at zero_crosses >= 100, so those episodes always charge.
+			//
+			// Reporting and escalation take DIFFERENT gates, for the same
+			// reason as the jump check in runtimeProcessDesyncCheck():
+			//   - fault_stall_trips feeds esc.Status.error_count, so it asks
+			//     "did an established run fault this arm cycle?" -> latch,
+			//     which survives the zero_crosses reset this rail performs.
+			//   - the episode charge asks "is THIS trip an established-run
+			//     failure or acquisition thrash?" -> live count. After the
+			//     first trip the loop is back in acquisition and kicks
+			//     repeatedly; charging those would fill the bucket in a few
+			//     events and latch the ESC during its own recovery.
+			if (fault_run_established) {
+				/* Established run died this arm cycle. This is the ONLY
+				 * place the stall rail is counted, and it is the
+				 * aggregation point for the grind rail and the blind/
+				 * miss-limit handoff, both of which reach the loop through
+				 * this trip - see faultErrorCount(). */
+				fault_stall_trips++;
+#ifdef USE_DEBUG_UART
+				/* Single UART line (LogEvent would print "fault: stall" twice). */
+				debugUartPrintf("fault: stall zc=%lu bemf_to=%u/%u e_com=%lu\r\n", (unsigned long)zero_crosses,
+						(unsigned)bemf_timeout_happened, (unsigned)bemf_timeout,
+						(unsigned long)commutation_interval);
+#endif
+			}
+			if (zero_crosses > 100) {
+				faultDesyncEpisodeCharge(DESYNC_EPISODE_STALL_RAIL);
+			}
 		}
 		if (escIsFault()) {
 			/* Episode rail latched: do not re-enter startup. */
@@ -383,8 +881,8 @@ void faultHandleBemfIntervalStall(void)
 		escNoteStallOrDesync(1);
 		zero_crosses = 0;
 		bemfZcResetTrend();
-		if (faultDesyncRestartHoldoffActive()) {
-			/* Coast until holdoff expires; main loop will re-arm. */
+		if (commanded_stop || faultDesyncRestartHoldoffActive()) {
+			/* Coast / commanded stop: do not zcfound re-enter. */
 			running = 0;
 			allOff();
 			return;
