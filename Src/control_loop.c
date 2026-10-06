@@ -759,6 +759,11 @@ RAM_FUNC void tenKhzRoutine()
 		last_duty_cycle = duty_cycle;
 		SET_AUTO_RELOAD_PWM(tim1_arr);
 		SET_DUTY_CYCLE_ALL(adjusted_duty_cycle);
+	} else if (one_khz_loop_counter > PID_LOOP_DIVIDER) {
+		// Sine start runs no PID, but voltage cutoff, current and
+		// temperature still need fresh ADC samples (upstream 9696d28).
+		PROCESS_ADC_FLAG = 1;
+		one_khz_loop_counter = 0;
 	}
 #endif // ndef brushed_mode
 	faultSignalTimeoutTick();
