@@ -9,9 +9,11 @@ not intervals at all. On this plant a one-step dropout (7 blind steps, then
 the loop resyncs) pulled the trend to about -CI/4 at constant speed.
 
 This holds the motor at steady speed, blanks the comparator for about one
-commutation window a few times (ZC_FAULT mode 1, as the short-dropout
-blind-step test does), and watches zc_trend while the loop stays closed.
-The speed does not change, so the true trend is ~0.
+commutation window (ZC_FAULT mode 1, as the short-dropout blind-step test
+does) until three dropouts have been bridged without a restart, and watches
+zc_trend through each. The speed does not change, so the true trend is ~0.
+A dropout that ends in a desync restart is skipped: re-acquisition really
+accelerates, so a negative trend there is correct.
 
 Mutation check: feed the post-blind steps back in and the trend reaches
 about -0.28 x the pre-fault CI.
@@ -74,26 +76,48 @@ def test_short_dropout_leaves_trend_near_zero(sitl_factory, state_stream):
     tx = Sender('127.0.0.1', sitl.input_port, sd.TYPE_DSHOT300)
     ctl = _open_ctl(sitl)
     worst = None
-    blinded = 0
+    bridged = 0
+    attempts = 0
     try:
         time.sleep(2.2)
-        tx.value = 500
-        time.sleep(3.5)
+        # Under host load SITL sometimes misses frames, resets on the input
+        # timeout and has to re-arm (on main too). Give it one more try
+        # through zero throttle, long enough for the boot tune and arming.
+        for _ in range(2):
+            tx.value = 500
+            time.sleep(3.5)
+            if rpm_from_state(sim) > 1000:
+                break
+            tx.value = 0
+            time.sleep(3.0)
         assert rpm_from_state(sim) > 1000, sitl.log_tail()
-        for _ in range(3):
+        while bridged < 3 and attempts < 8:
+            attempts += 1
             pre = _zc_stats(ctl)
-            assert pre['old_routine'] == 0 and pre['zero_crosses'] > 100, pre
+            if pre['old_routine'] or pre['zero_crosses'] <= 100:
+                time.sleep(0.5)
+                continue
             ci0 = pre['commutation_interval']
             step_us = max(ci0 // 2, 80)
             _zc_fault(ctl, mode=1, duration_us=min(step_us + 50, 800))
+            # Judge only a dropout the loop bridges. If it desyncs and
+            # restarts, the re-acquisition really accelerates and a negative
+            # trend is correct, so that attempt says nothing either way.
+            samples = []
+            blinded = False
+            restarted = False
             end = time.time() + 0.08
             while time.time() < end:
                 s = _zc_stats(ctl)
-                if s['zc_blind_steps']:
-                    blinded += 1
-                closed = (s['running'] and not s['old_routine']
-                          and s['zero_crosses'] >= ZC_TREND_MIN_ZC)
-                if closed:
+                if (s['desync_happened'] != pre['desync_happened'] or s['old_routine']
+                        or s['zero_crosses'] < pre['zero_crosses']):
+                    restarted = True
+                    break
+                blinded = blinded or s['zc_blind_steps'] > 0
+                samples.append(s)
+            if blinded and not restarted and samples[-1]['zero_crosses'] > pre['zero_crosses']:
+                bridged += 1
+                for s in samples:
                     ratio = s['zc_trend'] / float(ci0)
                     if worst is None or ratio < worst[0]:
                         worst = (ratio, ci0, s)
@@ -101,10 +125,10 @@ def test_short_dropout_leaves_trend_near_zero(sitl_factory, state_stream):
     finally:
         tx.stop()
 
-    assert blinded, 'the dropout never produced a blind step\n' + sitl.log_tail()
-    assert worst is not None, 'no closed-loop sample after the dropouts\n' + sitl.log_tail()
+    assert bridged, ('no dropout was bridged without a restart in %d attempts\n%s'
+                     % (attempts, sitl.log_tail()))
     ratio, ci0, s = worst
     assert ratio > -0.08, (
         'zc_trend reached %.2f x the pre-fault CI at constant speed after a '
-        'short dropout (trend %d, CI %d): post-blind steps are feeding the '
+        'bridged dropout (trend %d, CI %d): post-blind steps are feeding the '
         'predictor\n%r' % (ratio, s['zc_trend'], ci0, s))
