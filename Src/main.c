@@ -227,6 +227,7 @@ an settings option)
 #include "phaseouts.h"
 #include "serial_telemetry.h"
 #include "kiss_telemetry.h"
+#include "hwci_perf.h"
 #include "signal.h"
 #include "sounds.h"
 #include "targets.h"
@@ -933,6 +934,7 @@ void PeriodElapsedCallback()
     if (zero_crosses < 10000) {
         zero_crosses++;
     }
+    HWCI_PERF_ZC();
 }
 
 /*
@@ -942,6 +944,7 @@ void PeriodElapsedCallback()
  */
 void interruptRoutine()
 {
+    HWCI_PERF_ZC_PHASE_CAPTURE(); // TIM1 phase at ISR entry, pre-filter
 //   if (average_interval > 125) {
 //        if ((INTERVAL_TIMER_COUNT < 125) && (duty_cycle < 600) && (zero_crosses < 500)) { // should be impossible, desync?exit anyway
 //           return;
@@ -960,6 +963,7 @@ void interruptRoutine()
 #else
             if (getCompOutputLevel() == rising) {
 #endif
+                HWCI_PERF_CONFIRM_REJECT();
                 return;
             }
         }
@@ -970,6 +974,7 @@ void interruptRoutine()
     SET_INTERVAL_TIMER_COUNT(0);
     SET_AND_ENABLE_COM_INT(waitTime+1); // enable COM_TIMER interrupt
     __enable_irq();
+    HWCI_PERF_ZC_PHASE_COMMIT(); // accepted edge: bin its PWM phase
 }
 
 void startMotor()
@@ -1352,6 +1357,7 @@ if (!stepper_sine && armed) {
 
 void tenKhzRoutine()
 { // 20khz as of 2.00 to be renamed
+    HWCI_PERF_CTRL_ENTER();
     duty_cycle = duty_cycle_setpoint;
     tenkhzcounter++;
     ledcounter++;
@@ -1569,6 +1575,7 @@ void tenKhzRoutine()
     signaltimeout++;
 
 #endif
+    HWCI_PERF_CTRL_EXIT();
 }
 
 void processDshot()
@@ -1940,6 +1947,7 @@ int main(void)
 #endif
 
     while (1) {
+        HWCI_PERF_MAIN_LOOP();
 e_com_time = ((commutation_intervals[0] + commutation_intervals[1] + commutation_intervals[2] + commutation_intervals[3] + commutation_intervals[4] + commutation_intervals[5]) + 4) >> 1; // COMMUTATION INTERVAL IS 0.5US INCREMENTS 
 
 #if defined(FIXED_DUTY_MODE) || defined(FIXED_SPEED_MODE)
