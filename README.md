@@ -112,7 +112,7 @@ make factory-image
 make factory-image-check   # same + layout/defaults gate (CI)
 ```
 
-Firmware objects land under `obj/`. This fork’s product targets are **`ARK_4IN1_F051`** (ship firmware) and **`AM32_SITL_CAN`** (host sim). See [`Inc/targets.h`](Inc/targets.h). MCU HAL trees for other AM32 families are still in `Mcu/`, but they are not buildable products here.
+Firmware objects land under `obj/`. This fork’s product targets are **`ARK_4IN1_F051`** (ship firmware) and **`AM32_SITL_CAN`** (host sim). An additional NXP MCXA133 reference target **`MR_ESC_ARK32_A133`** (NXP MR-ESC-ARK32 reference design, built by `a133makefile.mk`) is provided for evaluation; its analog scale factors are inherited from upstream AM32's `FRDM_A133` and must be verified against the MR-ESC-ARK32 schematic. See [`Inc/targets.h`](Inc/targets.h). Other MCU HAL trees are still in `Mcu/`, but they are not buildable products here.
 
 ### Production release image (ARK 4IN1)
 
