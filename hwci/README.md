@@ -28,7 +28,7 @@ baseline, and a pass/fail report you can gate pull requests on.
 | ESC signal | Stand ESC out (uni DShot) | FPV motor out (BDShot) |
 | Motor command | `hwci run --profile noprop_…` | `scripts/px4_motor_stream.py` |
 | Rig file | `rig.yaml` / `config/rig.flightstand.yaml` | `config/rig.px4_bdshot.yaml` |
-| Docs | this README | [docs/BENCH_SETUPS.md](docs/BENCH_SETUPS.md), [docs/setup_px4_bdshot.md](docs/setup_px4_bdshot.md) |
+| Docs | this README, [docs/UPSTREAM_AB.md](docs/UPSTREAM_AB.md) | [docs/BENCH_SETUPS.md](docs/BENCH_SETUPS.md), [docs/setup_px4_bdshot.md](docs/setup_px4_bdshot.md) |
 
 Use **one setup at a time** (only one host on the signal wire). Full table and
 switch procedure: **[docs/BENCH_SETUPS.md](docs/BENCH_SETUPS.md)**.
@@ -338,6 +338,11 @@ telemetry channel, misconfigured backend) fails its check, and per-channel
 coverage checks (`perf_coverage`, `stand_coverage`, `telem_coverage`) name the
 dead channel explicitly. A green run therefore proves the instrumentation was
 alive, not just that nothing compared worse.
+
+The baseline gate catches regressions against a past ARK32 run. It cannot
+show that ARK32 is better than upstream AM32. For that, use the interleaved
+upstream A/B in [docs/UPSTREAM_AB.md](docs/UPSTREAM_AB.md) (`hwci ab-summary`,
+`hwci settings write --keep-identity`).
 
 ## CI integration
 

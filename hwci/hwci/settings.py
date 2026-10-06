@@ -104,6 +104,13 @@ READ_ONLY_OFFSETS: dict[int, str] = {
     4: "version.minor",
 }
 
+# Page header owned by whichever firmware/bootloader is flashed: boot byte,
+# eeprom_version, bootloader version, firmware major/minor. A settings blob
+# shared between two different firmwares (upstream vs ARK32 A/B) takes these
+# from the device so neither firmware sees a foreign version and rewrites the
+# page at boot.
+IDENTITY_OFFSETS: tuple[int, ...] = (0, 1, 2, 3, 4)
+
 _OFFSET_TO_NAME: dict[int, str] = {
     **{f.offset: f.name for f in EEPROM_FIELDS.values()},
     **READ_ONLY_OFFSETS,
@@ -180,6 +187,13 @@ class Settings:
                     f"[{f.lo}, {f.hi}] ({f.description}); the firmware would "
                     "silently ignore it, so the write is refused")
             out._data[f.offset] = value
+        return out
+
+    def with_identity_from(self, device: "Settings") -> "Settings":
+        """Copy with the :data:`IDENTITY_OFFSETS` header taken from ``device``."""
+        out = Settings(self._data)
+        for i in IDENTITY_OFFSETS:
+            out._data[i] = device._data[i]
         return out
 
     def to_bytes(self) -> bytes:

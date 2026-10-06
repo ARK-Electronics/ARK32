@@ -142,6 +142,40 @@ def test_settings_round_trip_against_mock_device(tmp_path, capsys, monkeypatch):
     assert "advance_level    =  30" in capsys.readouterr().out
 
 
+def test_settings_keep_identity_preserves_device_header(tmp_path, capsys, monkeypatch):
+    """A blob shared by two firmwares (upstream A/B) must not overwrite the
+    flashed firmware's own header bytes, or its boot rewrites the page."""
+    from hwci.settings import IDENTITY_OFFSETS, Settings
+    monkeypatch.setattr(cli, "_SIM_SETTINGS_DEVICE", None)
+    page = tmp_path / "page.bin"
+    assert cli.main(["settings", "read", "--sim", "--bin", str(page)]) == 0
+    device = page.read_bytes()
+
+    # "other firmware" blob: foreign header bytes plus one real setting change
+    foreign = bytearray(Settings.from_bin(page).apply({"advance_level": 30}).to_bytes())
+    for i in IDENTITY_OFFSETS:
+        foreign[i] = (foreign[i] + 7) & 0xFF
+    shared = tmp_path / "shared.bin"
+    shared.write_bytes(bytes(foreign))
+
+    # plain diff sees the header; --keep-identity sees only the setting
+    assert cli.main(["settings", "diff", "--sim", "--bin", str(shared)]) == 1
+    capsys.readouterr()
+    assert cli.main(["settings", "diff", "--sim", "--bin", str(shared),
+                     "--keep-identity"]) == 1
+    out = capsys.readouterr().out
+    assert "advance_level" in out and "1 byte(s) differ" in out
+
+    assert cli.main(["settings", "write", "--sim", "--bin", str(shared),
+                     "--keep-identity"]) == 0
+    after = cli._SIM_SETTINGS_DEVICE.read_memory(0x08007C00, 192)
+    assert after[:len(IDENTITY_OFFSETS)] == device[:len(IDENTITY_OFFSETS)]
+    assert after[23] == 30
+    assert shared.read_bytes() == bytes(foreign)    # source file untouched
+    assert cli.main(["settings", "diff", "--sim", "--bin", str(shared),
+                     "--keep-identity"]) == 0
+
+
 def test_settings_write_requires_bin(capsys):
     rc = cli.main(["settings", "write", "--sim"])
     assert rc == 2

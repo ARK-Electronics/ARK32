@@ -20,6 +20,7 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -359,6 +360,39 @@ def cmd_tune(args) -> int:
     return 0
 
 
+def _expand_dirs(raw_list: list[str]) -> list[str]:
+    dirs: list[str] = []
+    for raw in raw_list:
+        p = Path(raw)
+        if p.is_dir():
+            dirs.append(str(p))
+        else:
+            dirs.extend(str(m) for m in sorted(Path().glob(raw)) if m.is_dir())
+    return dirs
+
+
+def cmd_ab_summary(args) -> int:
+    """Tabulate an interleaved two-firmware A/B (hwci/docs/UPSTREAM_AB.md)."""
+    from . import ab
+
+    a_dirs, b_dirs = _expand_dirs(args.a), _expand_dirs(args.b)
+    if not a_dirs or not b_dirs:
+        print("error: need run directories for both --a and --b", file=sys.stderr)
+        return 2
+    try:
+        md, _ = ab.summarize_dirs(a_dirs, b_dirs, min_n=args.min_n,
+                                  a_label=args.a_label, b_label=args.b_label)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if args.out:
+        Path(args.out).write_text(md)
+        print(f"A/B summary written to {args.out}")
+    else:
+        print(md)
+    return 0
+
+
 def cmd_campaign(args) -> int:
     """Aggregate pilot cards from one or more tune session directories."""
     from . import tuner as tunermod
@@ -466,6 +500,13 @@ def cmd_settings(args) -> int:
                   file=sys.stderr)
             return 2
         other = st.Settings.from_bin(args.bin)
+        bin_path = Path(args.bin)
+        if args.keep_identity:
+            # Shared A/B blob: keep the flashed firmware's own header bytes.
+            other = other.with_identity_from(current)
+            if args.action == "write":
+                tmp = Path(tempfile.mkdtemp(prefix="hwci-settings-"))
+                bin_path = other.to_bin(tmp / "settings.bin")
         if args.action == "diff":
             diff = current.diff(other)
             for name, a, b in diff:
@@ -474,7 +515,7 @@ def cmd_settings(args) -> int:
                   else "no differences")
             return 1 if diff else 0
         # write
-        flash(str(Path(args.bin)), addr)
+        flash(str(bin_path), addr)
         readback = st.Settings.from_device(dbg, addr)
         if readback != other:
             print("ERROR: readback after write does not match the file",
@@ -583,6 +624,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_campaign)
 
     sp = sub.add_parser(
+        "ab-summary",
+        help="per-arm median/range and decision rule for an interleaved firmware A/B")
+    sp.add_argument("--a", nargs="+", required=True,
+                    help="arm A run directories and/or globs (e.g. runs/ab/up-*)")
+    sp.add_argument("--b", nargs="+", required=True,
+                    help="arm B run directories and/or globs")
+    sp.add_argument("--a-label", default="upstream")
+    sp.add_argument("--b-label", default="ark32")
+    sp.add_argument("--min-n", type=int, default=3,
+                    help="minimum runs per arm before a difference is called")
+    sp.add_argument("--out", help="write markdown here (default: stdout)")
+    sp.set_defaults(func=cmd_ab_summary)
+
+    sp = sub.add_parser(
         "settings", help="read/write/diff the AM32 EEPROM settings page")
     sp.add_argument("action", choices=["read", "write", "diff"])
     add_common(sp)
@@ -590,6 +645,11 @@ def build_parser() -> argparse.ArgumentParser:
                                   "write/diff: source)")
     sp.add_argument("--sim", action="store_true",
                     help="in-process simulated page (offline)")
+    sp.add_argument("--keep-identity", action="store_true",
+                    help="write/diff: take the page header (boot byte, eeprom "
+                         "and firmware version, bytes 0-4) from the device, not "
+                         "the file - for one settings blob shared by two "
+                         "firmwares (hwci/docs/UPSTREAM_AB.md)")
     sp.set_defaults(func=cmd_settings)
 
     sp = sub.add_parser("ci", help="build+flash+run+analyze+gate (full pipeline)")
