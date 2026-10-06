@@ -23,34 +23,62 @@ The ESC times the motor two ways:
 1. **Poll** (open loop). The 20 kHz loop reads BEMF and steps when it sees a crossing. This is slower. It is how the motor starts, and how it recovers if timing is lost.
 2. **Interrupt** (closed loop). A comparator interrupt fires on each zero-cross. This is faster. It is used once the motor is spinning.
 
-Upstream AM32 switches back to poll whenever the average step time looks long. On ARK ESCs that was a trap: one missed crossing made the average look slower, poll stayed in control, and the motor bounced between the two modes instead of spooling.
+Upstream AM32 returns to poll on any commutation where the average step time is longer than `polling_mode_changeover + 500`. A missed crossing makes one step look long, so near the changeover speed a miss can hand control back to poll.
 
-ARK32 still uses poll to start and to recover. It does **not** drop to poll just because one crossing was missed.
+ARK32 still uses poll to start and to recover. It does **not** drop to poll just because one crossing was missed. This was motivated by a SITL motor model that bounced between the two modes. On the bench it measured performance-neutral against the previous ARK firmware ([#41](https://github.com/ARK-Electronics/ARK32/pull/41)). Treat it as a robustness change, not a measured speed-up.
 
-**Startup.** The motor starts in poll. When the step time is short enough (`polling_mode_changeover`), it switches to interrupts. For the first 100 crossings, a still-slow average puts it back in poll. That stops a noisy first kick from jumping into interrupt mode with no real BEMF.
+ARK32 raises the changeover on the ARK 4IN1 (`POLLING_MODE_THRESHOLD` 5000, upstream default 2000), so interrupt mode runs down to lower rpm. On a 900 KV motor with no prop, 5% throttle ran closed loop instead of 100% poll ([#39](https://github.com/ARK-Electronics/ARK32/pull/39)).
 
-**Missed crossings (interrupt mode).** After each step the ESC sets a deadline for the next crossing: expected time plus 50%. If the crossing arrives, the deadline is cancelled. If the deadline fires first, the ESC steps anyway (a **blind step**) and uses that late time as the interval. Timing moves slower — the safe direction if the rotor is slowing. The next real crossing locks on again. Blind steps do not count as zero-crosses.
+**Startup.** The motor starts in poll. When the step time is short enough (`polling_mode_changeover`), it switches to interrupts. Until 100 crossings have been counted since the start (poll and interrupt together), a still-slow average puts it back in poll. That stops a noisy first kick from jumping into interrupt mode with no real BEMF. With stall protection or RC-car reverse enabled, it switches after 20 crossings with a step below 2000 instead.
 
-**How long it will run blind.** Time spent without a real crossing is added up (`zc_blind_ticks`). A real crossing clears it. If that time reaches the same stall budget as upstream (`BEMF_STALL_TICKS`), the ESC no longer knows rotor position: it stops and restarts through poll. While the budget is used up, throttle is reduced smoothly. A few misses only cut a little power. A 50% miss rate can keep flying; only a long stretch with no real crossings exhausts the budget.
+**Missed crossings (interrupt mode).** Once 100 crossings have been counted, after each step the ESC sets a deadline for the next crossing: expected time plus 50%. If the crossing arrives, the deadline is cancelled. If the deadline fires first, the ESC steps anyway (a **blind step**) and uses that late time as the interval. Timing moves slower — the safe direction if the rotor is slowing. The next real crossing locks on again. Blind steps do not count as zero-crosses.
+
+**How long it will run blind.** Time spent without a real crossing is added up (`zc_blind_ticks`). A real crossing clears it. If that time reaches the same stall budget as upstream (`BEMF_STALL_TICKS`, 22.5 ms), the ESC no longer knows rotor position: it stops and restarts through poll. As the budget is used, duty is scaled down in proportion to what is left. The applied duty drops at once and climbs back at the configured ramp after a real crossing. Crossings that arrive demag-late (no pre-crossing level seen) get the same fade, floored at half.
+
+How high a sustained miss rate the motor can fly through has not been measured on hardware. SITL checks a 50% alternating-miss case only as an expected failure (`xfail`).
 
 **When it does go back to poll after startup**
 
-- **Desync** (the average step time jumps). Always return to poll and re-acquire.
+- **Desync** (the per-revolution average step time changes by more than half). Return to poll and re-acquire. The check only runs while the average is below 2000 ticks, upstream's value. Between 2000 and the slow-loop handback below, a bad lock is caught only by that handback or by the blind budget.
 - **Sustained slow closed loop.** If interrupt mode stays slower than `polling_mode_changeover + 500` for 4 electrical revs (2 at high duty), hand back to poll with no desync count. A throttle chop that slows through this band then behaves like upstream. A false lock on a stopped rotor finds no real crossings in poll, and the stall restart takes over.
 
 A missed crossing costs one extra step, not a mode change. Poll is the slow-speed and recovery path, not the reaction to every miss.
 
-Source: [`Src/bemf_zc.c`](Src/bemf_zc.c) (deadline, blind step, stall handoff), [`Src/commutation.c`](Src/commutation.c) (poll ↔ interrupt), [`Src/runtime_loop.c`](Src/runtime_loop.c) (desync and slow-average handback), [`Src/control_loop.c`](Src/control_loop.c) (throttle fade while blind), [`Src/faults.c`](Src/faults.c) (stall restart).
+Source: [`Src/bemf_zc.c`](Src/bemf_zc.c) (deadline, blind step, stall handoff, demag-late), [`Src/commutation.c`](Src/commutation.c) (poll ↔ interrupt), [`Src/runtime_loop.c`](Src/runtime_loop.c) (desync and slow-average handback), [`Src/control_loop.c`](Src/control_loop.c) (duty fade while blind), [`Src/faults.c`](Src/faults.c) (stall restart), [`Inc/targets.h`](Inc/targets.h) (`POLLING_MODE_THRESHOLD`).
 
 ### Throttle and protection
 
-The ramp you set is the ramp that runs. It is scaled by pack voltage so the same setting means the same volts per millisecond on a 4S or an 8S pack. The firmware does **not** secretly slow the ramp after a desync (that made one motor lag the others).
+**Ramp.** The ramp setting can only lower the built-in ceilings of 2, 6 and 16 %/ms (startup, low rpm, high rpm). The factory 2 %/ms therefore runs at 2 %/ms in every regime. The setting is referenced to a 4S pack at 14.8 V. The ESC scales the duty slew by 14.8 V / pack voltage, clamped to 0.5×–1.5×, and carries the fractional part from step to step. The same setting then gives about the same volts per millisecond on any pack. Upstream AM32 applies the setting as duty per step with no scaling. For the same setting ARK32 slews 0.59–0.67× as fast on 6S (25.2 V full to 22.2 V nominal) and about 1.33× as fast on a nominal 3S.
 
-A BEMF-headroom ceiling also caps duty from measured rpm. A snap throttle on a heavy prop cannot command more slip than the motor can follow.
+Nothing lowers the ramp after a desync. A learned back-off that did so was removed because it made one motor lag the others.
 
-Repeat desyncs or stalls charge a bucket. The first one restarts immediately. Later ones wait longer, then the ESC latches as stuck. Zero throttle clears the bucket.
+**Speed-based duty ceiling.** After about 0.3 s of steady closed-loop running above 12.5% duty, the ESC learns how much rpm each unit of duty buys. It then caps duty at what the measured rpm needs plus about 3 V of headroom, which bounds slip current while a heavy prop spools. The ceiling starts from scratch whenever the motor coasts, drops to poll or desyncs. Until it has re-learned, a snap is not limited, including the first snap after every start. If the cap holds rpm flat for 1 s, it releases gradually.
 
-Source: [`Src/runtime_loop.c`](Src/runtime_loop.c) (governor), [`Src/faults.c`](Src/faults.c) (episode rail).
+**Repeat desyncs or stalls** charge a bucket. Only runs that got past 100 crossings count. The first one restarts immediately. Back to back, later ones go:
+
+| | 2nd | 3rd | 4th | 5th |
+|--|--|--|--|--|
+| Desync | wait 100 ms | wait 300 ms | wait 500 ms | latch stuck |
+| Stall restart | wait 300 ms | wait 500 ms | latch stuck | |
+
+Healthy closed-loop running drains the bucket. Zero throttle clears the bucket and the stuck latch.
+
+Source: [`Src/control_loop.c`](Src/control_loop.c) (slew limit), [`Src/settings.c`](Src/settings.c) (ramp ceilings), [`Src/runtime_loop.c`](Src/runtime_loop.c) (voltage scaling, duty ceiling), [`Src/faults.c`](Src/faults.c) (episode bucket).
+
+### Performance vs upstream: what is measured
+
+One hardware A/B against upstream AM32 has been run: 2026-07-02, ARK 4IN1, 1800 KV 2306 with an HQProp 5136 on 6S, one sweep per firmware. It predates most of the commutation and protection work above, and the switch to `-Os` with LTO. No hardware run exists for current `main`. The A/B protocol for re-measuring is [hwci/docs/UPSTREAM_AB.md](hwci/docs/UPSTREAM_AB.md).
+
+| Area | Compared against | Result |
+|--|--|--|
+| CPU load | Upstream (07-02) | 0.5–4.5 points lower at every step from 10% to 100%. Worst steady main loop 151 µs vs 185 µs. |
+| Efficiency | Upstream (07-02); earlier ARK firmware ([#19](https://github.com/ARK-Electronics/ARK32/pull/19)) | No difference the bench can resolve (±4% noise). An earlier +12.4% figure was a thrust-stand artifact and was withdrawn. |
+| Commutation jitter | Upstream figures from 07-02 ([#30](https://github.com/ARK-Electronics/ARK32/pull/30)) | 30% throttle: 4.7% vs 9.1–9.9%. 60%: 18% vs 17–19%. 100%: 3.1% vs 2.1%. Different sessions. |
+| Low-rpm closed loop | Upstream changeover value on ARK ([#39](https://github.com/ARK-Electronics/ARK32/pull/39)) | 900 KV, no prop: closed loop from ~4% throttle instead of poll. |
+| Blind-step commutation | Earlier ARK firmware ([#41](https://github.com/ARK-Electronics/ARK32/pull/41)) | Performance-neutral. No blind steps in 82 healthy holds. |
+| Demag-late detection | Earlier ARK firmware ([#45](https://github.com/ARK-Electronics/ARK32/pull/45)) | 900 KV 10" on 6S, hot 20% snap starts: 6/6 mistimed at 12–15 A became 6/6 clean at 2 A. Not run on upstream. |
+
+The upstream numbers are in `hwci/baselines/ARK_4IN1_F051_HQ5136_upstream_main.json` on the `main_instrumented` branch.
 
 ### Gate driver sleep
 
@@ -58,6 +86,8 @@ On the ARK 4IN1 the DRV8328 is put to sleep (`nSLEEP`) when the ESC is not drivi
 
 ### Global refactor
 Large control-path split out of a monolithic `main.c` into focused modules (runtime, settings, motor control helpers, and related MCU/F051 work). The goal is safer changes, clearer ownership of hot paths, and room for instrumentation without growing one file forever.
+
+On the F051 the commutation interrupts and the 20 kHz loop run from RAM (`RAM_FUNC`, built `-O3`). Divisions in the 20 kHz loop were replaced with Q16 multiplies. The rest of the firmware builds with global `-Os` and LTO to fit flash ([`Makefile`](Makefile)); upstream builds with global `-O3`. Global `-O3` was tried here and broke the full-throttle hold on the ARK F051. See [Performance vs upstream](#performance-vs-upstream-what-is-measured) for what these changes measured.
 
 ### SITL (software-in-the-loop)
 Native Linux build of the firmware against a simulated motor / bridge / battery, with DroneCAN over multicast UDP. Useful for protocol, startup, and logic tests without ESC hardware.
