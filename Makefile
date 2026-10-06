@@ -51,6 +51,15 @@ CFLAGS_BASE += -Wall -Wundef -Wextra -Werror -Wno-unused-parameter -Wno-stringop
 
 CFLAGS_COMMON := $(CFLAGS_BASE)
 
+# Hardware-CI performance instrumentation (opt-in, off by default).
+# Build with `make <TARGET> HWCI_PERF=1` to emit the hwci_perf RAM struct that
+# the ARK32 hardware-CI harness reads over SWD for upstream-vs-ARK32 A/B runs.
+# Production/release builds leave this unset and are byte-identical to
+# upstream.
+ifeq ($(HWCI_PERF),1)
+CFLAGS_COMMON += -DHWCI_PERF
+endif
+
 # Linker options
 LDFLAGS_COMMON := -specs=nano.specs $(LIBS) -Wl,--gc-sections -Wl,--print-memory-usage
 
