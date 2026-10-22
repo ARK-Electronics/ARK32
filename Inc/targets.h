@@ -14,6 +14,7 @@
 #ifndef USE_MAKE
 // convenience defines for IDE builds without make - pick one board
 // #define ARK_4IN1_F051
+// #define MR_ESC_ARK32_A133
 // #define AM32_SITL_CAN
 #endif
 
@@ -100,6 +101,44 @@
 #	ifndef POLLING_MODE_THRESHOLD
 #		define POLLING_MODE_THRESHOLD 5000
 #	endif
+#endif
+
+/*
+ * MR-ESC-ARK32 (NXP MCXA133 mobile-robotics reference ESC).
+ *
+ * Board target for the NXP MR-ESC-ARK32 reference design. The MCU HAL and
+ * the MCXA133 pin/comparator/ADC map are reused unchanged from upstream
+ * AM32 (HARDWARE_GROUP_NXP_MCXA133 below); only the board-electrical scale
+ * factors and feature flags live here. This block mirrors upstream AM32's
+ * FRDM_A133 target, which is the same silicon.
+ *
+ * The FILE_NAME ends in _A133 so get_targets (make/tools.mk) discovers it
+ * and builds it with a133makefile.mk - no Makefile edit is required.
+ *
+ * VERIFY-ON-HARDWARE: the three analog scale factors below
+ * (TARGET_VOLTAGE_DIVIDER, MILLIVOLT_PER_AMP, CURRENT_OFFSET) are copied
+ * from FRDM_A133 and are only correct if the MR-ESC-ARK32 shield uses the
+ * same divider ratio and current-sense gain. Confirm against the
+ * MR-ESC-ARK32 schematic (voltage divider ratio, shunt value + amp gain,
+ * amp offset) before trusting telemetry/OV-OC behaviour. DEAD_TIME must
+ * match the gate driver on the board; FRDM_A133 uses 70 (dead-time in
+ * ns-equivalent ticks at the MCXA133 FlexPWM clock).
+ */
+#ifdef MR_ESC_ARK32_A133
+#	define FILE_NAME "MR_ESC_ARK32_A133"
+#	define FIRMWARE_NAME "MR-ESC-ARK32"
+#	define NEED_INPUT_READY
+#	define DEAD_TIME 70
+#	define HARDWARE_GROUP_NXP_MCXA133
+#	define TARGET_VOLTAGE_DIVIDER 100 // 10k / 100k, result in centivolts (VERIFY)
+#	define CURRENT_OFFSET 0	   // millivolts (VERIFY)
+#	define MILLIVOLT_PER_AMP 20	   // shunt + amp gain (VERIFY)
+#	define USE_SERIAL_TELEMETRY
+#	define USE_LED_STRIP
+#	define NUM_LEDS 1   // APA102 RGB LED count
+#	define BRIGHTNESS 3 // 0..31
+#	define RESET 0	     // unused, required for a clean build
+#	define TARGET_MIN_BEMF_COUNTS 3
 #endif
 
 /*
@@ -1929,10 +1968,10 @@
 
 #endif
 
-//NXP hardware group of the MCXA153
-#ifdef HARDWARE_GROUP_NXP_MCXA153
+//NXP hardware group of the MCXA133
+#ifdef HARDWARE_GROUP_NXP_MCXA133
 
-#	define MCU_A153
+#	define MCU_A133
 
 //This is the Dshot/PWM input pin
 #	define INPUT_PIN 2 //P1.2
@@ -2379,8 +2418,8 @@
 #	define USE_ADC
 #endif
 
-//NXP MCXA153/133
-#ifdef MCU_A153
+//NXP MCXA133/133
+#ifdef MCU_A133
 //#define STMICRO
 #	define NXP
 #	define CPU_FREQUENCY_MHZ 96 //Is the CPU/System clock, main_clk is 192MHz
