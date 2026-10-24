@@ -237,5 +237,16 @@ def test_dronecan_motor_kv_reaches_opt_out_only_explicitly(sitl_can_factory, mca
                 response = _request_wait(node, 10, request)
                 assert response is not None and int(response.value.integer_value) == 10220, kv
                 assert _fetch(client)[kv_offset] == 255, kv
+            # Value is a C union: a 20-byte string of NULs overlays its length
+            # byte on the integer and reads as 20 kV, the opt-out. Only an
+            # integer value may set the kV.
+            for value in (dronecan.uavcan.protocol.param.Value(string_value=bytes(20)),
+                          dronecan.uavcan.protocol.param.Value(real_value=20.0)):
+                request = dronecan.uavcan.protocol.param.GetSet.Request()
+                request.name = 'MOTOR_KV'
+                request.value = value
+                response = _request_wait(node, 10, request)
+                assert response is not None and int(response.value.integer_value) == 10220, value
+                assert _fetch(client)[kv_offset] == 255, value
         finally:
             node.close()

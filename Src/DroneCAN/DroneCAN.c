@@ -353,9 +353,12 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 					 * instead of wrapping them into the byte (10260 would
 					 * store 0). Raw 0 opts out of low-RPM protection
 					 * (settings.c), so only an explicit 20 kV selects it;
-					 * 21-59 kV store 60 kV and keep the limiter. */
+					 * 21-59 kV store 60 kV and keep the limiter. Check the
+					 * tag first: value is a union, and a string's length
+					 * byte would otherwise read as the integer. */
 					const int64_t kv = req.value.integer_value;
-					if (kv >= p->min_value && kv <= p->max_value) {
+					if (req.value.union_tag == UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE && kv >= p->min_value &&
+					    kv <= p->max_value) {
 						uint8_t raw = (uint8_t)((kv - 20) / 40);
 						if (raw == 0 && kv > 20) {
 							raw = 1;
