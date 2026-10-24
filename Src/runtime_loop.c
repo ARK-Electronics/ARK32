@@ -859,6 +859,7 @@ void runtimeMotorModeTick(void)
 			}
 
 		} else {
+			running = 0;
 			do_once_sinemode = 1;
 			if (eepromBuffer.brake_on_stop == 1) {
 #	ifndef PWM_ENABLE_BRIDGE
