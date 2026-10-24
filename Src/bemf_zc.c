@@ -411,6 +411,7 @@ RAM_FUNC void interruptRoutine()
 void bemfZcResetTrend(void)
 {
 	zc_trend = 0;
+	zc_trend_hold = 0;
 	zc_predicted = 0;
 }
 
