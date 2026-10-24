@@ -417,11 +417,12 @@ void setInput()
 #	ifndef PWM_ENABLE_BRIDGE
 							if (eepromBuffer.brake_on_stop == 1) {
 								prop_brake_duty_cycle = eepromBuffer.drag_brake_strength * 200;
+								/* Flag first, for full brake too, so gateDriverPoll will
+								 * not sleep the driver mid-brake. */
+								prop_brake_active = 1;
 								if (prop_brake_duty_cycle >= (1999)) {
 									fullBrake();
 								} else {
-									/* Flag first so gateDriverPoll will not sleep mid-brake. */
-									prop_brake_active = 1;
 									proportionalBrake(); /* gateDriverEnsure inside */
 								}
 							}
