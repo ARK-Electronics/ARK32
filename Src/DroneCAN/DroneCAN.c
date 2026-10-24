@@ -23,6 +23,7 @@
 #	include "phaseouts.h"
 #	include "functions.h"
 #	include "filter.h"
+#	include "dshot.h"
 
 // include the headers for the generated DroneCAN messages from the
 // dronecan_dsdlc compiler
@@ -624,7 +625,9 @@ static void handle_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer)
 	} else if (eepromBuffer.bidirectional_mode) {
 		const float scaled_value = input_can * (1000.0 / 8192);
 		if (scaled_value >= 0) {
-			this_input = (uint16_t)(1047 + scaled_value);
+			/* Forward starts at 1048. From 1047, commands +1..+8 truncated
+			 * to 1047, the top of the reverse band: full reverse throttle. */
+			this_input = (uint16_t)(DSHOT_3D_FORWARD_MIN_THROTTLE + scaled_value);
 		} else {
 			this_input = (uint16_t)(47 + scaled_value * -1);
 		}
