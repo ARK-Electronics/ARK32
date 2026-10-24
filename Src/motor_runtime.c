@@ -195,11 +195,11 @@ volatile uint32_t pwm_to_arr_scale_q16 = ((uint32_t)TIM1_AUTORELOAD << 16) / 200
 // Q16 input to duty cycle slopes, computed once at startup for setInput
 volatile uint32_t throttle_duty_slope_q16 = ((uint32_t)(2000 - DEAD_TIME) << 16) / (2047 - 47);
 volatile uint32_t sine_throttle_duty_slope_q16 = ((uint32_t)(2000 - (DEAD_TIME + 40)) << 16) / (2047 - 137);
-uint16_t TIMER1_MAX_ARR = TIM1_AUTORELOAD;   // maximum auto reset register value
-volatile uint16_t duty_cycle_maximum = 2000; // restricted by temperature or low rpm throttle protect
-uint16_t low_rpm_level = 20;		     // thousand erpm used to set range for throttle resrictions
-uint16_t high_rpm_level = 70;		     //
-uint16_t throttle_max_at_low_rpm = 400;
+uint16_t TIMER1_MAX_ARR = TIM1_AUTORELOAD;	  // maximum auto reset register value
+volatile uint16_t duty_cycle_maximum = 2000;	  // restricted by temperature or low rpm throttle protect
+uint16_t low_rpm_level = LOW_RPM_LEVEL_DEFAULT;	  // thousand erpm used to set range for throttle resrictions
+uint16_t high_rpm_level = HIGH_RPM_LEVEL_DEFAULT; //
+uint16_t throttle_max_at_low_rpm = THROTTLE_MAX_AT_LOW_RPM_DEFAULT;
 uint16_t throttle_max_at_high_rpm = 2000;
 
 volatile uint16_t commutation_intervals[6] = {0};

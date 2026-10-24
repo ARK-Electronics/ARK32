@@ -198,6 +198,11 @@ extern char dshot;
 extern uint8_t dshotcommand;
 extern uint8_t last_dshot_command;
 extern char play_tone_flag;
+/* Power-on low-RPM limiter values. loadEEpromSettings() resets to these
+ * before applying the EEPROM, so a reload never builds on the previous one. */
+#define LOW_RPM_LEVEL_DEFAULT 20
+#define HIGH_RPM_LEVEL_DEFAULT 70
+#define THROTTLE_MAX_AT_LOW_RPM_DEFAULT 400
 extern char low_rpm_throttle_limit;
 extern uint16_t low_rpm_level;
 extern uint16_t high_rpm_level;
