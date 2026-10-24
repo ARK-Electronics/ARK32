@@ -6,19 +6,38 @@ from sitl_gui_backend import EepromClient
 from test_dshot_programming import programmer
 
 
+def _advance_erpm_scale_q12(kv, poles):
+    # loadEEpromSettings(): the timing schedule's eRPM scale, 0 below 300 kV.
+    scale = (kv * poles * 256 // 12500) & 0xffff
+    return scale - (scale >> 4)
+
+
+@pytest.mark.parametrize('version', [3, 0])
 @pytest.mark.parametrize('poles', [0, 1, 2, 14, 46, 128, 129, 255])
-def test_flash_pole_count_is_sanitized(sitl_factory, workdir, poles):
+def test_flash_pole_count_is_sanitized(sitl_factory, workdir, poles, version):
     from pathlib import Path
+    from test_state_protocol import Watch, control_socket
     image = bytearray([255] * 192)
     for offset, _name, _lo, _hi, default, _help in sitl_params.PARAMS:
         image[offset] = default
     image[27] = poles
+    image[1] = version  # 0 skips the version-gated load policies
     path = Path(workdir) / 'pole-settings.bin'
     path.write_bytes(image)
     sitl = sitl_factory(extra_args=['--input-type', '1', '--eeprom', str(path)], can_uri='none')
+    expected = poles if 2 <= poles <= 128 else 14
     result, _ = EepromClient(port=sitl.state_port).fetch()
     assert result is not None, sitl.log_tail()
-    assert result[27] == (poles if 2 <= poles <= 128 else 14)
+    assert result[27] == expected
+    # The SITL CAN build's DroneCAN startup also range-checks the byte, after
+    # the loader has used it, so the byte alone cannot show where it was
+    # fixed. The loader's own output does: unsanitized poles leave the
+    # timing scale at 0 (the duty proxy) on both layout versions.
+    kv = image[26] * 40 + 20
+    with control_socket(sitl) as sock:
+        watch = Watch(sock, [(2, 'advance_erpm_scale_q12')])
+        watch.until(lambda: 0 in watch.values)
+    assert watch.values[0] == _advance_erpm_scale_q12(kv, expected), sitl.log_tail()
     assert sitl.proc.poll() is None, sitl.log_tail()
 
 
