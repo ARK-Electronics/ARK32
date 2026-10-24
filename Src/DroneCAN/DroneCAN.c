@@ -23,7 +23,9 @@
 #	include "phaseouts.h"
 #	include "functions.h"
 #	include "filter.h"
+#	include "comparator.h"
 #	include "dshot.h"
+#	include "esc_state.h"
 
 // include the headers for the generated DroneCAN messages from the
 // dronecan_dsdlc compiler
@@ -379,10 +381,17 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 
 		if (last_dir_reversed != eepromBuffer.direction_reversed || last_bi_direction != eepromBuffer.bidirectional_mode) {
 			// make direction_reversed and bidirectional_mode change work without
-			// reboot
+			// reboot. Stop driving first: clearing running alone stops
+			// commutation but leaves the last phase pair energized at the
+			// old duty, into a stalling rotor, for as long as nonzero
+			// commands keep the ESC from re-arming. The filter restarts at
+			// zero because bidirectional_mode changes what it filters.
+			allOff();
+			maskPhaseInterrupts();
+			duty_cycle_setpoint = 0;
 			forward = 1 - eepromBuffer.direction_reversed;
-			running = 0;
-			armed = 0;
+			escToDisarmed();
+			Filter2P_reset(0);
 			set_input(0);
 		}
 	}
