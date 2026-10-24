@@ -831,7 +831,6 @@ void runtimeMotorModeTick(void)
 				step_delay = map(input, 48, 120, 7000 / eepromBuffer.motor_poles, 810 / eepromBuffer.motor_poles);
 				delayMicros(step_delay);
 				e_rpm = 600 / step_delay; // in hundreds so 33 e_rpm is 3300 actual erpm
-				e_com_time = step_delay * 360;
 
 			} else {
 				do_once_sinemode = 1;
