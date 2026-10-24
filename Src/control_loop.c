@@ -258,13 +258,14 @@ void setInput()
 		input = FIXED_DUTY_MODE_POWER * 20 + DSHOT_CMD_MAX;
 #	else
 		if (eepromBuffer.sine_startup) {
+			/* The dead band must win: a live DShot programming write can
+			 * leave sine_mode_range at 0 (the load-time clamp has not run),
+			 * and the range test below would then map zero throttle to 160. */
 			if (adjusted_input < 30) { // dead band ?
 				input = 0;
-			}
-			if (adjusted_input > 30 && adjusted_input < (eepromBuffer.sine_mode_range * 20)) {
+			} else if (adjusted_input < (eepromBuffer.sine_mode_range * 20)) {
 				input = map(adjusted_input, 30, (eepromBuffer.sine_mode_range * 20), DSHOT_CMD_MAX, 160);
-			}
-			if (adjusted_input >= (eepromBuffer.sine_mode_range * 20)) {
+			} else {
 				input = map(adjusted_input, (eepromBuffer.sine_mode_range * 20), DSHOT_MAX_THROTTLE, 160,
 					    DSHOT_MAX_THROTTLE);
 			}
@@ -416,11 +417,12 @@ void setInput()
 #	ifndef PWM_ENABLE_BRIDGE
 							if (eepromBuffer.brake_on_stop == 1) {
 								prop_brake_duty_cycle = eepromBuffer.drag_brake_strength * 200;
+								/* Flag first, for full brake too, so gateDriverPoll will
+								 * not sleep the driver mid-brake. */
+								prop_brake_active = 1;
 								if (prop_brake_duty_cycle >= (1999)) {
 									fullBrake();
 								} else {
-									/* Flag first so gateDriverPoll will not sleep mid-brake. */
-									prop_brake_active = 1;
 									proportionalBrake(); /* gateDriverEnsure inside */
 								}
 							}
