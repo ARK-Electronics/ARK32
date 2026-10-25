@@ -23,6 +23,9 @@
 #	include "phaseouts.h"
 #	include "functions.h"
 #	include "filter.h"
+#	include "comparator.h"
+#	include "dshot.h"
+#	include "esc_state.h"
 
 // include the headers for the generated DroneCAN messages from the
 // dronecan_dsdlc compiler
@@ -378,10 +381,25 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 
 		if (last_dir_reversed != eepromBuffer.direction_reversed || last_bi_direction != eepromBuffer.bidirectional_mode) {
 			// make direction_reversed and bidirectional_mode change work without
-			// reboot
+			// reboot. Stop driving first: clearing running alone stops
+			// commutation but leaves the last phase pair energized at the
+			// old duty, into a stalling rotor, for as long as nonzero
+			// commands keep the ESC from re-arming. The filter restarts at
+			// zero because bidirectional_mode changes what it filters.
+			// Interrupts stay off until running is clear: a commutation
+			// or comparator interrupt in between would still see running
+			// and reconnect a phase pair.
+			const uint32_t primask = __get_PRIMASK();
+			__disable_irq();
+			allOff();
+			maskPhaseInterrupts();
+			duty_cycle_setpoint = 0;
 			forward = 1 - eepromBuffer.direction_reversed;
-			running = 0;
-			armed = 0;
+			escToDisarmed();
+			if (!primask) {
+				__enable_irq();
+			}
+			Filter2P_reset(0);
 			set_input(0);
 		}
 	}
@@ -568,6 +586,39 @@ extern void transfercomplete();
 extern void setInput();
 
 /*
+  Filter a bidirectional input as a signed command. The 3D encoding puts
+  reverse at 48..1047 and forward at 1048..2047, so filtering the encoded
+  value passes through the reverse band whenever forward throttle rises
+  from or falls to zero (at 2 Hz a positive command from rest spun the
+  rotor up in reverse first). The 2-pole filter also overshoots, so the
+  output never crosses zero away from the command: it keeps the sign it
+  already had or takes the command's.
+ */
+static uint16_t filter_bidirectional(uint16_t input)
+{
+	static int8_t last_sign;
+	float cmd = 0;
+	if (input >= DSHOT_3D_FORWARD_MIN_THROTTLE) {
+		cmd = input - DSHOT_3D_REVERSE_MAX; // 1..1000
+	} else if (input >= DSHOT_MIN_THROTTLE) {
+		cmd = -(float)(input - DSHOT_CMD_MAX); // -1..-1000
+	}
+	float out = Filter2P_apply(cmd, eepromBuffer.can_filter_hz, 1000);
+	const int8_t sign = out >= 1 ? 1 : (out <= -1 ? -1 : 0);
+	const int8_t cmd_sign = cmd > 0 ? 1 : (cmd < 0 ? -1 : 0);
+	if (sign == 0 || (sign != cmd_sign && sign != last_sign)) {
+		return 0;
+	}
+	last_sign = sign;
+	if (out > 1000) {
+		out = 1000;
+	} else if (out < -1000) {
+		out = -1000;
+	}
+	return sign > 0 ? (uint16_t)(DSHOT_3D_REVERSE_MAX + out) : (uint16_t)(DSHOT_CMD_MAX - out);
+}
+
+/*
   process throttle input from DroneCAN
  */
 static void set_input(uint16_t input)
@@ -579,7 +630,12 @@ static void set_input(uint16_t input)
 	}
 
 	const uint16_t unfiltered_input = (dronecan_armed || !eepromBuffer.can_require_arming) ? input : 0;
-	const uint16_t filtered_input = Filter2P_apply(unfiltered_input, eepromBuffer.can_filter_hz, 1000);
+	uint16_t filtered_input;
+	if (eepromBuffer.bidirectional_mode) {
+		filtered_input = filter_bidirectional(unfiltered_input);
+	} else {
+		filtered_input = Filter2P_apply(unfiltered_input, eepromBuffer.can_filter_hz, 1000);
+	}
 
 	newinput = filtered_input;
 	last_can_input = unfiltered_input;
@@ -624,7 +680,9 @@ static void handle_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer)
 	} else if (eepromBuffer.bidirectional_mode) {
 		const float scaled_value = input_can * (1000.0 / 8192);
 		if (scaled_value >= 0) {
-			this_input = (uint16_t)(1047 + scaled_value);
+			/* Forward starts at 1048. From 1047, commands +1..+8 truncated
+			 * to 1047, the top of the reverse band: full reverse throttle. */
+			this_input = (uint16_t)(DSHOT_3D_FORWARD_MIN_THROTTLE + scaled_value);
 		} else {
 			this_input = (uint16_t)(47 + scaled_value * -1);
 		}
