@@ -69,6 +69,34 @@ def _zc_fault(ctl, mode, duration_us):
     ctl.send(struct.pack('<HBBI', STATE_MAGIC_CMD, STATE_CMD_ZC_FAULT, mode, duration_us))
 
 
+def _established_with_hold_clear(sitl, sim, ctl, attempts):
+    # The hold needs k_erpm > low_rpm_level, not merely a turning rotor.
+    # Keep the existing 2000-rpm floor and require a stable 100-ms window:
+    # a single snapshot just past acquisition can still precede the next
+    # firmware pass that latches fault_run_established for desync reporting.
+    deadline = time.monotonic() + 12.0
+    stable_since = None
+    rpm = 0.0
+    while time.monotonic() < deadline:
+        s = _zc_stats(ctl)
+        rpm = rpm_from_state(sim, 0.2)
+        if (s['running'] and not s['old_routine'] and s['zero_crosses'] > 100
+                and s['dcm_hold_ms'] == 0 and rpm > 2000.0):
+            now = time.monotonic()
+            if stable_since is None:
+                stable_since = now
+            elif now - stable_since >= 0.1:
+                return s
+        else:
+            stable_since = None
+        time.sleep(0.02)
+    raise AssertionError(
+        'never reached stable established closed loop above 2000 rpm with '
+        'hold clear (last rpm=%.0f, last=%r; completed attempts '
+        '(before/after counter, hold)=%r)\n%s'
+        % (rpm, s, attempts, sitl.log_tail()))
+
+
 def test_ceiling_hold_engages_on_desync(sitl_factory, state_stream):
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     sim = state_stream(sitl)
@@ -85,70 +113,44 @@ def test_ceiling_hold_engages_on_desync(sitl_factory, state_stream):
         time.sleep(2.2)
         tx.value = 900
 
-        # Spin up into established closed loop: the hold only arms when the
-        # ceiling being frozen was earned at a real rpm (k_erpm >
-        # low_rpm_level), so a stationary or barely-turning rotor is not a
-        # valid starting condition for this test.
-        RPM_MIN = 2000.0
-        deadline = time.time() + 12.0
-        pre = None
-        rpm = 0.0
-        while time.time() < deadline:
-            s = _zc_stats(ctl)
-            if s['running'] and not s['old_routine'] and s['zero_crosses'] > 100:
-                # Short sample; poll until the rotor is clearly above idle so
-                # a single slow window on a busy CI host cannot flake out.
-                #
-                # RPM_MIN must clear the hold's own ARM GATE, not just idle.
-                # The gate is k_erpm > low_rpm_level, and low_rpm_level =
-                # motor_kv * poles / 3200 (settings.c) = 900 * 14 / 3200 = 3
-                # for this model, so k_erpm must reach 4. k_erpm is
-                # mech_rpm * pole_pairs / 1000, i.e. ~571 mech rpm - well
-                # above a 300 gate. Injecting the fault below the arm gate
-                # would leave the hold legitimately un-armed and fail the
-                # test against the firmware, so keep ~4x headroom.
-                rpm = rpm_from_state(sim, 0.2)
-                if rpm > RPM_MIN:
-                    # Spin-up desyncs (common on loaded CI) arm the hold for
-                    # DCM_HOLD_MS (~50 ms). Wait until it expires so the
-                    # injected-fault arming is unambiguous.
-                    if s['dcm_hold_ms'] == 0:
-                        pre = s
-                        break
-            time.sleep(0.02)
-        assert pre is not None, (
-            'never reached established closed loop above %.0f rpm with '
-            'hold clear (last rpm=%.0f, last=%r)\n%s'
-            % (RPM_MIN, rpm, _zc_stats(ctl), sitl.log_tail()))
-        assert pre['dcm_hold_ms'] == 0, 'hold already armed before any desync: %r' % pre
-
-        # Suppress comparator edge delivery long enough to force a desync
-        # rather than a bridgeable dropout: the interval jump has to exceed
-        # the 50% jump check in runtimeProcessDesyncCheck.
-        ci_us = max(pre['commutation_interval'] // 2, 100)
         seen_hold = 0
         seen_value = 0
         saw_desync = False
-        # Longer blackouts: the inertial comparator plant can bridge a short
-        # drop without a jump-desync, so scale with CI and floor at 80 ms.
-        fault_us = max(80 * ci_us, 80_000)
+        attempts = []
         for _ in range(10):
+            # A blackout can take the blind-step/stall path instead of the
+            # jump check. Reacquire before trying again: injecting into the
+            # startup that follows a stall can arm the hold on an acquisition
+            # jump without incrementing the established-run desync counter.
+            _zc_fault(ctl, mode=0, duration_us=0)
+            pre = _established_with_hold_clear(sitl, sim, ctl, attempts)
+            ci_us = max(pre['commutation_interval'] // 2, 100)
+            fault_us = max(80 * ci_us, 80_000)
+            attempt_hold = 0
+            attempt_value = 0
+            attempt_desync = False
             _zc_fault(ctl, mode=1, duration_us=fault_us)
-            probe_end = time.time() + 0.5
-            while time.time() < probe_end:
+            probe_end = time.monotonic() + 0.5
+            while time.monotonic() < probe_end:
                 s = _zc_stats(ctl)
-                seen_hold = max(seen_hold, s['dcm_hold_ms'])
-                seen_value = max(seen_value, s['dcm_hold_value'])
+                attempt_hold = max(attempt_hold, s['dcm_hold_ms'])
+                attempt_value = max(attempt_value, s['dcm_hold_value'])
                 if s['desync_happened'] > pre['desync_happened']:
-                    saw_desync = True
-            if seen_hold:
+                    attempt_desync = True
+            attempts.append((pre['desync_happened'], s['desync_happened'],
+                             attempt_hold))
+            if attempt_desync:
+                saw_desync = True
+                seen_hold = max(seen_hold, attempt_hold)
+                seen_value = max(seen_value, attempt_value)
+            # Both observations must come from the same established attempt.
+            if attempt_desync and attempt_hold:
                 break
-            # clear any residual hold before the next inject
-            time.sleep(0.1)
 
         assert saw_desync, (
             'fault injection never produced a desync, so the hold was never '
-            'given a chance to arm\n' + sitl.log_tail())
+            'given a chance to arm (before/after counter, hold: %r)\n%s'
+            % (attempts, sitl.log_tail()))
         assert seen_hold > 0, (
             'THE HOLD NEVER ARMED. dcm_hold_ms stayed 0 across desyncs - '
             'this is the exact no-op the first revision of PR #62 shipped. '

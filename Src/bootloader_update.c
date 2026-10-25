@@ -6,7 +6,8 @@
  * only on full success.
  *
  * The image itself is a committed .bin pulled in by Src/bl_image.S; this file
- * only sees its bounds. F051 embeds by default (including HWCI_PERF=1); use
+ * only sees its bounds. F051 embeds on release builds; G431 CAN always embeds
+ * so a manual or PX4 app flash still refreshes the on-chip BL. Use
  * EMBED_BOOTLOADER=0 or NO_EMBED_BL=1 to omit the image and this logic.
  */
 
@@ -21,7 +22,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#if defined(EMBED_BOOTLOADER) && defined(MCU_F051)
+#if defined(EMBED_BOOTLOADER) && (defined(MCU_F051) || defined(MCU_G431))
 
 /*
  * Bounds of the image assembled by Src/bl_image.S, defined by the .bl_image
@@ -37,11 +38,44 @@ extern const uint8_t _bl_image_end[];
 #		define MCU_FLASH_START 0x08000000u
 #	endif
 
-/* F051 page = 1 KiB; erase runs when address is page-aligned in save_flash_nolib. */
-#	define BL_PAGE_BYTES 1024u
+/*
+ * Erase runs when address is page-aligned in save_flash_nolib.
+ * F051: 1 KiB pages. G431: 2 KiB pages (single-bank 128 KiB).
+ */
+#	if defined(MCU_G431)
+#		define BL_PAGE_BYTES 2048u
+#	else
+#		define BL_PAGE_BYTES 1024u
+#	endif
 #	define BL_CHUNK_BYTES 256u
 /* Per-page program/verify attempts before aborting the whole update. */
 #	define BL_MAX_PAGE_ATTEMPTS 4u
+
+/*
+ * G431 I/D flash caches are on at reset (FLASH_ACR ICEN|DCEN). A verify
+ * memcmp after program can hit a stale D-cache line; the retry path then
+ * re-reads the same addresses and turns one transient fail into a 4-strike
+ * abort with a half-written BL page. F051 has no D-cache.
+ */
+#	if defined(MCU_G431)
+static void flash_flush_caches(void)
+{
+	if ((FLASH->ACR & FLASH_ACR_DCEN) != 0u) {
+		FLASH->ACR &= ~FLASH_ACR_DCEN;
+		FLASH->ACR |= FLASH_ACR_DCRST;
+		FLASH->ACR &= ~FLASH_ACR_DCRST;
+		FLASH->ACR |= FLASH_ACR_DCEN;
+	}
+	if ((FLASH->ACR & FLASH_ACR_ICEN) != 0u) {
+		FLASH->ACR &= ~FLASH_ACR_ICEN;
+		FLASH->ACR |= FLASH_ACR_ICRST;
+		FLASH->ACR &= ~FLASH_ACR_ICRST;
+		FLASH->ACR |= FLASH_ACR_ICEN;
+	}
+}
+#	else
+static void flash_flush_caches(void) {}
+#	endif
 
 void maybe_update_bootloader(void)
 {
@@ -66,9 +100,10 @@ void maybe_update_bootloader(void)
 	RELOAD_WATCHDOG_COUNTER();
 
 	/*
-	 * Same flash bank as this code on F051, but we only erase/program the
-	 * bootloader pages below the app. Disable IRQs so no vector fetch races
-	 * a half-written state mid-chunk (mirrors AM32-bootloader bl_update).
+	 * Same flash bank as this code (F051 32 KiB; G431 128 KiB single-bank),
+	 * but we only erase/program the bootloader pages below the app.
+	 * Disable IRQs so no vector fetch races a half-written state mid-chunk
+	 * (mirrors AM32-bootloader bl_update).
 	 */
 	__disable_irq();
 
@@ -94,6 +129,7 @@ void maybe_update_bootloader(void)
 
 		RELOAD_WATCHDOG_COUNTER();
 		save_flash_nolib(src, (int)chunk, addr);
+		flash_flush_caches();
 
 		if (memcmp((const void *)(uintptr_t)addr, &want[off], chunk) != 0) {
 			/*
@@ -116,6 +152,7 @@ void maybe_update_bootloader(void)
 	}
 
 	/* Reset only when the full BL region matches the embedded image. */
+	flash_flush_caches();
 	if (memcmp(have, want, len) == 0) {
 		/* Next boot plays a short success chirp before the normal tune. */
 		bootSoundMarkBootloaderUpdated();
@@ -127,11 +164,11 @@ void maybe_update_bootloader(void)
 	RELOAD_WATCHDOG_COUNTER();
 }
 
-#else /* !EMBED_BOOTLOADER || !MCU_F051 */
+#else /* !EMBED_BOOTLOADER || !(MCU_F051 || MCU_G431) */
 
 void maybe_update_bootloader(void)
 {
-	/* Not embedded (HWCI) or MCU not supported in this prototype. */
+	/* Not embedded (kill switch / F051 HWCI) or MCU not supported. */
 }
 
 #endif

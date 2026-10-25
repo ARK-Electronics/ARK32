@@ -23,6 +23,11 @@ import struct
 import sys
 from pathlib import Path
 
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from px4_uavcan_image import DESC_LEN, find_descriptor, unpack_desc
+
 sys.path.insert(0, str(Path(__file__).resolve().parent / "eeprom"))
 from schema import default_bytes, from_raw, load_schema, raw_range, resolve_schema, to_raw, build_context
 
@@ -39,6 +44,15 @@ APP_REGION_SIZE = 27 * 1024  # ends at EEPROM_OFFSET
 EEPROM_OFFSET = 0x7C00
 EEPROM_PAGE_SIZE = 1 * 1024
 EEPROM_SETTINGS_SIZE = _SCHEMA['bufferSize']
+
+DEFAULT_FLASH_MAP = {
+    "flash_size": FLASH_SIZE,
+    "bl_offset": BL_OFFSET,
+    "bl_region_size": BL_REGION_SIZE,
+    "app_offset": APP_OFFSET,
+    "eeprom_offset": EEPROM_OFFSET,
+    "eeprom_page_size": EEPROM_PAGE_SIZE,
+}
 
 assert BL_REGION_SIZE + APP_REGION_SIZE + EEPROM_PAGE_SIZE == FLASH_SIZE
 assert APP_OFFSET == BL_OFFSET + BL_REGION_SIZE
@@ -105,12 +119,44 @@ def encode_servo_neutral_us(us):
     return _encode_field(_FIELDS["servoNeutral"], us)
 
 
+def resolve_flash_map(defaults: dict) -> dict:
+    """Merge the product's flash_map over the F051 default map; validate sizes."""
+    m = dict(DEFAULT_FLASH_MAP)
+    raw = defaults.get("flash_map") or {}
+    for k in DEFAULT_FLASH_MAP:
+        if k in raw:
+            m[k] = int(raw[k])
+    flash, bl_off, bl_sz = m["flash_size"], m["bl_offset"], m["bl_region_size"]
+    app_off, ee_off, ee_sz = m["app_offset"], m["eeprom_offset"], m["eeprom_page_size"]
+    if bl_off != 0:
+        raise FactoryImageError("flash_map.bl_offset must be 0")
+    if app_off != bl_off + bl_sz:
+        raise FactoryImageError(
+            f"flash_map: app_offset 0x{app_off:X} != bl_offset+bl_region_size "
+            f"0x{bl_off + bl_sz:X}"
+        )
+    if ee_off + ee_sz > flash:
+        raise FactoryImageError(
+            f"flash_map: eeprom ends past flash_size "
+            f"(0x{ee_off + ee_sz:X} > 0x{flash:X})"
+        )
+    if ee_off < app_off:
+        raise FactoryImageError("flash_map: eeprom_offset before app_offset")
+    m["app_region_size"] = ee_off - app_off
+    return m
+
+
 def build_eeprom_page(defaults: dict, version_major: int, version_minor: int,
-                      eeprom_version: int) -> bytes:
+                      eeprom_version: int, page_size: int = EEPROM_PAGE_SIZE) -> bytes:
     """Build the exact product page over the schema's historical erase prefix."""
+    if page_size < EEPROM_SETTINGS_SIZE:
+        raise FactoryImageError(
+            f"flash_map.eeprom_page_size {page_size} is smaller than the "
+            f"{EEPROM_SETTINGS_SIZE} byte settings block"
+        )
     fields = resolve_schema(_SCHEMA, eeprom_version, (version_major, version_minor))["fields"]
     prefix = default_bytes(_SCHEMA, eeprom_version, (version_major, version_minor))
-    buf = bytearray(b"\xff" * EEPROM_PAGE_SIZE)
+    buf = bytearray(b"\xff" * page_size)
     buf[:len(prefix)] = prefix
     stamps = {"eepromVersion": eeprom_version, "firmwareMajor": version_major,
               "firmwareMinor": version_minor}
@@ -121,6 +167,10 @@ def build_eeprom_page(defaults: dict, version_major: int, version_minor: int,
             continue
         key = field["factory"]["key"]
         if key not in defaults["settings"]:
+            # An optional key is one only some products have (the CAN block on
+            # a board with no CAN bus); its bytes stay erased.
+            if field["factory"].get("optional"):
+                continue
             raise FactoryImageError(f"missing factory setting: {key}")
         raw = _encode_field(field, defaults["settings"][key])
         offset, size = field["offset"], field["size"]
@@ -133,7 +183,9 @@ def decode_summary(page: bytes) -> list[str]:
     fields = resolve_schema(_SCHEMA, page[1], (page[3], page[4]))["fields"]
     return [f"eeprom_version={page[1]} fw={page[3]}.{page[4]}"] + [
         f"{field['factory']['key']}={from_raw(field, page[field['offset']])} {field.get('unit', '')}".rstrip()
-        for field in fields.values() if "factory" in field]
+        for field in fields.values()
+        if "factory" in field and not (field["factory"].get("optional")
+                                       and page[field["offset"]] == 0xFF)]
 
 
 def place_region(image: bytearray, offset: int, region_size: int, data: bytes,
@@ -147,11 +199,13 @@ def place_region(image: bytearray, offset: int, region_size: int, data: bytes,
     # remainder of region already 0xFF
 
 
-def build_full_image(bootloader: bytes, app: bytes, eeprom_page: bytes) -> bytes:
-    image = bytearray([0xFF] * FLASH_SIZE)
-    place_region(image, BL_OFFSET, BL_REGION_SIZE, bootloader, "bootloader")
-    place_region(image, APP_OFFSET, APP_REGION_SIZE, app, "application")
-    place_region(image, EEPROM_OFFSET, EEPROM_PAGE_SIZE, eeprom_page, "eeprom")
+def build_full_image(bootloader: bytes, app: bytes, eeprom_page: bytes,
+                     fmap: dict | None = None) -> bytes:
+    fmap = fmap or {**DEFAULT_FLASH_MAP, "app_region_size": APP_REGION_SIZE}
+    image = bytearray([0xFF] * fmap["flash_size"])
+    place_region(image, fmap["bl_offset"], fmap["bl_region_size"], bootloader, "bootloader")
+    place_region(image, fmap["app_offset"], fmap["app_region_size"], app, "application")
+    place_region(image, fmap["eeprom_offset"], fmap["eeprom_page_size"], eeprom_page, "eeprom")
     return bytes(image)
 
 
@@ -188,8 +242,10 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--defaults", type=Path, required=True,
                    help="factory/*_eeprom_defaults.json")
-    p.add_argument("--bootloader", type=Path, required=True,
-                   help="Bootloaders/AM32_F051_BOOTLOADER_*.bin")
+    p.add_argument("--bootloader", type=Path, default=None,
+                   help="Bootloaders/AM32_*_BOOTLOADER_*.bin")
+    p.add_argument("--allow-empty-bootloader", action="store_true",
+                   help="leave the bootloader region erased if --bootloader is absent")
     p.add_argument("--app", type=Path, required=True,
                    help="obj/ARK32_ARK_4IN1_F051_*.bin application image")
     p.add_argument("--version-h", type=Path, default=Path("Inc/version.h"))
@@ -211,11 +267,37 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
-    eeprom_page = build_eeprom_page(defaults, ver_maj, ver_min, eeprom_ver)
-    bootloader = args.bootloader.read_bytes()
+    fmap = resolve_flash_map(defaults)
+    eeprom_page = build_eeprom_page(defaults, ver_maj, ver_min, eeprom_ver,
+                                    fmap["eeprom_page_size"])
+    if args.bootloader is not None:
+        bootloader = args.bootloader.read_bytes()
+    elif args.allow_empty_bootloader:
+        print("warning: no bootloader image; leaving the region erased",
+              file=sys.stderr)
+        bootloader = b""
+    else:
+        raise FactoryImageError(
+            "--bootloader is required (or pass --allow-empty-bootloader)")
     app = args.app.read_bytes()
 
-    image = build_full_image(bootloader, app, eeprom_page)
+    image = build_full_image(bootloader, app, eeprom_page, fmap)
+
+    # PX4 globs the SD-card root for *.bin and flashes anything carrying a live
+    # APDescriptor at the *app* base. A full-flash image starts at the
+    # bootloader, so ingesting one would write 128 KiB off the end of G431
+    # flash. Refuse to emit it under a name PX4 will pick up.
+    if args.out_bin.name.endswith(".bin"):
+        off = find_descriptor(image)
+        if off >= 0:
+            d = unpack_desc(image[off:off + DESC_LEN])
+            if d["image_crc"] != 0:
+                raise FactoryImageError(
+                    f"{args.out_bin}: PX4 will ingest any SD-card-root *.bin "
+                    f"with a live APDescriptor (found at 0x{off:x}, "
+                    f"board_id={d['board_id']}). Write this image as "
+                    f".factory.img (or .factory.hex), never .bin."
+                )
 
     args.out_bin.parent.mkdir(parents=True, exist_ok=True)
     args.out_bin.write_bytes(image)
@@ -235,8 +317,10 @@ def main(argv: list[str] | None = None) -> int:
     for line in decode_summary(eeprom_page):
         print(f"  {line}")
     print(
-        f"regions: bl={len(bootloader)}B app={len(app)}B "
-        f"eeprom_settings={EEPROM_SETTINGS_SIZE}B"
+        f"regions: bl={len(bootloader)}B/{fmap['bl_region_size']}B "
+        f"app={len(app)}B/{fmap['app_region_size']}B "
+        f"eeprom@0x{fmap['eeprom_offset']:X} "
+        f"settings={EEPROM_SETTINGS_SIZE}B page={fmap['eeprom_page_size']}B"
     )
     return 0
 

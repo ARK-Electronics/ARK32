@@ -7,6 +7,8 @@
 
 #include "adc_app.h"
 
+#include <stdint.h>
+
 #include "ADC.h"
 #include "motor_runtime.h"
 #include "control_loop.h"
@@ -61,12 +63,28 @@ void adcAppServiceConversion(void)
 	const int32_t smoothed_raw_current = getSmoothedCurrent();
 #ifdef NXP
 	battery_voltage = ((7 * battery_voltage) + ((ADC_raw_volts * 3300 / 65535 * VOLTAGE_DIVIDER) / 100)) / 8;
-	actual_current = (((smoothed_raw_current * 3300 / 65535) - CURRENT_OFFSET) * 100) / (MILLIVOLT_PER_AMP);
+	int32_t current_ca = (((smoothed_raw_current * 3300 / 65535) - CURRENT_OFFSET) * 100) / (MILLIVOLT_PER_AMP);
 #else
 	battery_voltage = ((7 * battery_voltage) + ((ADC_raw_volts * 3300 / 4095 * VOLTAGE_DIVIDER) / 100)) >> 3;
-	actual_current = ((smoothed_raw_current * 3300 / 41) - (CURRENT_OFFSET * 100)) / (MILLIVOLT_PER_AMP);
+	int32_t current_ca = ((smoothed_raw_current * 3300 / 41) - (CURRENT_OFFSET * 100)) / (MILLIVOLT_PER_AMP);
 #endif
-	if (actual_current < 0) {
-		actual_current = 0;
+	/*
+	 * SATURATE, do not wrap. actual_current is int16_t centiamps, so it
+	 * tops out at 327.67 A - and on a low-gain shunt the sense chain can
+	 * read past that: at MILLIVOLT_PER_AMP 10 (ARK_G431_CAN, ARK_4IN1_F051)
+	 * full ADC scale is (4095*3300/41)/10 = 329.6 A, so raw >= 4071 used to
+	 * overflow negative and land on the "< 0" clamp below as ZERO amps.
+	 *
+	 * That inverts every consumer at the one moment they matter: the
+	 * current limiter would release its ceiling, the nFAULT classifier
+	 * would stop calling it OCP, and telemetry would report an idle ESC,
+	 * all at >326 A. Clamping to INT16_MAX keeps the reading pinned high
+	 * instead, which is the direction that fails safe.
+	 */
+	if (current_ca < 0) {
+		current_ca = 0;
+	} else if (current_ca > INT16_MAX) {
+		current_ca = INT16_MAX;
 	}
+	actual_current = (int16_t)current_ca;
 }

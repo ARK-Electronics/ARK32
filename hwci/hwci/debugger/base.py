@@ -1,9 +1,12 @@
 """Debugger backend abstraction.
 
 A :class:`Debugger` flashes firmware and performs *background* (non-halting)
-memory reads/writes over SWD while the MCU runs. That background access is the
-only way to read CPU-load / loop-time data off the STM32F051, whose Cortex-M0
-core has no SWO/ITM/DWT trace hardware.
+memory reads/writes over SWD while the MCU runs.
+
+On STM32F051 (Cortex-M0) there is no SWO/ITM/DWT, so instrumentation is a
+RAM ``hwci_perf`` struct polled over AHB-AP. On STM32G4 (Cortex-M4) the same
+poll path still works and is faster (higher SWD clock); SWO/ITM remain
+optional extras — the harness does not require them.
 
 Both the OpenOCD (ST-Link) backend and a J-Link backend would implement this
 interface; :class:`MockDebugger` implements it in-process for offline tests and

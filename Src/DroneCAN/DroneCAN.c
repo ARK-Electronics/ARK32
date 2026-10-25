@@ -23,10 +23,43 @@
 #	include "phaseouts.h"
 #	include "functions.h"
 #	include "filter.h"
+#	include "debug_uart.h"
+#	include "settings.h"
+#	include "motor_runtime.h"
+#	include "esc_state.h"
 
 // include the headers for the generated DroneCAN messages from the
 // dronecan_dsdlc compiler
 #	include "dsdl_generated/dronecan_msgs.h"
+
+#	if CANARD_ENABLE_CANFD
+static bool dronecan_tx_canfd;
+
+static void dc_note_rx_frame(const CanardCANFrame *f)
+{
+	/* Latch CAN FD TX on the first FD frame. Classic DNA/NodeStatus on
+	 * an FD bus must not flip Status and telemetry back to classic. */
+	if (f->canfd) {
+		dronecan_tx_canfd = true;
+	}
+}
+
+#		define DC_BROADCAST(...) canardBroadcast(__VA_ARGS__, dronecan_tx_canfd)
+#		define DC_RESPOND(...) canardRequestOrRespond(__VA_ARGS__, dronecan_tx_canfd)
+#	else
+static void dc_note_rx_frame(const CanardCANFrame *f)
+{
+	(void)f;
+}
+#		define DC_BROADCAST canardBroadcast
+#		define DC_RESPOND canardRequestOrRespond
+#	endif
+
+#	if CANARD_ENABLE_TAO_OPTION
+#		define DC_ENCODE(fn, pkt, buf) fn((pkt), (buf), !dronecan_tx_canfd)
+#	else
+#		define DC_ENCODE(fn, pkt, buf) fn((pkt), (buf))
+#	endif
 
 #	ifndef PREFERRED_NODE_ID
 #		define PREFERRED_NODE_ID 0
@@ -49,6 +82,11 @@ static bool done_startup;
 
 #	define APP_SIGNATURE_MAGIC1 0x68f058e6
 #	define APP_SIGNATURE_MAGIC2 0xafcee5a0
+
+#	ifndef DRONECAN_HW_VERSION_MAJOR
+#		define DRONECAN_HW_VERSION_MAJOR 0
+#		define DRONECAN_HW_VERSION_MINOR 71
+#	endif
 
 /*
   application signature, filled in by set_app_signature.py
@@ -73,6 +111,57 @@ const struct {
 	.crc1 = 0,
 	.crc2 = 0,
 	.mcu = AM32_MCU,
+};
+
+/*
+  PX4 APDescriptor (APDesc00). PX4 copies any SD-card-root .bin whose first
+  1 KiB contains this block to /ufw/<board_id>.bin and flashes nodes whose
+  GetNodeInfo hardware_version matches board_id = (hw_major << 8) | hw_minor.
+
+  CRCs / image_size / git_hash are filled by scripts/px4_uavcan_image.py
+  *before* set_app_signature.py so the AM32 bootloader CRC stays valid.
+  GetNodeInfo reads image_crc back so PX4 does not re-flash every boot.
+  volatile: those fields are 0 at compile time; without it LTO folds
+  GetNodeInfo into literal zeros and PX4 sees image_crc == 0 forever.
+ */
+#	define PX4_APDESC_SIGNATURE_0 0x40
+#	define PX4_APDESC_SIGNATURE_1 0xa2
+#	define PX4_APDESC_SIGNATURE_2 0xe4
+#	define PX4_APDESC_SIGNATURE_3 0xf1
+#	define PX4_APDESC_SIGNATURE_4 0x64
+#	define PX4_APDESC_SIGNATURE_5 0x68
+#	define PX4_APDESC_SIGNATURE_6 0x91
+#	define PX4_APDESC_SIGNATURE_7 0x06
+
+struct px4_app_descriptor {
+	uint8_t signature[8];
+	union {
+		uint64_t image_crc;
+		struct {
+			uint32_t crc32_block1;
+			uint32_t crc32_block2;
+		};
+	};
+	uint32_t image_size;
+	uint32_t git_hash;
+	uint8_t major_version;
+	uint8_t minor_version;
+	uint16_t board_id;
+	uint8_t reserved[8];
+} __attribute__((packed));
+
+_Static_assert(sizeof(struct px4_app_descriptor) == 36, "PX4 APDescriptor must be 36 bytes");
+
+const volatile struct px4_app_descriptor px4_app_descriptor __attribute__((used, aligned(8))) AM32_FLASH_SECTION(".px4_app_descriptor") = {
+	.signature = {PX4_APDESC_SIGNATURE_0, PX4_APDESC_SIGNATURE_1, PX4_APDESC_SIGNATURE_2, PX4_APDESC_SIGNATURE_3,
+		      PX4_APDESC_SIGNATURE_4, PX4_APDESC_SIGNATURE_5, PX4_APDESC_SIGNATURE_6, PX4_APDESC_SIGNATURE_7},
+	.image_crc = 0,
+	.image_size = 0,
+	.git_hash = 0,
+	.major_version = VERSION_MAJOR,
+	.minor_version = VERSION_MINOR,
+	.board_id = (uint16_t)((DRONECAN_HW_VERSION_MAJOR << 8) | DRONECAN_HW_VERSION_MINOR),
+	.reserved = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
 };
 
 enum VarType {
@@ -110,6 +199,7 @@ static struct PACKED {
 } debug1;
 
 static void can_printf(const char *fmt, ...);
+static uint32_t millis32(void);
 
 // some convenience macros
 #	define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -175,7 +265,8 @@ static void load_settings(void)
 			case T_BOOL:
 			case T_UINT8: {
 				uint8_t *pvalue = (uint8_t *)p->ptr;
-				uint8_t max_value = p->max_value;
+				/* uint16: CURRENT_P/D advertise 510 (Kp = byte * 2). */
+				uint16_t max_value = p->max_value;
 				if (pvalue == &eepromBuffer.current_limit) {
 					max_value = max_value / 2;
 				}
@@ -201,6 +292,25 @@ static void save_settings(void)
 {
 	saveEEpromSettings();
 	can_printf("saved settings");
+	debugUartPrint("param: saved settings\r\n");
+}
+
+/*
+  pending deferred save state. Param sets only mark settings dirty;
+  the main DroneCAN_update loop coalesces bursts into a single flash
+  write once the bus has been quiet for SETTINGS_SAVE_QUIET_MS.
+  (from am32-firmware/AM32#359)
+ */
+#	define SETTINGS_SAVE_QUIET_MS 500
+static struct {
+	bool dirty;
+	uint32_t last_change_ms;
+} pending_save;
+
+static void mark_settings_dirty(void)
+{
+	pending_save.dirty = true;
+	pending_save.last_change_ms = millis32();
 }
 
 /*
@@ -268,15 +378,86 @@ static uint32_t millis32(void)
   default settings, based on public/assets/eeprom_default.bin in AM32 configurator
   update to 2.19 default
  */
+/* The erase skeleton is generated from schema/eeprom.json: the 48 byte AM32
+ * configurator image, byte-for-byte, so schema/eeprom-defaults.hex and the
+ * factory pages stay what the configurator expects.
+ *
+ * It is NOT the protection envelope this product ships. Upstream carries
+ * 0x8d (141) and 0x66 (102) at bytes 43/44, both just OUTSIDE the ranges
+ * settings.c arms (70..140 C, 1..100 raw = 2..200 A), so the stock image
+ * silently disables both limiters - and a DroneCAN param ERASE memcpy's it
+ * back over the page. Leaving it at that would mean "restore defaults"
+ * quietly turns the protections off on a shipped ESC: the one config change
+ * nobody would think to re-check. Byte 46 (input_type) is upstream's DShot,
+ * which on a CAN-only board would take the ESC off the bus.
+ *
+ * apply_post_skeleton_defaults() therefore re-applies this target's shipped
+ * values from the TARGET_DEFAULT_* macros in targets.h after the memcpy. It
+ * is per-target on purpose: SITL keeps the generic defaults, ARK_G431_CAN
+ * gets 105 C over a 15 C band and 100 raw = 200 A.
+ *
+ * 105 C: foldback onset, in line with professional 12S practice (APD/T-Motor
+ * derate around 110) and inside the G4 die sensor's factory calibration span
+ * (30..110 C). CAVEAT worth carrying: those vendors read an NTC on the power
+ * stage, this reads the MCU die, and the die-to-FET delta on this board has
+ * not been benched - if it turns out large, the onset belongs lower.
+ * 100 raw = 200 A: the highest the enable gate accepts, ~80% of the ARK 12S
+ * shunt rating, and above anything a healthy craft draws - a backstop, not a
+ * flight limiter.
+ *
+ * Agreement between the macros and each product JSON is gated by
+ * scripts/check-erase-defaults.py in CI.
+ *
+ * NOTE the skeleton is still upstream's everywhere else, so an erase also
+ * reverts e.g. byte 5 max_ramp to 0xa0 (16 %/ms) rather than the ARK 2 %/ms.
+ * That is a pre-existing hole in the erase path and wants its own fix.
+ */
 #	include "eeprom_defaults.h"
 
+/*
+  Bytes an erase has to restore that the 48 byte configurator skeleton either
+  gets wrong for this product (43/44/46) or does not reach at all (184).
+  Keep the skeleton itself untouched so it stays configurator-compatible.
+ */
+static void apply_post_skeleton_defaults(EEprom_t *e)
+{
+	e->temperature_limit = TARGET_DEFAULT_TEMPERATURE_LIMIT;
+	e->current_limit = TARGET_DEFAULT_CURRENT_LIMIT;
+	e->can_temp_derate_band = TARGET_DEFAULT_TEMP_DERATE_BAND;
+	/* AUTO: first available of DShot/PWM, with DroneCAN prioritised while the
+	 * RawCommand stream is live (see DroneCAN_active). Never leave a CAN-only
+	 * board on upstream's DShot default. */
+	e->input_type = TARGET_DEFAULT_INPUT_TYPE;
+}
+
+/*
+  The page a param ERASE leaves behind: the configurator skeleton with this
+  target's corrections applied. Everything that has to agree on "the default"
+  reads this - the erase itself, the default_value GetSet advertises, and the
+  SITL seed image - so a GCS "reset to default" cannot write something the
+  erase would not.
+ */
+static const uint8_t *erase_image(void)
+{
+	static EEprom_t image;
+	static uint8_t built;
+	if (!built) {
+		memset(image.buffer, 0xff, sizeof(image.buffer));
+		memcpy(image.buffer, default_settings, sizeof(default_settings));
+		apply_post_skeleton_defaults(&image);
+		built = 1;
+	}
+	return image.buffer;
+}
+
 #	ifdef MCU_SITL
-// let the SITL eeprom emulation seed a missing eeprom file with defaults
+/* Seed a missing SITL eeprom file the way a factory-flashed ESC comes up,
+ * rather than with erased flash or the bare skeleton (limiters disabled). */
 const uint8_t *DroneCAN_default_settings(unsigned *len);
 const uint8_t *DroneCAN_default_settings(unsigned *len)
 {
-	*len = sizeof(default_settings);
-	return default_settings;
+	*len = EEPROM_SIZE;
+	return erase_image();
 }
 #	endif
 
@@ -284,24 +465,112 @@ static const uint8_t advance_level_v3_remap[] = {
 	0x00, 0x08, 0x10, 0x16 // old values 0-3 map to new values 0,8,16,22
 };
 
-// printf to CAN LogMessage for debugging
-static void can_printf(const char *fmt, ...)
+/*
+ * Broadcast uavcan.protocol.debug.LogMessage.
+ * level: UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_*
+ */
+static void can_log(uint8_t level, const char *fmt, ...)
 {
 	struct uavcan_protocol_debug_LogMessage pkt;
 	memset(&pkt, 0, sizeof(pkt));
+
+	pkt.level.value = level;
+	/* Short fixed source so GUI tools group ESC logs. */
+	static const char src[] = "AM32";
+	pkt.source.len = (uint8_t)(sizeof(src) - 1u);
+	memcpy(pkt.source.data, src, pkt.source.len);
 
 	uint8_t buffer[UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_MAX_SIZE];
 	va_list ap;
 	va_start(ap, fmt);
 	uint32_t n = vsnprintf((char *)pkt.text.data, sizeof(pkt.text.data), fmt, ap);
 	va_end(ap);
-	pkt.text.len = MIN(n, sizeof(pkt.text.data));
+	pkt.text.len = (uint8_t)MIN(n, sizeof(pkt.text.data));
 
-	uint32_t len = uavcan_protocol_debug_LogMessage_encode(&pkt, buffer);
+	uint32_t len = DC_ENCODE(uavcan_protocol_debug_LogMessage_encode, &pkt, buffer);
 	static uint8_t logmsg_transfer_id;
 
-	canardBroadcast(&canard, UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_SIGNATURE, UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_ID, &logmsg_transfer_id,
-			CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
+	DC_BROADCAST(&canard, UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_SIGNATURE, UAVCAN_PROTOCOL_DEBUG_LOGMESSAGE_ID, &logmsg_transfer_id,
+		     CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
+}
+
+/* printf-style LogMessage at INFO (param/save notices, etc.). */
+static void can_printf(const char *fmt, ...)
+{
+	/* Wrap through can_log so source/level stay consistent. */
+	char buf[90];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_INFO, "%s", buf);
+}
+
+/*
+ * One-shot fault LogMessages: gate-driver consume queue, or stuck-rotor
+ * latch. Prefer a gate-driver error when both rise together because its
+ * latch also forces ESC_FAULT_STUCK. Warnings do not cause a stuck latch.
+ */
+static void DroneCAN_pollFaultLogMessages(void)
+{
+	static uint8_t prev_stuck;
+	fault_id_t cause = FAULT_NONE;
+	const uint8_t gd_level = faultGateDriverConsumeLog(&cause);
+	const uint8_t stuck = (uint8_t)(escGetState() == ESC_FAULT_STUCK);
+
+	if (gd_level == FAULT_GD_LOG_WARNING) {
+		if (cause == FAULT_GD_OCP) {
+			can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_WARNING, "nFAULT retry");
+		} else if (cause == FAULT_GD_OTW) {
+			can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_WARNING, "nFAULT OTW");
+		} else {
+			can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_WARNING, "nFAULT");
+		}
+	} else if (gd_level == FAULT_GD_LOG_ERROR) {
+		switch (cause) {
+			case FAULT_GD_UVLO:
+				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT UVLO");
+				break;
+			case FAULT_GD_OCP:
+				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT OCP");
+				break;
+			case FAULT_GD_OTSD:
+				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT OTSD");
+				break;
+			default:
+				can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "nFAULT");
+				break;
+		}
+	}
+	if (gd_level != FAULT_GD_LOG_ERROR && stuck && !prev_stuck) {
+		can_log(UAVCAN_PROTOCOL_DEBUG_LOGLEVEL_ERROR, "stuck");
+	}
+
+	prev_stuck = stuck;
+}
+
+/* Map ESC / gate state into NodeStatus.health for 1 Hz NodeStatus. */
+static uint8_t DroneCAN_nodeHealth(void)
+{
+	const esc_state_t st = escGetState();
+
+	/* Cannot drive: stuck latch, gate-driver latch, or LVC. */
+	if (st == ESC_FAULT_STUCK || faultGateDriverFaultActive() || st == ESC_FAULT_LVC) {
+		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_CRITICAL;
+	}
+	/* Signal loss is usually followed by reset — still an error while held. */
+	if (st == ESC_FAULT_SIGNAL) {
+		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_ERROR;
+	}
+	/*
+	 * WARNING: held nFAULT, established hard trips
+	 * (faultErrorCount: stall + established jump desync), or post-desync
+	 * holdoff. Acquisition roughness and commanded-stop coast stay OK.
+	 */
+	if (faultGateDriverWarningActive() || faultErrorCount() > 0 || faultDesyncRestartHoldoffActive()) {
+		return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_WARNING;
+	}
+	return UAVCAN_PROTOCOL_NODESTATUS_HEALTH_OK;
 }
 
 /*
@@ -329,6 +598,8 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 	if (p != NULL && req.name.len != 0 && req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_EMPTY) {
 		const char last_dir_reversed = eepromBuffer.direction_reversed;
 		const char last_bi_direction = eepromBuffer.bidirectional_mode;
+		int32_t set_log_val = 0;
+		uint8_t set_log_is_str = 0;
 
 		/*
 	  a parameter set command
@@ -336,21 +607,32 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 		switch (p->vtype) {
 			case T_UINT8: {
 				uint8_t *ptr8 = (uint8_t *)p->ptr;
-				if (ptr8 == &eepromBuffer.current_limit) {
+				if (ptr8 == &eepromBuffer.current_limit || ptr8 == &eepromBuffer.current_pid_p ||
+				    ptr8 == &eepromBuffer.current_pid_d) {
 					*ptr8 = req.value.integer_value / 2;
+					set_log_val = (int32_t)req.value.integer_value; /* user-facing amps */
 				} else {
 					*ptr8 = req.value.integer_value;
+					set_log_val = (int32_t)req.value.integer_value;
 				}
 				if (ptr8 == &eepromBuffer.timing_advance) {
 					*ptr8 = req.value.integer_value + 10; // adjust for advance level offset for eeprom v3
+					set_log_val = (int32_t)req.value.integer_value;
+				}
+				if (ptr8 == &eepromBuffer.motor_poles) {
+					applyMotorIdentitySettings();
 				}
 				break;
 			}
 			case T_UINT16: {
 				uint16_t *ptr16 = (uint16_t *)p->ptr;
 				*ptr16 = req.value.integer_value;
+				set_log_val = (int32_t)req.value.integer_value;
 				if (ptr16 == &motor_kv) {
 					eepromBuffer.motor_kv = (uint8_t)((*(uint16_t *)p->ptr - 20) / 40);
+					/* Advance / RPM envelopes were computed at boot from
+					 * old kV — refresh them now (AM32 identity tables). */
+					applyMotorIdentitySettings();
 				} else if (ptr16 == &low_cell_volt_cutoff) {
 					eepromBuffer.low_voltage_threshold = (uint8_t)(*ptr16 - 250);
 				}
@@ -358,6 +640,7 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 			}
 			case T_BOOL:
 				*(uint8_t *)p->ptr = req.value.boolean_value ? 1 : 0;
+				set_log_val = req.value.boolean_value ? 1 : 0;
 				break;
 			case T_STRING:
 				if (req.value.union_tag == UAVCAN_PROTOCOL_PARAM_VALUE_STRING_VALUE) {
@@ -369,6 +652,7 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 								eepromBuffer.startup_melody[i] = 0xFF;
 							}
 						}
+						set_log_is_str = 1;
 					}
 				}
 				break;
@@ -376,14 +660,33 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				return;
 		}
 
+#	ifdef USE_DEBUG_UART
+		if (set_log_is_str) {
+			debugUartPrintf("param: %s=<string len=%u>\r\n", p->name, (unsigned)req.value.string_value.len);
+		} else {
+			debugUartPrintf("param: %s=%ld\r\n", p->name, (long)set_log_val);
+		}
+		if (p->ptr == (void *)&motor_kv || p->ptr == (void *)&eepromBuffer.motor_poles) {
+			debugUartPrintf("param: applied kv=%u poles=%u erpm_lo=%u erpm_hi=%u adv_q12=%u\r\n", (unsigned)motor_kv,
+					(unsigned)eepromBuffer.motor_poles, (unsigned)low_rpm_level, (unsigned)high_rpm_level,
+					(unsigned)advance_erpm_scale_q12);
+		}
+#	else
+		(void)set_log_val;
+		(void)set_log_is_str;
+#	endif
+
 		if (last_dir_reversed != eepromBuffer.direction_reversed || last_bi_direction != eepromBuffer.bidirectional_mode) {
-			// make direction_reversed and bidirectional_mode change work without
+			// make dir_reversed and bi_direction change work without
 			// reboot
 			forward = 1 - eepromBuffer.direction_reversed;
 			running = 0;
 			armed = 0;
 			set_input(0);
 		}
+
+		/* Coalesce flash writes: deferred save in DroneCAN_update (AM32#359). */
+		mark_settings_dirty();
 	}
 
 	/*
@@ -400,7 +703,7 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				pkt.value.integer_value = *(uint8_t *)p->ptr;
 				pkt.default_value.union_tag = UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE;
 				if (eindex < sizeof(default_settings)) {
-					pkt.default_value.integer_value = default_settings[eindex];
+					pkt.default_value.integer_value = erase_image()[eindex];
 				} else {
 					pkt.default_value.integer_value = p->default_value;
 				}
@@ -410,7 +713,8 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				pkt.min_value.integer_value = p->min_value;
 
 				// special case scaling
-				if ((uint8_t *)p->ptr == &eepromBuffer.current_limit) {
+				if ((uint8_t *)p->ptr == &eepromBuffer.current_limit || (uint8_t *)p->ptr == &eepromBuffer.current_pid_p ||
+				    (uint8_t *)p->ptr == &eepromBuffer.current_pid_d) {
 					pkt.default_value.integer_value *= 2;
 					pkt.value.integer_value *= 2;
 				}
@@ -452,7 +756,7 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				pkt.value.boolean_value = (*(uint8_t *)p->ptr) ? true : false;
 				pkt.default_value.union_tag = UAVCAN_PROTOCOL_PARAM_VALUE_BOOLEAN_VALUE;
 				if (eindex < sizeof(default_settings)) {
-					pkt.default_value.boolean_value = !!default_settings[eindex];
+					pkt.default_value.boolean_value = !!erase_image()[eindex];
 				} else {
 					pkt.default_value.boolean_value = !!p->default_value;
 				}
@@ -465,10 +769,10 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 	}
 
 	uint8_t buffer[UAVCAN_PROTOCOL_PARAM_GETSET_RESPONSE_MAX_SIZE];
-	uint16_t total_size = uavcan_protocol_param_GetSetResponse_encode(&pkt, buffer);
+	uint16_t total_size = DC_ENCODE(uavcan_protocol_param_GetSetResponse_encode, &pkt, buffer);
 
-	canardRequestOrRespond(ins, transfer->source_node_id, UAVCAN_PROTOCOL_PARAM_GETSET_SIGNATURE, UAVCAN_PROTOCOL_PARAM_GETSET_ID,
-			       &transfer->transfer_id, transfer->priority, CanardResponse, &buffer[0], total_size);
+	DC_RESPOND(ins, transfer->source_node_id, UAVCAN_PROTOCOL_PARAM_GETSET_SIGNATURE, UAVCAN_PROTOCOL_PARAM_GETSET_ID,
+		   &transfer->transfer_id, transfer->priority, CanardResponse, &buffer[0], total_size);
 }
 
 /*
@@ -490,11 +794,11 @@ static void handle_param_ExecuteOpcode(CanardInstance *ins, CanardRxTransfer *tr
 			can_printf("No erase while running");
 		} else {
 			can_printf("resetting to defaults");
-			memset(eepromBuffer.buffer, 0xff, sizeof(eepromBuffer.buffer));
-			memcpy(eepromBuffer.buffer, default_settings, sizeof(default_settings));
+			memcpy(eepromBuffer.buffer, erase_image(), sizeof(eepromBuffer.buffer));
 			save_flash_nolib(eepromBuffer.buffer, sizeof(eepromBuffer.buffer), eeprom_address);
 			loadEEpromSettings();
 			load_settings();
+			pending_save.dirty = false;
 			pkt.ok = true;
 		}
 	}
@@ -502,17 +806,17 @@ static void handle_param_ExecuteOpcode(CanardInstance *ins, CanardRxTransfer *tr
 		if (!safe_to_write_settings()) {
 			can_printf("No save while running");
 		} else {
+			pending_save.dirty = false;
 			save_settings();
 			pkt.ok = true;
 		}
 	}
 
 	uint8_t buffer[UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_RESPONSE_MAX_SIZE];
-	uint16_t total_size = uavcan_protocol_param_ExecuteOpcodeResponse_encode(&pkt, buffer);
+	uint16_t total_size = DC_ENCODE(uavcan_protocol_param_ExecuteOpcodeResponse_encode, &pkt, buffer);
 
-	canardRequestOrRespond(ins, transfer->source_node_id, UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_SIGNATURE,
-			       UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_ID, &transfer->transfer_id, transfer->priority, CanardResponse,
-			       &buffer[0], total_size);
+	DC_RESPOND(ins, transfer->source_node_id, UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_SIGNATURE, UAVCAN_PROTOCOL_PARAM_EXECUTEOPCODE_ID,
+		   &transfer->transfer_id, transfer->priority, CanardResponse, &buffer[0], total_size);
 }
 
 /*
@@ -537,17 +841,19 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
 	memset(&pkt, 0, sizeof(pkt));
 
 	node_status.uptime_sec = micros64() / 1000000ULL;
+	node_status.health = DroneCAN_nodeHealth();
 	pkt.status = node_status;
 
 	// fill in your major and minor firmware version
 	pkt.software_version.major = VERSION_MAJOR;
 	pkt.software_version.minor = VERSION_MINOR;
-	pkt.software_version.optional_field_flags = 0;
-	pkt.software_version.vcs_commit = 0; // should put git hash in here
+	pkt.software_version.optional_field_flags = UAVCAN_PROTOCOL_SOFTWAREVERSION_OPTIONAL_FIELD_FLAG_IMAGE_CRC |
+						    UAVCAN_PROTOCOL_SOFTWAREVERSION_OPTIONAL_FIELD_FLAG_VCS_COMMIT;
+	pkt.software_version.vcs_commit = px4_app_descriptor.git_hash;
+	pkt.software_version.image_crc = px4_app_descriptor.image_crc;
 
-	// should fill in hardware version
-	pkt.hardware_version.major = 2;
-	pkt.hardware_version.minor = 3;
+	pkt.hardware_version.major = DRONECAN_HW_VERSION_MAJOR;
+	pkt.hardware_version.minor = DRONECAN_HW_VERSION_MINOR;
 
 	sys_can_getUniqueID(pkt.hardware_version.unique_id);
 
@@ -558,10 +864,10 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
 #	endif
 	pkt.name.len = strnlen((char *)pkt.name.data, sizeof(pkt.name.data));
 
-	uint16_t total_size = uavcan_protocol_GetNodeInfoResponse_encode(&pkt, buffer);
+	uint16_t total_size = DC_ENCODE(uavcan_protocol_GetNodeInfoResponse_encode, &pkt, buffer);
 
-	canardRequestOrRespond(ins, transfer->source_node_id, UAVCAN_PROTOCOL_GETNODEINFO_SIGNATURE, UAVCAN_PROTOCOL_GETNODEINFO_ID,
-			       &transfer->transfer_id, transfer->priority, CanardResponse, &buffer[0], total_size);
+	DC_RESPOND(ins, transfer->source_node_id, UAVCAN_PROTOCOL_GETNODEINFO_SIGNATURE, UAVCAN_PROTOCOL_GETNODEINFO_ID,
+		   &transfer->transfer_id, transfer->priority, CanardResponse, &buffer[0], total_size);
 }
 
 extern void transfercomplete();
@@ -585,8 +891,17 @@ static void set_input(uint16_t input)
 	last_can_input = unfiltered_input;
 	inputSet = 1;
 
-	// we must set dshot for bidirectional_mode to work
-	dshot = eepromBuffer.bidirectional_mode;
+	/*
+	 * RawCommand is already mapped onto the AM32 11-bit range.
+	 * Bidirectional CAN needs the DShot mapper in setInput(). Never
+	 * clear a detected wire protocol: AUTO keeps computeDshotDMA()
+	 * running so DShot can resume after the 250 ms RawCommand failsafe.
+	 * `dshot = bi_direction` used to force dshot=0 whenever reverse
+	 * was off and permanently stole the wire path.
+	 */
+	if (eepromBuffer.bidirectional_mode) {
+		dshot = 1;
+	}
 
 	transfercomplete();
 	setInput();
@@ -651,7 +966,15 @@ static void handle_ArmingStatus(CanardInstance *ins, CanardRxTransfer *transfer)
 		return;
 	}
 
+	const uint8_t was_armed = dronecan_armed;
 	dronecan_armed = (cmd.status == UAVCAN_EQUIPMENT_SAFETY_ARMINGSTATUS_STATUS_FULLY_ARMED);
+	/* ESC `armed` stays 1 after the first zero-throttle arm, so the
+	 * escToArmedIdle 0->1 reset never runs again. Each FC arm is a new
+	 * drive session — clear error_count so NodeStatus is OK until a real
+	 * in-session stall/desync. */
+	if (dronecan_armed && !was_armed) {
+		faultErrorCountReset();
+	}
 	if (!dronecan_armed && eepromBuffer.can_require_arming && canstats.last_raw_command_us != 0) {
 		set_input(0);
 	}
@@ -685,11 +1008,11 @@ static void handle_begin_firmware_update(CanardInstance *ins, CanardRxTransfer *
 		memset(&reply, 0, sizeof(reply));
 		reply.error = UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_RESPONSE_ERROR_OK;
 
-		uint32_t total_size = uavcan_protocol_file_BeginFirmwareUpdateResponse_encode(&reply, buffer);
+		uint32_t total_size = DC_ENCODE(uavcan_protocol_file_BeginFirmwareUpdateResponse_encode, &reply, buffer);
 
-		canardRequestOrRespond(ins, transfer->source_node_id, UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_SIGNATURE,
-				       UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_ID, &transfer->transfer_id, transfer->priority,
-				       CanardResponse, &buffer[0], total_size);
+		DC_RESPOND(ins, transfer->source_node_id, UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_SIGNATURE,
+			   UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_ID, &transfer->transfer_id, transfer->priority, CanardResponse,
+			   &buffer[0], total_size);
 
 		while (canardPeekTxQueue(&canard) != NULL) {
 			DroneCAN_processTxQueue();
@@ -805,9 +1128,16 @@ static void request_DNA()
 
 	memmove(&allocation_request[1], &my_unique_id[DNA.node_id_allocation_unique_id_offset], uid_size);
 
-	// Broadcasting the request
+	/* DNA is a classic 8-byte anonymous transfer. If we echo CAN FD
+	 * from RawCommand here, the allocator never completes. */
+#	if CANARD_ENABLE_CANFD
+	canardBroadcast(&canard, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID,
+			&node_id_allocation_transfer_id, CANARD_TRANSFER_PRIORITY_LOW, &allocation_request[0], (uint16_t)(uid_size + 1),
+			false);
+#	else
 	canardBroadcast(&canard, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_SIGNATURE, UAVCAN_PROTOCOL_DYNAMIC_NODE_ID_ALLOCATION_ID,
 			&node_id_allocation_transfer_id, CANARD_TRANSFER_PRIORITY_LOW, &allocation_request[0], (uint16_t)(uid_size + 1));
+#	endif
 
 	// Preparing for timeout; if response is received, this value will be updated from the callback.
 	DNA.node_id_allocation_unique_id_offset = 0;
@@ -928,14 +1258,15 @@ static bool shouldAcceptTransfer(const CanardInstance *ins, uint64_t *out_data_t
 
 /*
   send the 1Hz NodeStatus message. This is what allows a node to show
-  up in the DroneCAN GUI tool and in the flight controller logs
+  up in the DroneCAN GUI tool and in the flight controller logs.
+  health reflects latched faults / recent hard errors (see DroneCAN_nodeHealth).
 */
 static void send_NodeStatus(void)
 {
 	uint8_t buffer[UAVCAN_PROTOCOL_GETNODEINFO_RESPONSE_MAX_SIZE];
 
 	node_status.uptime_sec = micros64() / 1000000ULL;
-	node_status.health = UAVCAN_PROTOCOL_NODESTATUS_HEALTH_OK;
+	node_status.health = DroneCAN_nodeHealth();
 	node_status.mode = UAVCAN_PROTOCOL_NODESTATUS_MODE_OPERATIONAL;
 	node_status.sub_mode = 0;
 
@@ -944,15 +1275,15 @@ static void send_NodeStatus(void)
 	node_status.vendor_specific_status_code = canstats.num_commands;
 	canstats.num_commands = 0;
 
-	uint32_t len = uavcan_protocol_NodeStatus_encode(&node_status, buffer);
+	uint32_t len = DC_ENCODE(uavcan_protocol_NodeStatus_encode, &node_status, buffer);
 
 	// we need a static variable for the transfer ID. This is
 	// incremeneted on each transfer, allowing for detection of packet
 	// loss
 	static uint8_t transfer_id;
 
-	canardBroadcast(&canard, UAVCAN_PROTOCOL_NODESTATUS_SIGNATURE, UAVCAN_PROTOCOL_NODESTATUS_ID, &transfer_id,
-			CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
+	DC_BROADCAST(&canard, UAVCAN_PROTOCOL_NODESTATUS_SIGNATURE, UAVCAN_PROTOCOL_NODESTATUS_ID, &transfer_id,
+		     CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
 }
 
 /*
@@ -997,18 +1328,25 @@ static void send_ESCStatus(void)
 
 	pkt.temperature = C_TO_KELVIN(degrees_celsius);
 	pkt.rpm = (e_rpm * 200) / eepromBuffer.motor_poles;
-	pkt.power_rating_pct = 0; // how do we get this?
+	/* Instant demand factor: applied duty 0..2000 → 0..100% of full scale. */
+	{
+		uint16_t pct = duty_cycle / 20u;
+		if (pct > 100u) {
+			pct = 100u;
+		}
+		pkt.power_rating_pct = (uint8_t)pct;
+	}
 	pkt.esc_index = eepromBuffer.can_esc_index;
 
-	uint32_t len = uavcan_equipment_esc_Status_encode(&pkt, buffer);
+	uint32_t len = DC_ENCODE(uavcan_equipment_esc_Status_encode, &pkt, buffer);
 
 	// we need a static variable for the transfer ID. This is
 	// incremeneted on each transfer, allowing for detection of packet
 	// loss
 	static uint8_t transfer_id;
 
-	canardBroadcast(&canard, UAVCAN_EQUIPMENT_ESC_STATUS_SIGNATURE, UAVCAN_EQUIPMENT_ESC_STATUS_ID, &transfer_id,
-			CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
+	DC_BROADCAST(&canard, UAVCAN_EQUIPMENT_ESC_STATUS_SIGNATURE, UAVCAN_EQUIPMENT_ESC_STATUS_ID, &transfer_id,
+		     CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
 }
 
 /*
@@ -1048,12 +1386,12 @@ static void send_FlexDebug(void)
 	pkt.id = DRONECAN_PROTOCOL_FLEXDEBUG_AM32_RESERVE_START + 0;
 	pkt.u8.len = sizeof(debug1);
 	memcpy(pkt.u8.data, (const uint8_t *)&debug1, sizeof(debug1));
-	uint32_t len = dronecan_protocol_FlexDebug_encode(&pkt, buffer);
+	uint32_t len = DC_ENCODE(dronecan_protocol_FlexDebug_encode, &pkt, buffer);
 
 	static uint8_t transfer_id;
 
-	canardBroadcast(&canard, DRONECAN_PROTOCOL_FLEXDEBUG_SIGNATURE, DRONECAN_PROTOCOL_FLEXDEBUG_ID, &transfer_id,
-			CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
+	DC_BROADCAST(&canard, DRONECAN_PROTOCOL_FLEXDEBUG_SIGNATURE, DRONECAN_PROTOCOL_FLEXDEBUG_ID, &transfer_id,
+		     CANARD_TRANSFER_PRIORITY_LOW, buffer, len);
 }
 
 /*
@@ -1064,6 +1402,7 @@ void DroneCAN_receiveFrame(void)
 	CanardCANFrame rx_frame = {0};
 	while (sys_can_receive(&rx_frame) > 0) {
 		canstats.num_receive++;
+		dc_note_rx_frame(&rx_frame);
 		int ecode = canardHandleRxFrame(&canard, &rx_frame, micros64());
 		if (ecode != CANARD_OK && ecode != -CANARD_ERROR_RX_NOT_WANTED) {
 			canstats.rx_ecode = ecode;
@@ -1075,6 +1414,7 @@ void DroneCAN_receiveFrame(void)
 void DroneCAN_handleFrame(const CanardCANFrame *rx_frame)
 {
 	canstats.num_receive++;
+	dc_note_rx_frame(rx_frame);
 	int ecode = canardHandleRxFrame(&canard, rx_frame, micros64());
 	if (ecode != CANARD_OK && ecode != -CANARD_ERROR_RX_NOT_WANTED) {
 		canstats.rx_ecode = ecode;
@@ -1115,11 +1455,17 @@ static void DroneCAN_Startup(void)
 
 	// initialise low level CAN peripheral hardware
 	sys_can_init();
+#	if CANARD_ENABLE_CANFD
+	dronecan_tx_canfd = sys_can_prefer_canfd_tx();
+#	endif
 
+	/*
+	 * DRONECAN_IN (5) is exclusive: disable DShot/PWM IRQs so noise on the
+	 * signal pin cannot fight CAN. AUTO (0) and the fixed wire types keep
+	 * capture live; when both CAN and wire are present, DroneCAN_active()
+	 * makes RawCommand win until the stream times out (~250 ms).
+	 */
 	if (eepromBuffer.input_type == DRONECAN_IN) {
-		/*
-          disable interrupts for DShot and PWM
-         */
 #	ifdef MCU_L431
 		NVIC_DisableIRQ(DMA1_Channel5_IRQn);
 		NVIC_DisableIRQ(EXTI15_10_IRQn);
@@ -1143,6 +1489,7 @@ static void DroneCAN_Startup(void)
 void DroneCAN_update()
 {
 	sys_can_disable_IRQ();
+	sys_can_service();
 
 	static uint64_t next_1hz_service_at;
 	static uint64_t next_telem_service_at;
@@ -1172,6 +1519,9 @@ void DroneCAN_update()
 
 	const uint64_t ts = micros64();
 
+	/* Rising-edge stuck / nFAULT → one LogMessage (not rate-limited spam). */
+	DroneCAN_pollFaultLogMessages();
+
 	if (ts >= next_1hz_service_at) {
 		next_1hz_service_at += 1000000ULL;
 		process1HzTasks(ts);
@@ -1186,6 +1536,12 @@ void DroneCAN_update()
 	}
 
 	DroneCAN_processTxQueue();
+
+	/* Deferred settings save: quiet window + safe to write flash (AM32#359). */
+	if (pending_save.dirty && (millis32() - pending_save.last_change_ms) >= SETTINGS_SAVE_QUIET_MS && safe_to_write_settings()) {
+		pending_save.dirty = false;
+		save_settings();
+	}
 
 	if (canstats.last_raw_command_us != 0 && ts - canstats.last_raw_command_us > 250000ULL) {
 		/*
@@ -1223,7 +1579,13 @@ void DroneCAN_update()
 
 bool DroneCAN_active(void)
 {
-	return canstats.total_commands != 0;
+	/*
+	 * True while a RawCommand stream is live (refreshed by handle_RawCommand
+	 * and cleared by the 250 ms failsafe above). Sticky total_commands is
+	 * NOT used: after CAN drops out, DShot/PWM under AUTO must be able to
+	 * take over without a reboot.
+	 */
+	return canstats.last_raw_command_us != 0;
 }
 
 #endif // DRONECAN_SUPPORT

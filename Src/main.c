@@ -237,6 +237,7 @@ an settings option)
 #include "runtime_loop.h"
 #include "motor_runtime.h"
 #include "esc_state.h"
+#include "debug_uart.h"
 /* esc_state is also snapshotted by HWCI_PERF_MAIN_LOOP (needs esc_state.h). */
 
 /* Control path modules + motor_runtime state + esc_state machine. */
@@ -489,6 +490,7 @@ int main(void)
 
 		runtimeUpdateVariablePwm(&last_tim1_arr);
 		faultPollSignalTimeout();
+		faultPollGateDriver();
 #ifdef USE_CUSTOM_LED
 		if ((input >= DSHOT_CMD_MAX) && (input < 1947)) {
 			if (ledcounter > (2000 >> forward)) {
@@ -520,6 +522,7 @@ int main(void)
 		runtimeSendTelemetryIfNeeded();
 		runtimeProcessAdcAndProtections();
 		runtimeMotorModeTick();
+		debugUartService();
 #ifdef BRUSHED_MODE
 		runBrushedLoop();
 #endif

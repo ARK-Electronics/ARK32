@@ -3,7 +3,8 @@
 
 Clone am32-firmware/ESCSim at escsim-revision.txt, then pass --escsim PATH.
 The upstream runner and its clients are loaded from that checkout; ARK's
-startup tune, input watchdog and schema-backed defaults are adapted here.
+startup tune, input watchdog, stuck-rotor rails and schema-backed defaults
+are adapted here.
 """
 
 import argparse
@@ -148,6 +149,73 @@ def test_dronecan_params(suite, sitl_path):
             node.close()
 
 
+def test_stuck_rotor(suite, sitl_path, protection):
+    """A brief jam can recover; repeated failed starts must eventually latch."""
+    from run_test import WatchStream
+
+    name = 'stuck rotor protection %s' % ('on' if protection else 'off')
+    offset = suite.sitl_params.PARAMS_BY_NAME['STUCK_ROTOR_PROTECTION'][0]
+    # Yield between simulator ticks so the input sender and variable-watch
+    # threads keep running while the rotor is locked. A busy-waiting child
+    # can starve them and turn this into a signal-timeout test instead.
+    with suite.Sitl(sitl_path, ['--can-uri', 'none', '--input-type', '1'],
+                    nosleep=False):
+        ok, msg = suite.EepromClient('127.0.0.1', suite.STATE_PORT).set(
+            offset, bytes([1 if protection else 0]))
+        suite.check(name + ' eeprom set', ok, msg)
+        sim = suite.SimStream('127.0.0.1', suite.STATE_PORT, period_us=200)
+        sim.enabled = True
+        watch = WatchStream('127.0.0.1', suite.STATE_PORT,
+                            [('desync_episode_bucket', 1, False, None)])
+        tx = suite.Sender(suite.sd.TYPE_DSHOT600)
+
+        def check_rpm(label, spinning, window=0.5):
+            rpm = suite.rpm_from_state(sim, window)
+            valid = (2000 <= rpm <= 4000 if spinning
+                     else rpm != -1 and abs(rpm) < 100)
+            suite.check(name + ' ' + label, valid, 'rpm=%.0f' % rpm)
+
+        try:
+            resolved = watch.wait_resolved()
+            suite.check(name + ' episode watch', resolved == [1],
+                        'resolved=%r' % resolved)
+            suite.sim_sleep(sim, 2.2)
+            tx.value = 800
+            suite.sim_sleep(sim, 3.0)
+            check_rpm('spins', True)
+            sim.set_stuck(1.0)
+            # ARK's acquisition/desync rail is independent of the EEPROM
+            # flag. Upstream's 3-second jam approaches its latch threshold,
+            # so rotor phase can decide whether that test auto-restarts.
+            suite.sim_sleep(sim, 3.0 if protection else 0.5)
+            check_rpm('stalls', False, window=0.2)
+            sim.set_stuck(0.0)
+            suite.sim_sleep(sim, 4.0)
+            if not protection:
+                check_rpm('restarts after brief obstruction', True)
+                # Keep the independent rail covered too: a sustained jam
+                # must latch despite STUCK_ROTOR_PROTECTION being disabled.
+                sim.set_stuck(1.0)
+                suite.sim_sleep(sim, 8.0)
+                events = watch.get(0)
+                bucket = events[-1][1] if events else None
+                suite.check(name + ' sustained obstruction latches episode rail',
+                            bucket is not None and bucket >= 40,
+                            'episode bucket=%s' % bucket)
+                sim.set_stuck(0.0)
+                suite.sim_sleep(sim, 4.0)
+            check_rpm('stays off', False)
+            tx.value = 0
+            suite.sim_sleep(sim, 1.0)
+            tx.value = 800
+            suite.sim_sleep(sim, 3.0)
+            check_rpm('recovers after throttle cycle', True)
+        finally:
+            tx.stop()
+            watch.close()
+            sim.close()
+
+
 def test_ark_dataset_params(suite):
     """Keep ARK's calibration fixtures covered alongside ESCSim's datasets."""
     pairs = (
@@ -199,6 +267,7 @@ def load_suite(escsim):
     suite.test_startup_tune = lambda path: test_startup_tune(suite, path)
     suite.test_physics_audio = lambda path: test_physics_audio(suite, path)
     suite.test_dronecan_params = lambda path: test_dronecan_params(suite, path)
+    suite.test_stuck_rotor = lambda path, protection: test_stuck_rotor(suite, path, protection)
     upstream_datasets = suite.test_dataset_params
 
     def datasets():

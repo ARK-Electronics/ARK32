@@ -15,6 +15,8 @@ def test_default_blob_round_trips_known_fields():
     assert s.get("max_ramp") == 160
     assert s.get("minimum_duty_cycle") == 1
     assert s.get("startup_power") == 100
+    assert s.get("brake_on_stop") == 0
+    assert s.get("rc_car_reverse") == 0
 
 
 def test_apply_returns_mutated_copy_and_diff_names_fields():
@@ -52,11 +54,25 @@ def test_bin_round_trip(tmp_path):
     ("max_ramp", 256),
     ("minimum_duty_cycle", 0),
     ("minimum_duty_cycle", 51),
+    ("brake_on_stop", 3),
+    ("rc_car_reverse", 2),
 ])
 def test_out_of_range_values_are_refused_not_clamped(name, value):
     base = st.Settings(st.default_blob())
     with pytest.raises(st.SettingsError, match="range"):
         base.apply({name: value})
+
+
+def test_assert_required_passes_on_match_and_empty():
+    s = st.Settings(st.default_blob())
+    st.assert_required(s, {})
+    st.assert_required(s, {"brake_on_stop": 0, "rc_car_reverse": 0})
+
+
+def test_assert_required_refuses_mismatch():
+    s = st.Settings(st.default_blob()).apply({"brake_on_stop": 1})
+    with pytest.raises(st.SettingsError, match="brake_on_stop=1"):
+        st.assert_required(s, {"brake_on_stop": 0})
 
 
 def test_unknown_name_requires_explicit_offset():

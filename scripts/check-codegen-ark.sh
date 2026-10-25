@@ -136,6 +136,7 @@ check_section() {
 # them without __attribute__((used)).
 check_section .file_name required "LTO dropped its contents (object needs __attribute__((used)))"
 check_section .app_signature optional "LTO dropped its contents (object needs __attribute__((used)))"
+check_section .px4_app_descriptor optional "LTO dropped its contents (object needs __attribute__((used)))"
 # Soft-reset cookie / retained SRAM (read+written from C). Empty here usually
 # means the cookie was removed or the linker script changed — not LTO DCE.
 check_section .noinit required "expected boot_sound_cookie (or other .noinit) — cookie removed or linker script changed?"
