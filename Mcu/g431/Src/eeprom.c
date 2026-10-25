@@ -39,7 +39,7 @@ void save_flash_nolib(uint8_t *data, int length, uint32_t add)
 	// page N then page N+1 would otherwise erase page (N | N+1).
 	if ((add % 2048) == 0) {
 		FLASH->SR = FLASH_SR_PROGERR | FLASH_SR_WRPERR | FLASH_SR_PGAERR | FLASH_SR_SIZERR | FLASH_SR_PGSERR | FLASH_SR_MISERR |
-			    FLASH_SR_FASTERR | FLASH_SR_OPERR | FLASH_SR_EOP;
+			    FLASH_SR_FASTERR | FLASH_SR_RDERR | FLASH_SR_OPTVERR | FLASH_SR_OPERR | FLASH_SR_EOP;
 		FLASH->CR = FLASH_CR_PER;
 		FLASH->CR |= ((add / 2048) << FLASH_CR_PNB_Pos) & FLASH_CR_PNB;
 		FLASH->CR |= FLASH_CR_STRT;
