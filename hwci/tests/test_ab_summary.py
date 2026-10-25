@@ -112,3 +112,66 @@ def test_aborted_runs_are_counted_and_listed(tmp_path):
     assert by["summary.aborted"].b.median == 1
     assert by["summary.aborted"].verdict == "B higher"
     assert "Aborted runs:" in md and "desync: test" in md
+
+
+def _truncate(run, segment, keep_s):
+    """Cut the run keep_s into ``segment``, as a mid-segment abort does."""
+    first = next(i for i, r in enumerate(run.rows) if r["segment"] == segment)
+    run.rows = run.rows[:first + int(round(keep_s * 100))]
+    run.meta["aborted"] = "safety: test"
+    return run
+
+
+def test_segment_cut_short_by_abort_reads_missing(tmp_path):
+    p = _profile()
+    # Aborted 0.3 s into a 0.5 s rise: the partial tail is still climbing,
+    # and taking it as the settled rpm would report a fast spool.
+    snap_cut = _truncate(_run(p, 10000.0, 0.5), "snap", 0.3)
+    assert "snap" not in ab.complete_segments(snap_cut, p)
+    assert ab.spool_times_ms(snap_cut, p)["snap"] is None
+    vals, _ = ab.run_values(snap_cut.save(tmp_path / "snap_cut"))
+    assert vals["snap.spool_t90_ms"] is None
+    assert vals["hold.rpm"] == pytest.approx(10000.0)    # complete before it
+
+    hold_cut = _truncate(_run(p, 10000.0, 0.5), "hold", 0.4)
+    vals, _ = ab.run_values(hold_cut.save(tmp_path / "hold_cut"))
+    assert "hold.rpm" not in vals
+
+    whole = _run(p, 10000.0, 0.5)
+    assert ab.complete_segments(whole, p) == {s.label for s in p.segments}
+
+
+def test_summarize_rejects_changed_profile_definition(tmp_path):
+    p = _profile()
+    edited = _profile()
+    edited.segments[2] = Segment("hold", 0.4, 1.0, steady=True)
+    a = [str(_run(p, 10000.0, 0.5, sha="up1").save(tmp_path / "a"))]
+    b = [str(_run(edited, 10000.0, 0.5, sha="ark1").save(tmp_path / "b"))]
+    with pytest.raises(ValueError, match="definition"):
+        ab.summarize_dirs(a, b, min_n=1)
+
+
+@pytest.mark.parametrize("a_shas", [("up1", "up2"), ("up1", None)])
+def test_summarize_rejects_arm_without_one_known_sha(tmp_path, a_shas):
+    p = _profile()
+    a = [str(_run(p, 10000.0, 0.5, sha=sha).save(tmp_path / f"a{i}"))
+         for i, sha in enumerate(a_shas)]
+    b = [str(_run(p, 10000.0, 0.5, sha="ark1").save(tmp_path / "b"))]
+    with pytest.raises(ValueError, match="one known firmware build"):
+        ab.summarize_dirs(a, b, min_n=1)
+
+
+def test_cli_globs_absolute_dedupes_and_rejects_shared_runs(tmp_path, capsys):
+    p = _profile()
+    for i in range(3):
+        _run(p, 10000.0 + 10 * i, 0.5, sha="up1").save(tmp_path / f"up-{i}")
+        _run(p, 12000.0 + 10 * i, 0.2, sha="ark1").save(tmp_path / f"ark-{i}")
+    up = str(tmp_path / "up-*")                      # absolute pattern
+    # Overlapping patterns and a repeated path still give n = 3.
+    assert main(["ab-summary", "--a", up, str(tmp_path / "up-0"), str(tmp_path / "up-?"),
+                 "--b", str(tmp_path / "ark-*")]) == 0
+    assert "| hold.rpm | 3 |" in capsys.readouterr().out
+
+    assert main(["ab-summary", "--a", up, "--b", str(tmp_path / "ark-*"),
+                 str(tmp_path / "up-1")]) == 2
+    assert "both arms" in capsys.readouterr().err

@@ -59,6 +59,21 @@ def _profile_for_run(run: RunResult) -> Profile:
     return load_profile(run.meta["profile"])
 
 
+def complete_segments(run: RunResult, profile: Profile) -> set[str]:
+    """Labels of the segments the run recorded in full.
+
+    ``run_profile`` records exactly ``max(1, round(duration_s * rate))`` rows
+    per segment unless a safety or desync abort stops it, which leaves the
+    segment it landed in short. That segment's tail is then not its settled
+    point, so its steady metrics and spool time read as missing.
+    """
+    counts: dict[str, int] = {}
+    for r in run.rows:
+        counts[r.get("segment")] = counts.get(r.get("segment"), 0) + 1
+    return {s.label for s in profile.segments
+            if counts.get(s.label, 0) >= max(1, round(s.duration_s * profile.sample_rate_hz))}
+
+
 def _col(rows: list[dict], key: str) -> np.ndarray:
     out = np.full(len(rows), np.nan)
     for i, r in enumerate(rows):
@@ -77,9 +92,11 @@ def spool_times_ms(run: RunResult, profile: Profile, frac: float = 0.9) -> dict:
     Settled rpm is the mean over the segment's last ``steady_tail_fraction``
     (the same tail the steady metrics use). Stand optical rpm is preferred;
     without it, SWD eRPM / pole pairs. A segment that never reaches the
-    threshold reports ``None`` - a desync or stall, not a slow spool.
+    threshold reports ``None`` - a desync or stall, not a slow spool. So does
+    one an abort cut short: its last samples are not the settled rpm.
     """
     rows = run.rows
+    complete = complete_segments(run, profile)
     seg = np.array([r.get("segment") for r in rows], dtype=object)
     t = _col(rows, "t")
     rpm = _col(rows, "stand_rpm")
@@ -95,6 +112,9 @@ def spool_times_ms(run: RunResult, profile: Profile, frac: float = 0.9) -> dict:
             continue
         idx = np.where(seg == s.label)[0]
         if idx.size < 4:
+            continue
+        if s.label not in complete:
+            out[s.label] = None
             continue
         n_tail = max(1, int(round(idx.size * profile.steady_tail_fraction)))
         target = np.nanmean(rpm[idx[-n_tail:]])
@@ -119,8 +139,11 @@ def run_values(run_dir: str | Path) -> tuple[dict, dict]:
     mpath = run_dir / "metrics.json"
     m = (json.loads(mpath.read_text()) if mpath.exists()
          else metricsmod.compute(run, profile))
+    complete = complete_segments(run, profile)
     vals: dict = {}
     for p in m.get("steady_points", []):
+        if p["segment"] not in complete:
+            continue
         for k in STEADY_KEYS:
             vals[f"{p['segment']}.{k}"] = p.get(k)
     for k in SUMMARY_KEYS:
@@ -223,8 +246,20 @@ def summarize_dirs(a_dirs: list[str], b_dirs: list[str], *, min_n: int = 3,
     if len(profiles) != 1:
         raise ValueError(f"A/B runs mix profiles {sorted(map(str, profiles))}; "
                          "compare one profile at a time")
+    # The name alone is not enough: a same-named profile can change between
+    # runs, and each run embeds the definition it actually ran.
+    defs = {json.dumps(m.get("profile_def"), sort_keys=True) for m in metas}
+    if len(defs) != 1:
+        raise ValueError(f"A/B runs of profile `{next(iter(profiles))}` differ in "
+                         "its definition; compare runs of one definition")
     a_sha = {m.get("git_sha") for m in metas[:len(a_dirs)]}
     b_sha = {m.get("git_sha") for m in metas[len(a_dirs):]}
+    # An arm is one firmware build: pooling commits adds firmware variation
+    # to the run-to-run range.
+    for label, shas in ((a_label, a_sha), (b_label, b_sha)):
+        if len(shas) != 1 or None in shas:
+            raise ValueError(f"arm {label} must be one known firmware build, got "
+                             f"git_sha {sorted(map(str, shas))}")
     notes = [f"profile `{profiles.pop()}`; {a_label} git_sha {sorted(map(str, a_sha))}, "
              f"{b_label} git_sha {sorted(map(str, b_sha))}; decision rule: "
              f"n >= {min_n} per arm and disjoint ranges"]

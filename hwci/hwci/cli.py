@@ -17,6 +17,7 @@ simulator backends), so a typo can never silently gate simulated data.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import subprocess
 import sys
@@ -361,13 +362,17 @@ def cmd_tune(args) -> int:
 
 
 def _expand_dirs(raw_list: list[str]) -> list[str]:
+    """Run dirs from paths and globs, each once: a run matched by two
+    patterns must not count twice towards an arm's n."""
     dirs: list[str] = []
+    seen: set[Path] = set()
     for raw in raw_list:
-        p = Path(raw)
-        if p.is_dir():
-            dirs.append(str(p))
-        else:
-            dirs.extend(str(m) for m in sorted(Path().glob(raw)) if m.is_dir())
+        # glob.glob, not Path().glob: the latter rejects absolute patterns.
+        for m in ([raw] if Path(raw).is_dir() else sorted(glob.glob(raw))):
+            key = Path(m).resolve()
+            if key.is_dir() and key not in seen:
+                seen.add(key)
+                dirs.append(m)
     return dirs
 
 
@@ -378,6 +383,11 @@ def cmd_ab_summary(args) -> int:
     a_dirs, b_dirs = _expand_dirs(args.a), _expand_dirs(args.b)
     if not a_dirs or not b_dirs:
         print("error: need run directories for both --a and --b", file=sys.stderr)
+        return 2
+    shared = {Path(d).resolve() for d in a_dirs} & {Path(d).resolve() for d in b_dirs}
+    if shared:
+        print(f"error: run directories in both arms: {sorted(map(str, shared))}",
+              file=sys.stderr)
         return 2
     try:
         md, _ = ab.summarize_dirs(a_dirs, b_dirs, min_n=args.min_n,

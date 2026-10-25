@@ -10,7 +10,8 @@ Since then, bench work has compared ARK32 only against older ARK32 builds.
 
 **Rule:** report a difference only when each arm has at least 3 runs and the
 two arms' ranges do not overlap. `hwci ab-summary` applies this rule for you.
-Below that bar, the result is "within spread", whichever median looks better.
+Below that bar there is no call, whichever median looks better: `n<min` when
+an arm has too few runs, `within spread` when the ranges overlap.
 
 ## 1. The two arms
 
@@ -163,6 +164,15 @@ then the median delta and the verdict, for:
   settled rpm (`<segment>.spool_t90_ms`). A run that never reaches 90% reports
   nothing for that segment rather than a slow time.
 
+A segment an abort cut short reports nothing either, for its steady point and
+its spool time: its last samples are not the settled value.
+
+`ab-summary` refuses to compare runs that differ in the profile definition
+(each run records the one it ran, so a same-named profile edited between runs
+is caught), an arm whose runs report more than one `git_sha` or none, and a
+run directory given to both arms. A directory matched by two patterns counts
+once.
+
 Verdicts:
 
 | Verdict | Meaning |
@@ -208,8 +218,9 @@ For each setup and profile, report:
 - Run order.
 - The `ab-summary` table, unedited.
 
-Quote only rows with a verdict other than `within spread`, and say which
-direction is better for each. Commit the summary tables, not the raw runs,
+Quote only rows whose verdict is `<b-label> higher` or `<b-label> lower`, and
+say which direction is better for each. `n<min` and `within spread` are both
+no-calls. Commit the summary tables, not the raw runs,
 with any README change that cites them.
 
 ### Known differences the A/B measures, not controls
