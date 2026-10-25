@@ -371,6 +371,22 @@ static void runtimeGovClearState(void)
 #	if defined(__GNUC__) && !defined(__clang__)
 __attribute__((optimize("Os")))
 #	endif
+/*
+ * Scaled ramp step in whole duty counts for this 1 kHz tick. The remainder
+ * carries to the next tick, so the average over a few ms is exact:
+ * truncating it flew the factory 2 %/ms at 1 %/ms on anything above
+ * 14.8 V. A zero setting still slews one count per tick, as before.
+ */
+static uint8_t runtimeRampDither(uint8_t ramp, uint32_t scale_q8, uint8_t *frac_q8)
+{
+	if (!ramp) {
+		return 1;
+	}
+	const uint16_t q8 = (uint16_t)(ramp * scale_q8 + *frac_q8);
+	*frac_q8 = (uint8_t)q8;
+	return (uint8_t)(q8 >> 8);
+}
+
 static void runtimeTransientGovernorTick(void)
 {
 	// gov_slope_q10: duty units per e_rpm unit, Q10 (duty<<10/e_rpm at
@@ -397,13 +413,10 @@ static void runtimeTransientGovernorTick(void)
 			scale_q8 = 384;
 		}
 	}
-	uint16_t r;
-	r = (uint16_t)((max_ramp_startup * scale_q8) >> 8);
-	max_ramp_startup_vcomp = r ? (uint8_t)r : 1;
-	r = (uint16_t)((max_ramp_low_rpm * scale_q8) >> 8);
-	max_ramp_low_rpm_vcomp = r ? (uint8_t)r : 1;
-	r = (uint16_t)((max_ramp_high_rpm * scale_q8) >> 8);
-	max_ramp_high_rpm_vcomp = r ? (uint8_t)r : 1;
+	static uint8_t ramp_frac_q8[3];
+	max_ramp_startup_vcomp = runtimeRampDither(max_ramp_startup, scale_q8, &ramp_frac_q8[0]);
+	max_ramp_low_rpm_vcomp = runtimeRampDither(max_ramp_low_rpm, scale_q8, &ramp_frac_q8[1]);
+	max_ramp_high_rpm_vcomp = runtimeRampDither(max_ramp_high_rpm, scale_q8, &ramp_frac_q8[2]);
 
 	// Coast / poll / not yet established: wipe slope state so a previous
 	// run's latch cannot re-bind on the next start. Ramp vcomp above still
