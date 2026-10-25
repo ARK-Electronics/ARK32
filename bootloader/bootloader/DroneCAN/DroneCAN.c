@@ -842,7 +842,11 @@ static void handle_file_read_response(CanardInstance* ins, CanardRxTransfer* tra
   }
 
   uint32_t len = pkt.data.len;
-  len = (len+7U) & ~7U;
+  // the decoder fills only data.len bytes: pad up to the 8-byte flash
+  // write with the erased value, not leftover stack
+  while (len & 7U) {
+    pkt.data.data[len++] = 0xFF;
+  }
   save_flash_nolib(pkt.data.data, len, (uint32_t)MAIN_FW_START_ADDR + fwupdate.offset);
 
   fwupdate.offset += pkt.data.len;
