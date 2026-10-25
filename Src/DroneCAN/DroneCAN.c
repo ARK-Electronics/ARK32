@@ -386,11 +386,19 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 			// old duty, into a stalling rotor, for as long as nonzero
 			// commands keep the ESC from re-arming. The filter restarts at
 			// zero because bidirectional_mode changes what it filters.
+			// Interrupts stay off until running is clear: a commutation
+			// or comparator interrupt in between would still see running
+			// and reconnect a phase pair.
+			const uint32_t primask = __get_PRIMASK();
+			__disable_irq();
 			allOff();
 			maskPhaseInterrupts();
 			duty_cycle_setpoint = 0;
 			forward = 1 - eepromBuffer.direction_reversed;
 			escToDisarmed();
+			if (!primask) {
+				__enable_irq();
+			}
 			Filter2P_reset(0);
 			set_input(0);
 		}
