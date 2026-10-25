@@ -83,3 +83,31 @@ def test_can_checks_poles_before_narrowing(sitl_can_factory, mcast_uri, poles):
         assert set_poles(poles) == (poles if 2 <= poles <= 128 else 22)
     finally:
         node.close()
+
+
+def test_can_rejects_non_integer_poles(sitl_can_factory, mcast_uri):
+    import dronecan
+    from test_params import _request_wait
+    sitl = sitl_can_factory(extra_args=['--node-id', '10'], can_uri=mcast_uri, wait_s=1.0)
+    node = dronecan.make_node(mcast_uri, node_id=115, bitrate=1000000)
+    Value = dronecan.uavcan.protocol.param.Value
+    try:
+        def set_poles(value):
+            req = dronecan.uavcan.protocol.param.GetSet.Request()
+            req.name = 'MOTOR_POLES'
+            req.value = value
+            for _ in range(5):
+                rsp = _request_wait(node, 10, req)
+                if rsp is not None:
+                    return int(rsp.value.integer_value)
+            assert False, sitl.log_tail()
+
+        assert set_poles(Value(integer_value=22)) == 22
+        # Value is a C union: a 20-byte string overlays its length byte on
+        # the integer and reads as a valid 20 poles. Only an integer value
+        # may set the pole count.
+        for value in (Value(string_value=bytes(20)), Value(real_value=20.0),
+                      Value(boolean_value=True)):
+            assert set_poles(value) == 22, value
+    finally:
+        node.close()
