@@ -307,10 +307,8 @@ void runtimeSendTelemetryIfNeeded(void)
 /*
  * Transient governor, 1 kHz (main-loop context, fresh battery_voltage).
  *
- * (a) Voltage-compensated ramp: max_ramp_* are duty-per-tick, so the same
- * setting slews 1.7x the VOLTS/ms on 8S that it does on 4S. Scale the
- * working copies by GOV_RAMP_VREF_CV/Vbat (clamped 0.5x-1.5x) so a tuned
- * ramp means the same electrical transient on any pack.
+ * (a) The configured ramp is NOT scaled by pack voltage: it is the duty
+ * rate the user set, exactly, and nothing here may raise it (settings.c).
  *
  * (b) BEMF-headroom ceiling: bound duty to the equilibrium duty implied by
  * the LIVE eRPM plus a fixed voltage headroom. Slip current is
@@ -334,7 +332,7 @@ void runtimeSendTelemetryIfNeeded(void)
  * samples (~0.3 s cumulative steady running per power-up).
  */
 #ifndef BRUSHED_MODE
-#	define GOV_RAMP_VREF_CV 1480 /* 4S nominal: legacy ramp feel is preserved there */
+#	define GOV_RAMP_VREF_CV 1480 /* headroom scale reference (c); not applied to the ramp */
 #	define GOV_HEADROOM_CV 300   /* 3.0 V of slip headroom above the BEMF line */
 #	define GOV_CEIL_FLOOR 350    /* ceiling never below this (nor min_startup_duty+100) */
 #	define GOV_CONF_ARM 300
@@ -371,22 +369,6 @@ static void runtimeGovClearState(void)
 #	if defined(__GNUC__) && !defined(__clang__)
 __attribute__((optimize("Os")))
 #	endif
-/*
- * Scaled ramp step in whole duty counts for this 1 kHz tick. The remainder
- * carries to the next tick, so the average over a few ms is exact:
- * truncating it flew the factory 2 %/ms at 1 %/ms on anything above
- * 14.8 V. A zero setting still slews one count per tick, as before.
- */
-static uint8_t runtimeRampDither(uint8_t ramp, uint32_t scale_q8, uint8_t *frac_q8)
-{
-	if (!ramp) {
-		return 1;
-	}
-	const uint16_t q8 = (uint16_t)(ramp * scale_q8 + *frac_q8);
-	*frac_q8 = (uint8_t)q8;
-	return (uint8_t)(q8 >> 8);
-}
-
 static void runtimeTransientGovernorTick(void)
 {
 	// gov_slope_q10: duty units per e_rpm unit, Q10 (duty<<10/e_rpm at
@@ -402,7 +384,7 @@ static void runtimeTransientGovernorTick(void)
 	const uint32_t duty = duty_cycle;
 	const uint8_t closed = (running && !old_routine && zero_crosses > 150);
 
-	// (a) voltage-compensated ramp working copies
+	// VREF/Vbat in Q8: folds the headroom divide in (c) below.
 	uint32_t scale_q8 = 256;
 	if (v > 600) {
 		scale_q8 = ((uint32_t)GOV_RAMP_VREF_CV << 8) / v;
@@ -413,14 +395,8 @@ static void runtimeTransientGovernorTick(void)
 			scale_q8 = 384;
 		}
 	}
-	static uint8_t ramp_frac_q8[3];
-	max_ramp_startup_vcomp = runtimeRampDither(max_ramp_startup, scale_q8, &ramp_frac_q8[0]);
-	max_ramp_low_rpm_vcomp = runtimeRampDither(max_ramp_low_rpm, scale_q8, &ramp_frac_q8[1]);
-	max_ramp_high_rpm_vcomp = runtimeRampDither(max_ramp_high_rpm, scale_q8, &ramp_frac_q8[2]);
-
 	// Coast / poll / not yet established: wipe slope state so a previous
-	// run's latch cannot re-bind on the next start. Ramp vcomp above still
-	// applied. Test inject (gov_force_hold_ms) survives brief !closed so a
+	// run's latch cannot re-bind on the next start. Test inject (gov_force_hold_ms) survives brief !closed so a
 	// desync mid-inject cannot abort the engagement check.
 	if (!closed && !gov_force_hold_ms) {
 		runtimeGovClearState();

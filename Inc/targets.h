@@ -75,17 +75,20 @@
 #	define NFAULT_PIN LL_GPIO_PIN_5
 #	define TARGET_MIN_BEMF_COUNTS 3
 /* Unconfigured-eeprom max_ramp default (settings.c version-upgrade path).
-	 * Production ships 2%%/ms via factory/ARK_4IN1_F051_eeprom_defaults.json
-	 * (full-flash image). The generic 160 (16%/ms) is a racing-quad value;
-	 * ARK vehicles fly 5-10"+ where nothing needs it and heavy props desync
-	 * on it (bench 2026-07-23 bracket on 900KV+10x5x3: snap 20->55%% breaks
-	 * lock at max_ramp 5/10/20/40, clean at 1). 20 (2%%/ms) matches the
-	 * factory image so an eeprom version bump does not re-widen the ramp. */
-#	define TARGET_DEFAULT_MAX_RAMP 20
+	 * Production ships 1%%/ms via factory/ARK_4IN1_F051_eeprom_defaults.json
+	 * (full-flash image). Until the exact-ramp change the factory 2%%/ms was
+	 * truncated by voltage compensation to 1 count/tick on every pack above
+	 * 14.8 V, so 1%%/ms is the rate 4S-6S vehicles actually flew and were
+	 * validated on. The generic 160 (16%/ms) is a racing-quad value; heavy
+	 * props desync on it (bench 2026-07-23 bracket on 900KV+10x5x3: snap
+	 * 20->55%% breaks lock at max_ramp 5/10/20/40, clean at 1). An
+	 * unconfigured page (layout < 3, settings.c) gets this; 10 matches the
+	 * factory image. */
+#	define TARGET_DEFAULT_MAX_RAMP 10
 /*
 	 * Ramp-regime ceilings stay the generic AM32 6/16 (startup 2). eeprom
-	 * max_ramp can only lower them, so the factory 2%%/ms image still
-	 * flattens every regime to 2 - the production 5-10"+ vehicle preset.
+	 * max_ramp can only lower them, so the factory 1%%/ms image
+	 * flattens every regime to 1 - the production 5-10"+ vehicle preset.
 	 * Raising the slider toward 16%%/ms restores the graded 2/6/16
 	 * schedule so a high-kV 5-7" can match AM32 punch on this firmware.
 	 * Do not raise it on large props: the 900KV+10" snap 20->55%% bench
@@ -106,8 +109,8 @@
  * ARK_4IN1_RAMP_F051 ("ARK 4IN1 SLO") removed: its entire delta was a
  * compile-frozen 0.5%/ms ramp (RAMP_SPEED_LOW/HIGH_RPM 1 at a 10 kHz
  * loop). The regular firmware reaches the identical rate as an EEPROM
- * setting - max_ramp = 5 (fine mode, 0.1%/ms steps, all regimes) - and
- * additionally voltage-compensates it, bounds slip current with the
+ * setting - max_ramp = 5 (0.5%/ms, all regimes, exact on every pack) - and
+ * additionally bounds slip current with the
  * BEMF-headroom governor, and latches misconfiguration via the desync
  * rails. Heavy-prop builds are a config preset, not a second firmware.
  */

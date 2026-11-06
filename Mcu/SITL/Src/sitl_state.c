@@ -91,7 +91,7 @@
       u16 gov_conf, u16 gov_slope_q10, u16 gov_duty_ceiling,
       u16 gov_stuck_ms, u16 gov_release_ceil, u16 gov_unlatch_count (v5 PR 65)
       u8 max_ramp_startup, u8 max_ramp_low, u8 max_ramp_high,
-      u8 ramp_divider, u8 max_ramp_startup_vcomp, u8 acq_resist,
+      u8 ramp_rem_low, u8 max_ramp_startup_vcomp, u8 acq_resist,
       u8 desync_episode_bucket                    (v6 ramp settings +
                                                    episode observability)
       Fields are only ever APPENDED and the version is bumped; clients
@@ -836,7 +836,7 @@ void sitl_state_poll(void)
 			uint8_t max_ramp_startup_v;
 			uint8_t max_ramp_low_v;
 			uint8_t max_ramp_high_v;
-			uint8_t ramp_divider_v;
+			uint8_t ramp_rem_low_v; /* was ramp_divider */
 			uint8_t max_ramp_startup_vcomp_v;
 			uint8_t acq_resist_v;
 			uint8_t desync_episode_bucket_v;
@@ -871,8 +871,8 @@ void sitl_state_poll(void)
 			.max_ramp_startup_v = max_ramp_startup,
 			.max_ramp_low_v = max_ramp_low_rpm,
 			.max_ramp_high_v = max_ramp_high_rpm,
-			.ramp_divider_v = ramp_divider,
-			.max_ramp_startup_vcomp_v = max_ramp_startup_vcomp,
+			.ramp_rem_low_v = ramp_rem[1],		      /* low-rpm remainder, tenths */
+			.max_ramp_startup_vcomp_v = max_ramp_startup, /* no vcomp: equals the configured step */
 			.acq_resist_v = fault_acq_resist_events,
 			.desync_episode_bucket_v = desync_episode_bucket,
 		};

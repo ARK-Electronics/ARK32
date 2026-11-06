@@ -123,9 +123,14 @@ class SchemaTests(unittest.TestCase):
         product = json.loads((REPO_ROOT / 'factory/ARK_4IN1_F051_eeprom_defaults.json').read_text())
         page = build_eeprom_page(product, 32, 0, 3)
         import hashlib
-        # Captured from the pre-schema production encoder and product JSON.
-        self.assertEqual(hashlib.sha256(page).hexdigest(), '0ddd802a96d82220bef23ea7901b560caf2e393c947194befddf1ad17ffdb864')
+        # Captured from the pre-schema production encoder and product JSON
+        # (0ddd802a...), then byte 5 max_ramp 20 -> 10 for the exact ramp.
+        self.assertEqual(hashlib.sha256(page).hexdigest(), 'c260a78d53e9aeb46a12a3e5845a392f1704d69ad029c5b659deba43ad977c2d')
         self.assertEqual(page[48:], b'\xff' * (1024 - 48))
+        # The shipped page is layout 4: identical except the version byte.
+        page4 = build_eeprom_page(product, 32, 0, 4)
+        self.assertEqual(page4[1], 4)
+        self.assertEqual(page4[:1] + page4[2:], page[:1] + page[2:])
 
     def test_factory_temperature_accepts_disabled_sentinels_and_endpoints(self):
         product = json.loads((REPO_ROOT / 'factory/ARK_4IN1_F051_eeprom_defaults.json').read_text())
