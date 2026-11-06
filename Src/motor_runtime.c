@@ -65,22 +65,16 @@ volatile uint8_t zc_pre_seen = 0;
 volatile uint8_t zc_demag_run = 0;
 volatile uint32_t zc_demag_accepts = 0;
 /* Blind-grind rail (faults.c): blind steps this 100 ms window / cut hold */
-volatile uint8_t ramp_divider;
-volatile uint8_t max_ramp_startup = RAMP_SPEED_STARTUP;
-volatile uint8_t max_ramp_low_rpm = RAMP_SPEED_LOW_RPM;
-volatile uint8_t max_ramp_high_rpm = RAMP_SPEED_HIGH_RPM;
-/* Voltage-compensated working copies (runtime_loop.c, 1 kHz); the 20 kHz
- * ramp regime reads these so the hot path pays nothing for the scaling. */
-volatile uint8_t max_ramp_startup_vcomp = RAMP_SPEED_STARTUP;
-volatile uint8_t max_ramp_low_rpm_vcomp = RAMP_SPEED_LOW_RPM;
-volatile uint8_t max_ramp_high_rpm_vcomp = RAMP_SPEED_HIGH_RPM;
+/* Ramp per regime (startup, low rpm, high rpm): whole duty counts per 20 kHz
+ * tick and the remainder in tenths the slew limiter carries (settings.c). */
+volatile uint8_t ramp_step[3] = {RAMP_SPEED_STARTUP, RAMP_SPEED_LOW_RPM, RAMP_SPEED_HIGH_RPM};
+volatile uint8_t ramp_rem[3];
 /* BEMF-headroom governor ceiling (runtime_loop.c); 2000 = disarmed/no cap */
 volatile uint16_t gov_duty_ceiling = 2000;
 char send_esc_info_flag;
 uint32_t eeprom_address = EEPROM_START_ADD;
 uint16_t prop_brake_duty_cycle = 0;
 uint16_t ledcounter = 0;
-uint16_t ramp_count;
 uint32_t process_time = 0;
 uint32_t start_process = 0;
 uint16_t one_khz_loop_counter = 0;

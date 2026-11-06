@@ -12,4 +12,9 @@
 #define VERSION_MAJOR 32
 #define VERSION_MINOR 0
 
-#define EEPROM_VERSION 3
+/* EEPROM layout revision. 4: max_ramp became an exact duty rate (no
+ * pack-voltage scaling). The byte layout is unchanged from 3 and the
+ * firmware does not rewrite a stored ramp; the ARK32 configurator migrates
+ * a v3 ramp. Boot stamps this version over an older page (main.c), so the
+ * configurator must read a v3 page before flashing this firmware. */
+#define EEPROM_VERSION 4
