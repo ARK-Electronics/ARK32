@@ -335,6 +335,8 @@
       "default": {
         "raw": 2
       },
+      "onLoad": "clamp",
+      "onLoadFallbackRaw": 0,
       "ui": {
         "disabledWhen": {
           "field": "brakeOnStop",
