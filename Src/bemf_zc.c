@@ -83,10 +83,16 @@
  * single missed crossing already does.
  *
  * Blind steps do not feed the trend - thiszctime is the deadline's inflated
- * 1.5x value there, not a measurement.
+ * 1.5x value there, not a measurement. Nor do the next two real crossings:
+ * the first is timed from the blind commutation rather than from a
+ * crossing, and both of their differences include it. Fed in, a short
+ * dropout pulled the trend to about -CI/4 (SITL), and alternating misses
+ * would pin the correction at -CI/2: real commutations 6-15 degrees
+ * early, depending on advance.
  */
 #define ZC_TREND_MIN_ZC 20
 static int32_t zc_trend;
+static uint8_t zc_trend_hold; /* real crossings to skip after a blind step */
 /* Last predicted interval used for advance/waitTime (observability + SITL). */
 static uint32_t zc_predicted;
 
@@ -165,7 +171,11 @@ RAM_FUNC void PeriodElapsedCallback()
 	/* See zc_trend: predict the interval about to be timed, not the lagging
 	 * average of the ones already measured. */
 	uint32_t predicted = commutation_interval;
-	if (!blind) {
+	if (blind) {
+		zc_trend_hold = 2;
+	} else if (zc_trend_hold) {
+		zc_trend_hold--;
+	} else {
 		const int32_t step = (int32_t)thiszctime - (int32_t)lastzctime;
 		zc_trend += (step - zc_trend) >> 2;
 	}
@@ -401,6 +411,7 @@ RAM_FUNC void interruptRoutine()
 void bemfZcResetTrend(void)
 {
 	zc_trend = 0;
+	zc_trend_hold = 0;
 	zc_predicted = 0;
 }
 
