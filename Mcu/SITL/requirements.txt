@@ -10,7 +10,15 @@
 #
 # Mcu/SITL/make_gui_env.py does the venv creation and install for you.
 
-PySide6         # Qt bindings for the GUI
+# PySide6 6.12.0 corrupts reference counts in this GUI: on Python 3.10 it dies
+# mid-run in pyqtgraph's LegendItem.paint ("Fatal Python error: none_dealloc:
+# deallocating None"), and on CI's Python 3.12 (immortal None) the damage
+# surfaces at exit as "shared QObject was deleted directly" + malloc
+# corruption, exit -6/-11, about half the runs. CI moved 6.11.2 -> 6.12.0
+# between 2026-10-06 and 2026-10-24, when the GUI exit failures began.
+# Same GUI test, QtMultimedia unavailable as on CI: 6.11.2 4/4 pass, 6.12.0
+# 4/4 crash. Re-test before lifting the pin.
+PySide6==6.11.2 # Qt bindings for the GUI
 pyqtgraph       # live scope / plot widgets
 numpy           # pyqtgraph and the model fitting
 dronecan        # DroneCAN comms to the simulated ESC
