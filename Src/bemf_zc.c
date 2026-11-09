@@ -82,17 +82,27 @@
  * corrupted trend can never move the commutation point further than a
  * single missed crossing already does.
  *
- * Blind steps do not feed the trend - thiszctime is the deadline's inflated
- * 1.5x value there, not a measurement. Nor do the next two real crossings:
- * the first is timed from the blind commutation rather than from a
- * crossing, and both of their differences include it. Fed in, a short
- * dropout pulled the trend to about -CI/4 (SITL), and alternating misses
- * would pin the correction at -CI/2: real commutations 6-15 degrees
- * early, depending on advance.
+ * Blind steps do not feed the trend - thiszctime is the expected interval
+ * there, not a measurement. Nor do the next two real crossings: the first
+ * is timed from the blind step's virtual crossing rather than a real one,
+ * and both of their differences include it. With the old blind step (the
+ * deadline's 1.5x elapsed time as the interval, timer restarted at the
+ * blind commutation) feeding them in pulled the trend to about -CI/4 after
+ * a short dropout (SITL), and alternating misses would pin the correction
+ * at -CI/2: real commutations 6-15 degrees early. Now that the virtual
+ * crossing sits where the crossing was expected, those differences are
+ * close to true ones and the hold is defence in depth.
  */
 #define ZC_TREND_MIN_ZC 20
 static int32_t zc_trend;
 static uint8_t zc_trend_hold; /* real crossings to skip after a blind step */
+/* After a blind commutation: INTERVAL_TIMER value the timer restarted at,
+ * so the next blind step adds real time to zc_blind_ticks... */
+static uint16_t zc_blind_timer_start;
+/* ...and the INTERVAL_TIMER value before which no crossing is accepted, the
+ * post-commutation blanking a real crossing's commutation gets from the
+ * comparator gate (0 = none). */
+static uint16_t zc_blank_until;
 /* Last predicted interval used for advance/waitTime (observability + SITL). */
 static uint32_t zc_predicted;
 
@@ -109,6 +119,9 @@ uint32_t bemfZcGetPredicted(void)
 RAM_FUNC void PeriodElapsedCallback()
 {
 	uint8_t blind = 0;
+	/* Blind step only: INTERVAL_TIMER at this commutation, the grace
+	 * already spent since the virtual crossing it follows. */
+	uint32_t blind_since_crossing = 0;
 	DISABLE_COM_TIMER_INT(); // disable interrupt
 	if (!running || old_routine) {
 		// COM events are meaningless outside interrupt closed-loop: a
@@ -140,19 +153,44 @@ RAM_FUNC void PeriodElapsedCallback()
 		blind = 1;
 		zc_blind_steps++;
 		HWCI_PERF_BLIND_STEP();
-		// Take the full elapsed time as the (late) crossing measurement
-		// and commutate now. The inflated interval feeds the average so
-		// timing hunts slower - the safe direction for a decelerating
-		// rotor - and the next accepted crossing resyncs immediately.
+		// Place the missed crossing where it was expected - one estimated
+		// interval after the last crossing, real or virtual - and
+		// commutate now. The interval timer restarts at the grace already
+		// spent, not 0, so
+		// the next real crossing is timed and gated from the virtual one
+		// as after any accepted crossing, and the next deadline is armed
+		// from it too (below).
+		//
+		// The old step took the whole elapsed time (~1.5 CI) as the
+		// interval and restarted the timer at the commutation. That put
+		// the timer origin ~CI/2 late and grew the estimate 12.5% per
+		// step, so the next real crossing arrived inside the comparator
+		// gate's blanking (CI/2 on G431/SITL, where it is dropped;
+		// average_interval/2 on F051, where it is deferred and timed
+		// late): one missed window became a cascade (SITL: 7 blind steps
+		// and CI x2 every time, more than half ending in a desync restart;
+		// ARK 4IN1 bench: 13-41 A spikes). Dead reckoning no longer hunts
+		// slower: a rotor that slows during the dropout is caught only if
+		// its crossing lands before the next deadline (1.5 CI after the
+		// previous crossing), and a stopped one still exhausts the
+		// budget, which counts real time since the last accepted crossing.
 		maskPhaseInterrupts();
 		uint32_t elapsed = INTERVAL_TIMER_COUNT;
 		if (elapsed > 65535u) {
 			elapsed = 65535u;
 		}
-		zc_blind_ticks += elapsed; // extrapolated time, cleared by a real crossing
+		uint32_t interval = commutation_interval;
+		if (interval > elapsed) {
+			interval = elapsed;
+		}
+		blind_since_crossing = elapsed - interval;
+		// Real time since the previous commutation: the timer started at 0
+		// at a real crossing, at zc_blind_timer_start after a blind step.
+		zc_blind_ticks += elapsed - zc_blind_timer_start; // cleared by a real crossing
+		zc_blind_timer_start = (uint16_t)blind_since_crossing;
 		lastzctime = thiszctime;
-		thiszctime = (uint16_t)elapsed;
-		SET_INTERVAL_TIMER_COUNT(0);
+		thiszctime = (uint16_t)interval;
+		SET_INTERVAL_TIMER_COUNT(blind_since_crossing);
 	} else {
 		// Cancel race: SET_AND_ENABLE_COM_INT clears the peripheral flag,
 		// but a deadline event that reached NVIC pending just before an
@@ -198,15 +236,35 @@ RAM_FUNC void PeriodElapsedCallback()
 	/* Saturate: predicted can be as low as CI/2 under max negative
 	 * correction, so (predicted/2 - advance) must not wrap uint16. */
 	waitTime = bemfZcWaitTimeFromInterval(predicted, advance);
+	if (blind) {
+		// A real crossing's commutation comes waitTime after it, and the
+		// comparator gate stays shut until CI/2: `advance` of blanking
+		// over the demag that follows. A blind commutation comes after
+		// the gate has opened, so blank the same `advance` here - capped
+		// at CI/4, half the ~CI/2 left to the expected crossing, so a
+		// crossing on time is never blanked even at high advance.
+		const uint32_t cap = commutation_interval >> 2;
+		const uint32_t blank = (advance < cap) ? advance : cap;
+		zc_blank_until = (uint16_t)(blind_since_crossing + blank);
+	}
 	if (!old_routine) {
 		enableCompInterrupts(); // enable comp interrupt
 		if (zero_crosses >= ZC_DEADLINE_MIN_ZC) {
-			// Next crossing expected (commutation_interval - waitTime)
-			// from now; arm the blind-step deadline at expected + 50%
-			// grace. The 16-bit clamp shrinks the grace above CI ~40000,
-			// but the trust rail restarts long before a healthy loop
-			// runs that slow.
-			uint32_t deadline = (commutation_interval - waitTime) + (commutation_interval >> 1);
+			// Next crossing expected (commutation_interval - time since
+			// the crossing this commutation follows) from now; arm the
+			// blind-step deadline at expected + 50% grace. After a real
+			// crossing that time is waitTime, as before. After a blind
+			// step it is the grace already spent since the virtual
+			// crossing, so each blind commutation stays 0.5 CI after its
+			// own virtual crossing (1.5 CI after the previous one)
+			// instead of drifting one advance later each step. The 16-bit clamp shrinks the grace
+			// above CI ~40000, but the trust rail restarts long before a
+			// healthy loop runs that slow.
+			uint32_t since_crossing = blind ? blind_since_crossing : waitTime;
+			if (since_crossing > commutation_interval) {
+				since_crossing = commutation_interval;
+			}
+			uint32_t deadline = (commutation_interval - since_crossing) + (commutation_interval >> 1);
 			if (deadline > 65535u) {
 				deadline = 65535u;
 			}
@@ -219,7 +277,7 @@ RAM_FUNC void PeriodElapsedCallback()
 	}
 	if (!blind) {
 		// Blind steps must not feed the jitter accumulators: the
-		// extrapolated 1.5x interval is not a measured crossing, and the
+		// dead-reckoned interval is not a measured crossing, and the
 		// perf gate (zero_crosses >= 100) is the same window in which
 		// blind stepping is armed - counting them would conflate real
 		// jitter with blind-step count in exactly the runs being read.
@@ -230,6 +288,9 @@ RAM_FUNC void PeriodElapsedCallback()
 
 RAM_FUNC void interruptRoutine()
 {
+	if (INTERVAL_TIMER_COUNT < zc_blank_until) { // 0 = no blanking
+		return;				     // a blind commutation's demag window (PeriodElapsedCallback)
+	}
 	HWCI_PERF_ZC_PHASE_CAPTURE(); // TIM1 phase at ISR entry, pre-confirm
 #ifdef MCU_F051
 	// PWM phase (TIM1 CNT) at the edge, sampled before the confirm loop's
@@ -396,6 +457,8 @@ RAM_FUNC void interruptRoutine()
 	 * escalation. Demag authority is handled separately in control_loop.c.
 	 */
 	zc_blind_ticks = 0;
+	zc_blank_until = 0; // the timer restarts at 0 below
+	zc_blind_timer_start = 0;
 	lastzctime = thiszctime;
 #ifdef MCU_F051
 	thiszctime = (uint16_t)(INTERVAL_TIMER_COUNT - zc_grid_comp);
@@ -413,6 +476,7 @@ void bemfZcResetTrend(void)
 	zc_trend = 0;
 	zc_trend_hold = 0;
 	zc_predicted = 0;
+	zc_blank_until = 0;
 }
 
 void startMotor()
