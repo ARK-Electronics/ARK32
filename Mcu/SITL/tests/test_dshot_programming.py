@@ -21,7 +21,8 @@ def programmer(sitl_factory):
     port = sd.InputPort('127.0.0.1', sitl.input_port)
     with control_socket(sitl) as sock:
         watch = Watch(sock, [(1, 'armed'), (1, 'sitl_tone_active'),
-                             (2, 'newinput'), (1, 'running')])
+                             (2, 'newinput'), (1, 'running'),
+                             (2, 'dshot_goodcounts')])
         try:
             watch.until(lambda: watch.values.get(0) == 1
                         and watch.values.get(1) == 0)
@@ -41,9 +42,39 @@ def programmer(sitl_factory):
             ok, message = ee.set(191, [0])
             assert ok, message
 
+            # Deliver each frame exactly once, and only then read back. After
+            # a short host stall the SITL catches up and reads queued UDP
+            # frames back to back in simulated time: a frame that lands
+            # while the capture is not re-armed, or during a bidirectional
+            # reply, is lost as on the wire, and a fixed 4 ms gap let the
+            # EEPROM read beat the commit. The decoder counts every good
+            # frame, so wait for the count and resend only a frame it did
+            # not count. Baseline once the arming sender's last frames are
+            # counted and reported (no change for 200 ms).
+            watch.until(lambda: 4 in watch.values)
+            stable_since, last = time.monotonic(), watch.values[4]
+            deadline = stable_since + 5
+            while time.monotonic() - stable_since < 0.2:
+                assert time.monotonic() < deadline, sitl.log_tail()
+                watch.poll()
+                if watch.values[4] != last:
+                    stable_since, last = time.monotonic(), watch.values[4]
+            counted = [last]
+
             def send(value, telem):
-                port.send_dshot(value, ptype=sd.TYPE_DSHOT600, telem=telem)
-                time.sleep(0.004)
+                want = (counted[0] + 1) & 0xFFFF
+                for _ in range(3):
+                    port.send_dshot(value, ptype=sd.TYPE_DSHOT600, telem=telem)
+                    deadline = time.monotonic() + 1.0
+                    while time.monotonic() < deadline:
+                        watch.poll()
+                        now = watch.values[4]
+                        if now == want:
+                            counted[0] = now
+                            return
+                        assert now == counted[0], (
+                            'decoder counted %d frames for one' % ((now - counted[0]) & 0xFFFF))
+                pytest.fail('frame %d never decoded after 3 sends\n%s' % (value, sitl.log_tail()))
 
             def enter(telem):
                 for _ in range(6):

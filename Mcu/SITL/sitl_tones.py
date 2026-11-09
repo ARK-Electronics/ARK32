@@ -165,6 +165,24 @@ def _run_sink_on_thread(build):
     return t, res['ok'], res['err']
 
 
+def _stop_sink_thread(thread, timeout_ms=10000):
+    '''end a thread from _run_sink_on_thread, whether or not it came up.
+
+    A device that takes longer than the 3 s ready wait (a loaded CI host
+    with no audio server) leaves its owner inactive while the thread goes
+    on into build() and then exec(). That thread must still be stopped:
+    destroying a running QThread at exit aborts the process ("QThread:
+    Destroyed while thread is still running", exit -6). Qt keeps a quit()
+    that arrives before exec() starts, so exec() returns at once and the
+    wait covers the rest of a slow build().'''
+    if thread is None:
+        return
+    thread.quit()                   # ends the audio thread's event loop
+    if not thread.wait(timeout_ms):
+        print('audio thread did not stop within %d ms' % timeout_ms,
+              file=sys.stderr)
+
+
 class ToneSynth(object):
     '''continuous sine synth following a ToneStream, via QtMultimedia.
     Created lazily so everything else works without PySide6; silently
@@ -262,10 +280,8 @@ class ToneSynth(object):
         self.volume = volume
 
     def stop(self):
-        if self.active:
-            self.thread.quit()      # ends the audio thread's event loop
-            self.thread.wait(2000)
-            self.active = False
+        _stop_sink_thread(getattr(self, 'thread', None))
+        self.active = False
 
 
 def goertzel(samples, freq_hz, rate=SAMPLE_RATE):
@@ -423,10 +439,8 @@ class PhysicsAudio(object):
         self.volume = volume
 
     def stop(self):
-        if self.active:
-            self.thread.quit()      # ends the audio thread's event loop
-            self.thread.wait(2000)
-            self.active = False
+        _stop_sink_thread(getattr(self, 'thread', None))
+        self.active = False
 
 
 def parse_expected(spec):
