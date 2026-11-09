@@ -16,7 +16,13 @@ A dropout that ends in a desync restart is skipped: re-acquisition really
 accelerates, so a negative trend there is correct.
 
 Mutation check: feed the post-blind steps back in and the trend reaches
-about -0.28 x the pre-fault CI.
+about -0.28 x the pre-fault CI - on the old blind step, which took the 1.5x
+deadline time as the interval and restarted the interval timer at the blind
+commutation. The blind step now places a virtual crossing where the missed
+one was expected (test_blind_cascade.py), so a one-window dropout costs one
+blind step and the post-blind differences are close to true intervals: with
+that change this test passes even without the hold, and it guards the two
+changes together.
 '''
 
 from __future__ import annotations
