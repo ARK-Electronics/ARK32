@@ -8,7 +8,9 @@ the factory 2.0 %/ms flew 1 count per tick on every pack above 14.8 V.
 
 test_ramp_runs_at_setting drives the unloaded motor on 3S, 4S and 6S packs,
 drops the throttle, and compares the applied duty fall with R/10 counts per
-tick of the firmware's own tenkhzcounter. A ramp-down is used because nothing
+tick of the firmware's own tenkhzcounter. The 6S cases spin up on 4S and
+switch packs while running (see SPIN_UP_MAX_V); the fall and the re-punch
+are always measured on the pack under test. A ramp-down is used because nothing
 but the slew limiter bounds a falling duty; the throttle ceilings only cap a
 rising one, so the re-punch that follows is checked as an upper bound only.
 The pack gets a regen sink so the bus does not pump on the drop. The fall
@@ -113,27 +115,30 @@ def test_ramp_runs_at_setting(sitl_factory, state_stream, tmp_path, ramp, pack_v
     tx = Sender('127.0.0.1', sitl.input_port, sd.TYPE_DSHOT600)
     try:
         with control_socket(sitl) as sock:
-            # Spin-up phase: only the firmware's pack reading is watched.
-            # The state port holds one watch, so the measurement watch below
-            # replaces this one.
-            volts = Watch(sock, [(2, 'battery_voltage')])
-            volts.until(lambda: volts.resolved is not None)
-            assert volts.resolved == [1], volts.resolved
-            time.sleep(2.2)
+            # Spin-up phase: only the firmware's pack reading is watched, on
+            # its own socket. The state port holds one watch, so the
+            # measurement watch below replaces it, and a late keepalive reply
+            # for this one cannot be read as the measurement watch's.
+            with control_socket(sitl) as vsock:
+                volts = Watch(vsock, [(2, 'battery_voltage')])
+                volts.until(lambda: volts.resolved is not None)
+                assert volts.resolved == [1], volts.resolved
+                time.sleep(2.2)
 
-            tx.value = 1600
-            deadline = time.monotonic() + 60  # SITL runs slower than real time
-            spun = 8000 * spin_v / 16.8  # free-run rpm scales with the pack
-            while rpm_from_state(sim, 0.2) < spun:
-                assert time.monotonic() < deadline, sitl.log_tail()
-                volts.poll()
-            if pack_v != spin_v:
-                # The model reload keeps the rotor turning (only the motor
-                # constants and the pack are re-read). Measure once the
-                # firmware's own pack reading has followed it.
-                sim.load_model(test_model)
-                want_cv = 0.97 * pack_v * 100
-                volts.until(lambda: volts.values.get(0, 0) >= want_cv, timeout=20)
+                tx.value = 1600
+                deadline = time.monotonic() + 60  # SITL runs slower than real time
+                spun = 8000 * spin_v / 16.8  # free-run rpm scales with the pack
+                while rpm_from_state(sim, 0.2) < spun:
+                    assert time.monotonic() < deadline, sitl.log_tail()
+                    volts.poll()
+                if pack_v != spin_v:
+                    # The model reload keeps the rotor turning (only the motor
+                    # constants and the pack are re-read). Measure once the
+                    # firmware's own pack reading has followed it.
+                    sim.load_model(test_model)
+                    want_cv = 0.97 * pack_v * 100
+                    volts.until(lambda: volts.values.get(0, 0) >= want_cv, timeout=20)
+                    assert sim.model_status.startswith('loaded'), sim.model_status
 
             watch = Watch(sock, [(2, 'last_duty_cycle'), (2, 'tenkhzcounter'), (1, 'running')])
             watch.until(lambda: watch.resolved is not None)

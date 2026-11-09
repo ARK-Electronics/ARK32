@@ -161,26 +161,35 @@ def _run_sink_on_thread(build):
 
     t = SinkThread()
     t.start()
-    ready.wait(3.0)
+    if not ready.wait(3.0):
+        # Too slow to use (a loaded CI host with no audio server). The
+        # owner reports inactive and the GUI drops an inactive player
+        # without stop(), and a QThread destroyed while it runs aborts
+        # the process ("QThread: Destroyed while thread is still
+        # running", exit -6). So end it here, before anyone can drop it.
+        _stop_sink_thread(t)
+        return t, False, res['err'] or 'audio device did not open within 3 s'
     return t, res['ok'], res['err']
+
+
+# Sink threads that would not stop. Never let a running QThread be
+# destroyed: holding the reference keeps the abort away at least until exit.
+_stuck_sink_threads = []
 
 
 def _stop_sink_thread(thread, timeout_ms=10000):
     '''end a thread from _run_sink_on_thread, whether or not it came up.
 
-    A device that takes longer than the 3 s ready wait (a loaded CI host
-    with no audio server) leaves its owner inactive while the thread goes
-    on into build() and then exec(). That thread must still be stopped:
-    destroying a running QThread at exit aborts the process ("QThread:
-    Destroyed while thread is still running", exit -6). Qt keeps a quit()
-    that arrives before exec() starts, so exec() returns at once and the
-    wait covers the rest of a slow build().'''
+    Qt keeps a quit() that arrives before exec() starts, so a thread still
+    inside build() returns from exec() at once, and the wait covers the
+    rest of a slow build().'''
     if thread is None:
         return
     thread.quit()                   # ends the audio thread's event loop
     if not thread.wait(timeout_ms):
         print('audio thread did not stop within %d ms' % timeout_ms,
               file=sys.stderr)
+        _stuck_sink_threads.append(thread)
 
 
 class ToneSynth(object):
