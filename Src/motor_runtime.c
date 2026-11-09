@@ -24,6 +24,8 @@
 #else
 #	define FIRMWARE_VERSION_EMBED AM32_VER_STR(VERSION_MAJOR) "." AM32_VER_STR(VERSION_MINOR)
 #endif
+/* EEPROM layout this image runs, after the version in .file_name: "e4". */
+#define FIRMWARE_EEPROM_EMBED "e" AM32_VER_STR(EEPROM_VERSION)
 
 //===========================================================================
 //=============================  Defaults =============================
@@ -109,12 +111,17 @@ uint16_t low_cell_volt_cutoff = 330; // 3.3volts per cell
  * out of the image - so LTO drops it as dead without the attribute, leaving the
  * section empty and the firmware unidentifiable.
  *
- * Layout (32-byte region below EEPROM): `FILE_NAME\0VERSION\0…`
- * VERSION is the ship string (e.g. 32.0). Older tools only decode
- * up to the first NUL and still see the board identity for asset matching.
+ * Layout (32-byte region below EEPROM): `FILE_NAME\0VERSION\0eLAYOUT\0…`
+ * VERSION is the ship string (e.g. 32.0). eLAYOUT is EEPROM_VERSION (e.g. e4):
+ * the ARK32 configurator reads it from the hex before flashing, because the
+ * version string does not say which EEPROM layout a build uses and a layout-3
+ * page needs its ramp migrated for layout 4 (version.h). Older tools only
+ * decode up to the first NUL (or the second) and still see the board identity
+ * and version.
  */
-const char filename[32] __attribute__((used)) AM32_FLASH_SECTION(".file_name") = FILE_NAME "\0" FIRMWARE_VERSION_EMBED;
-_Static_assert(sizeof(FILE_NAME "\0" FIRMWARE_VERSION_EMBED) <= 32, "FILE_NAME + version exceed .file_name region");
+#define FIRMWARE_NAME_REGION FILE_NAME "\0" FIRMWARE_VERSION_EMBED "\0" FIRMWARE_EEPROM_EMBED
+const char filename[32] __attribute__((used)) AM32_FLASH_SECTION(".file_name") = FIRMWARE_NAME_REGION;
+_Static_assert(sizeof(FIRMWARE_NAME_REGION) <= 32, "FILE_NAME + version + layout exceed .file_name region");
 _Static_assert(sizeof(FIRMWARE_NAME) <= 13, "Firmware name too long"); // max 12 character firmware name plus NULL
 
 // move these to targets folder or peripherals for each mcu
