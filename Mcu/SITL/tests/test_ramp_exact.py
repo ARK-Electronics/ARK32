@@ -48,6 +48,22 @@ EEPROM_MAX_RAMP = 5  # maxRampSpeed offset, 0.1 %/ms per count
 
 LOOP_HZ = 20000  # main.c resets tenkhzcounter once it passes this
 SPIN_UP_RAMP = 10  # 1.0 %/ms: the factory ramp, so spin-up is not under test
+# Spin up on at most a 4S pack, then switch to the pack under test. Starting
+# this model from rest straight onto 6S at 80 % throttle trips the firmware's
+# interval-jump desync check about every 40 ms near 2,000 rpm (main before
+# the exact ramp did the same). It escapes or latches on the episode rail
+# depending on host timing, which made the 6S cases flaky. Only the fall and
+# re-punch are under test, and both run on the pack under test.
+SPIN_UP_MAX_V = 16.8
+
+
+def _model(tmp_path, pack_v):
+    with open(os.path.join(MODELS, 'unloaded.json')) as f:
+        model = json.load(f)
+    model['battery'].update(voltage=pack_v, capacitance=1e-3, sink_resistance=0.012)
+    path = tmp_path / ('unloaded_%.1fv_regen_sink.json' % pack_v)
+    path.write_text(json.dumps(model))
+    return str(path)
 
 
 def _tick_clock(events):
@@ -81,16 +97,14 @@ def _ticks_between(clock, ta, tb):
 @pytest.mark.parametrize('ramp, pack_v', [
     (20, 16.8), (20, 22.2), (15, 16.8), (15, 22.2), (5, 11.1), (1, 22.2)])
 def test_ramp_runs_at_setting(sitl_factory, state_stream, tmp_path, ramp, pack_v):
-    with open(os.path.join(MODELS, 'unloaded.json')) as f:
-        model = json.load(f)
-    model['battery'].update(voltage=pack_v, capacitance=1e-3, sink_resistance=0.012)
-    model_path = tmp_path / ('unloaded_%.1fv_regen_sink.json' % pack_v)
-    model_path.write_text(json.dumps(model))
+    spin_v = min(pack_v, SPIN_UP_MAX_V)
+    spin_model = _model(tmp_path, spin_v)
+    test_model = _model(tmp_path, pack_v)
 
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     sim = state_stream(sitl)
     assert wait_for_state(sim), sitl.log_tail()
-    sim.load_model(str(model_path))
+    sim.load_model(spin_model)
 
     client = EepromClient(port=sitl.state_port)
     ok, message = client.set(EEPROM_MAX_RAMP, [SPIN_UP_RAMP])
@@ -99,17 +113,31 @@ def test_ramp_runs_at_setting(sitl_factory, state_stream, tmp_path, ramp, pack_v
     tx = Sender('127.0.0.1', sitl.input_port, sd.TYPE_DSHOT600)
     try:
         with control_socket(sitl) as sock:
-            watch = Watch(sock, [(2, 'last_duty_cycle'), (2, 'tenkhzcounter'), (1, 'running')])
-            watch.until(lambda: watch.resolved is not None)
-            assert watch.resolved[:2] == [1, 1], watch.resolved
+            # Spin-up phase: only the firmware's pack reading is watched.
+            # The state port holds one watch, so the measurement watch below
+            # replaces this one.
+            volts = Watch(sock, [(2, 'battery_voltage')])
+            volts.until(lambda: volts.resolved is not None)
+            assert volts.resolved == [1], volts.resolved
             time.sleep(2.2)
 
             tx.value = 1600
             deadline = time.monotonic() + 60  # SITL runs slower than real time
-            spun = 8000 * min(1.0, pack_v / 16.8)  # free-run rpm scales with the pack
+            spun = 8000 * spin_v / 16.8  # free-run rpm scales with the pack
             while rpm_from_state(sim, 0.2) < spun:
                 assert time.monotonic() < deadline, sitl.log_tail()
-                watch.poll()
+                volts.poll()
+            if pack_v != spin_v:
+                # The model reload keeps the rotor turning (only the motor
+                # constants and the pack are re-read). Measure once the
+                # firmware's own pack reading has followed it.
+                sim.load_model(test_model)
+                want_cv = 0.97 * pack_v * 100
+                volts.until(lambda: volts.values.get(0, 0) >= want_cv, timeout=20)
+
+            watch = Watch(sock, [(2, 'last_duty_cycle'), (2, 'tenkhzcounter'), (1, 'running')])
+            watch.until(lambda: watch.resolved is not None)
+            assert watch.resolved[:2] == [1, 1], watch.resolved
             # Switch to the ramp under test only once spinning (SITL reloads
             # settings on an EEPROM write), then let duty settle.
             ok, message = client.set(EEPROM_MAX_RAMP, [ramp])
