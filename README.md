@@ -270,6 +270,9 @@ To put ARK32 on a **blank production ESC**, flash the full-chip factory image (`
 
 Every user-facing EEPROM field is documented in [`doc/eeprom-settings.md`](doc/eeprom-settings.md): what it does, the range the configurator shows, and the ARK 4IN1 factory default. The same text is the **Settings guide** in [ARK32 Configurator](https://github.com/ARK-Electronics/ark32-configurator).
 
+Low-kV limiter behavior, stored-kV examples and bench validation are covered in
+[`doc/low-kv-protection.md`](doc/low-kv-protection.md).
+
 ## Configuration tools & stock firmware
 
 For ARK hardware use **[ARK32 Configurator](https://github.com/ARK-Electronics/ark32-configurator)**. Settings text is the same as [`doc/eeprom-settings.md`](doc/eeprom-settings.md).
