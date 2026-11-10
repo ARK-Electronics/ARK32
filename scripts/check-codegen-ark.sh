@@ -141,6 +141,27 @@ check_section .px4_app_descriptor optional "LTO dropped its contents (object nee
 # means the cookie was removed or the linker script changed — not LTO DCE.
 check_section .noinit required "expected boot_sound_cookie (or other .noinit) — cookie removed or linker script changed?"
 
+# --- 3. no constructors on F051 -----------------------------------------------
+# The F051 links with -nostartfiles and its reset handler does not call
+# __libc_init_array (f051makefile.mk), so an entry in any of these arrays would
+# silently never run. Other targets keep the start files; skip them (the F051
+# is the only caller that leaves the RAM_FUNC block enabled).
+check_section_empty() {
+  local name="$1" size
+  size=$(awk -v n="$name" '{for (i = 1; i <= NF; i++) if ($i == n) { print $(i + 4); exit }}' <<<"$SECS")
+  if [ -n "$size" ] && [ $((16#$size)) -ne 0 ]; then
+    echo "  FAIL: $name = $((16#$size)) bytes — a constructor was added, but the F051 never runs them" >&2
+    rc=1
+  else
+    echo "  ok   $name empty"
+  fi
+}
+if [ "$CHECK_RAMFUNC" -eq 1 ]; then
+  check_section_empty .preinit_array
+  check_section_empty .init_array
+  check_section_empty .fini_array
+fi
+
 if [ "$rc" -ne 0 ]; then
   echo "check-codegen-ark: FAIL" >&2
   exit 1

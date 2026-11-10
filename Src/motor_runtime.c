@@ -24,6 +24,8 @@
 #else
 #	define FIRMWARE_VERSION_EMBED AM32_VER_STR(VERSION_MAJOR) "." AM32_VER_STR(VERSION_MINOR)
 #endif
+/* EEPROM layout this image runs, after the version in .file_name: "e4". */
+#define FIRMWARE_EEPROM_EMBED "e" AM32_VER_STR(EEPROM_VERSION)
 
 //===========================================================================
 //=============================  Defaults =============================
@@ -65,22 +67,16 @@ volatile uint8_t zc_pre_seen = 0;
 volatile uint8_t zc_demag_run = 0;
 volatile uint32_t zc_demag_accepts = 0;
 /* Blind-grind rail (faults.c): blind steps this 100 ms window / cut hold */
-volatile uint8_t ramp_divider;
-volatile uint8_t max_ramp_startup = RAMP_SPEED_STARTUP;
-volatile uint8_t max_ramp_low_rpm = RAMP_SPEED_LOW_RPM;
-volatile uint8_t max_ramp_high_rpm = RAMP_SPEED_HIGH_RPM;
-/* Voltage-compensated working copies (runtime_loop.c, 1 kHz); the 20 kHz
- * ramp regime reads these so the hot path pays nothing for the scaling. */
-volatile uint8_t max_ramp_startup_vcomp = RAMP_SPEED_STARTUP;
-volatile uint8_t max_ramp_low_rpm_vcomp = RAMP_SPEED_LOW_RPM;
-volatile uint8_t max_ramp_high_rpm_vcomp = RAMP_SPEED_HIGH_RPM;
+/* Ramp per regime (startup, low rpm, high rpm): whole duty counts per 20 kHz
+ * tick and the remainder in tenths the slew limiter carries (settings.c). */
+volatile uint8_t ramp_step[3] = {RAMP_SPEED_STARTUP, RAMP_SPEED_LOW_RPM, RAMP_SPEED_HIGH_RPM};
+volatile uint8_t ramp_rem[3];
 /* BEMF-headroom governor ceiling (runtime_loop.c); 2000 = disarmed/no cap */
 volatile uint16_t gov_duty_ceiling = 2000;
 char send_esc_info_flag;
 uint32_t eeprom_address = EEPROM_START_ADD;
 uint16_t prop_brake_duty_cycle = 0;
 uint16_t ledcounter = 0;
-uint16_t ramp_count;
 uint32_t process_time = 0;
 uint32_t start_process = 0;
 uint16_t one_khz_loop_counter = 0;
@@ -115,12 +111,17 @@ uint16_t low_cell_volt_cutoff = 330; // 3.3volts per cell
  * out of the image - so LTO drops it as dead without the attribute, leaving the
  * section empty and the firmware unidentifiable.
  *
- * Layout (32-byte region below EEPROM): `FILE_NAME\0VERSION\0…`
- * VERSION is the ship string (e.g. 32.0). Older tools only decode
- * up to the first NUL and still see the board identity for asset matching.
+ * Layout (32-byte region below EEPROM): `FILE_NAME\0VERSION\0eLAYOUT\0…`
+ * VERSION is the ship string (e.g. 32.0). eLAYOUT is EEPROM_VERSION (e.g. e4):
+ * the ARK32 configurator reads it from the hex before flashing, because the
+ * version string does not say which EEPROM layout a build uses and a layout-3
+ * page needs its ramp migrated for layout 4 (version.h). Older tools only
+ * decode up to the first NUL (or the second) and still see the board identity
+ * and version.
  */
-const char filename[32] __attribute__((used)) AM32_FLASH_SECTION(".file_name") = FILE_NAME "\0" FIRMWARE_VERSION_EMBED;
-_Static_assert(sizeof(FILE_NAME "\0" FIRMWARE_VERSION_EMBED) <= 32, "FILE_NAME + version exceed .file_name region");
+#define FIRMWARE_NAME_REGION FILE_NAME "\0" FIRMWARE_VERSION_EMBED "\0" FIRMWARE_EEPROM_EMBED
+const char filename[32] __attribute__((used)) AM32_FLASH_SECTION(".file_name") = FIRMWARE_NAME_REGION;
+_Static_assert(sizeof(FIRMWARE_NAME_REGION) <= 32, "FILE_NAME + version + layout exceed .file_name region");
 _Static_assert(sizeof(FIRMWARE_NAME) <= 13, "Firmware name too long"); // max 12 character firmware name plus NULL
 
 // move these to targets folder or peripherals for each mcu
@@ -205,11 +206,11 @@ volatile uint32_t pwm_to_arr_scale_q16 = ((uint32_t)TIM1_AUTORELOAD << 16) / 200
 // Q16 input to duty cycle slopes, computed once at startup for setInput
 volatile uint32_t throttle_duty_slope_q16 = ((uint32_t)(2000 - DEAD_TIME) << 16) / (2047 - 47);
 volatile uint32_t sine_throttle_duty_slope_q16 = ((uint32_t)(2000 - (DEAD_TIME + 40)) << 16) / (2047 - 137);
-uint16_t TIMER1_MAX_ARR = TIM1_AUTORELOAD;   // maximum auto reset register value
-volatile uint16_t duty_cycle_maximum = 2000; // restricted by temperature or low rpm throttle protect
-uint16_t low_rpm_level = 20;		     // thousand erpm used to set range for throttle resrictions
-uint16_t high_rpm_level = 70;		     //
-uint16_t throttle_max_at_low_rpm = 400;
+uint16_t TIMER1_MAX_ARR = TIM1_AUTORELOAD;	  // maximum auto reset register value
+volatile uint16_t duty_cycle_maximum = 2000;	  // restricted by temperature or low rpm throttle protect
+uint16_t low_rpm_level = LOW_RPM_LEVEL_DEFAULT;	  // thousand erpm used to set range for throttle resrictions
+uint16_t high_rpm_level = HIGH_RPM_LEVEL_DEFAULT; //
+uint16_t throttle_max_at_low_rpm = THROTTLE_MAX_AT_LOW_RPM_DEFAULT;
 uint16_t throttle_max_at_high_rpm = 2000;
 
 volatile uint16_t commutation_intervals[6] = {0};
@@ -280,20 +281,7 @@ volatile char rising = 1;
 // 17, 18, 21, 24, 28, 31, 35, 38, 42, 45, 49, 53, 56, 60, 64, 67, 71, 75, 78,
 // 82, 86, 90, 94, 97, 101, 105, 109, 113, 116, 120, 124};
 
-////Sine Wave PWM ///////////////////
-/* Flash-resident sine table (read-only) — keeps ~720 B out of F051 RAM. */
-/* First half-period only: the full 360-entry table satisfies
- * pwmSin[i] + pwmSin[i+180] == 360 EXACTLY (verified against the
- * original), so pwmSinLookup (motor_runtime.h) reconstructs the
- * second half bit-identically and the flash table halves to 360 B. */
-const int16_t pwmSinHalf[180] = {
-	180, 183, 186, 189, 193, 196, 199, 202, 205, 208, 211, 214, 217, 220, 224, 227, 230, 233, 236, 239, 242, 245, 247, 250, 253, 256,
-	259, 262, 265, 267, 270, 273, 275, 278, 281, 283, 286, 288, 291, 293, 296, 298, 300, 303, 305, 307, 309, 312, 314, 316, 318, 320,
-	322, 324, 326, 327, 329, 331, 333, 334, 336, 337, 339, 340, 342, 343, 344, 346, 347, 348, 349, 350, 351, 352, 353, 354, 355, 355,
-	356, 357, 357, 358, 358, 359, 359, 359, 360, 360, 360, 360, 360, 360, 360, 360, 360, 359, 359, 359, 358, 358, 357, 357, 356, 355,
-	355, 354, 353, 352, 351, 350, 349, 348, 347, 346, 344, 343, 342, 340, 339, 337, 336, 334, 333, 331, 329, 327, 326, 324, 322, 320,
-	318, 316, 314, 312, 309, 307, 305, 303, 300, 298, 296, 293, 291, 288, 286, 283, 281, 278, 275, 273, 270, 267, 265, 262, 259, 256,
-	253, 250, 247, 245, 242, 239, 236, 233, 230, 227, 224, 220, 217, 214, 211, 208, 205, 202, 199, 196, 193, 189, 186, 183};
+/* The sine-startup PWM table and its lookup live in Inc/sine_table.h. */
 
 // int sin_divider = 2;
 int16_t phase_A_position;

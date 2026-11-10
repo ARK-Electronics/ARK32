@@ -61,17 +61,51 @@ int32_t doPidCalculations(struct fastPID *pidnow, int actual, int target)
 	return pidnow->pid_output;
 }
 
+/* Median of three raw samples. No divide: Cortex-M0 has no hardware divider,
+ * and this runs on every 1 kHz current sample. Branchy compares are the cheap
+ * form. A window of three drops one outlier, which is the 4IN1 case (one
+ * L*di/dt hit in the 7 us aperture). Median-of-5 would reject two hits but
+ * costs more flash than the F051 has, and two hits inside 3 ms is not the
+ * noise the shunt actually produces. Group delay on a real step is one
+ * sample (1 ms), against the 50 ms boxcar behind it. */
+static uint16_t median3(uint16_t a, uint16_t b, uint16_t c)
+{
+	/* Three compares, no divide. Cortex-M0 has no conditional move. */
+	if (a > b) {
+		const uint16_t swap = a;
+		a = b;
+		b = swap;
+	}
+	if (b > c) {
+		const uint16_t swap = b;
+		b = c;
+		c = swap;
+	}
+	if (a > b) {
+		const uint16_t swap = a;
+		a = b;
+		b = swap;
+	}
+	return b;
+}
+
 uint16_t getSmoothedCurrent()
 {
 	// Sample once: ADC_raw_current is written by ADC_DMA_Callback(), which also
 	// runs from the DMA ISR. The sum is incremental, so the value stored in the
 	// ring and the value added here must be the same one or the running total
 	// drifts permanently when the two reads straddle an update.
+	// The median history is only touched here (main loop, once per tick).
 	const uint16_t sample = ADC_raw_current;
+	static uint16_t older;
+	static uint16_t newer;
+	const uint16_t filtered = median3(older, newer, sample);
+	older = newer;
+	newer = sample;
 
 	current_total -= current_readings[current_read_index];
-	current_readings[current_read_index] = sample;
-	current_total += sample;
+	current_readings[current_read_index] = filtered;
+	current_total += filtered;
 
 	current_read_index++;
 	if (current_read_index >= NUM_CURRENT_READINGS) {
@@ -83,16 +117,22 @@ uint16_t getSmoothedCurrent()
 
 void setInput()
 {
-	if (eepromBuffer.bidirectional_mode) {
+	const uint8_t direction_reversed = eepromBuffer.direction_reversed ^ dshot_direction_reversed;
+	/* A direction request must finish the existing stop/brake path even if
+	 * the sender resumes throttle before the rotor has coasted down. */
+	if (dshot_direction_pending) {
+		newinput = 0;
+		adjusted_input = 0;
+	} else if (eepromBuffer.bidirectional_mode) {
 		if (dshot == 0) {
 			if (eepromBuffer.rc_car_reversing) {
 				if (newinput > (1000 + (servo_dead_band << 1))) {
-					if (forward == eepromBuffer.direction_reversed) {
+					if (forward == direction_reversed) {
 						adjusted_input = 0;
 						//               if (running) {
 						prop_brake_active = 1;
 						if (return_to_center) {
-							forward = 1 - eepromBuffer.direction_reversed;
+							forward = 1 - direction_reversed;
 							prop_brake_active = 0;
 							return_to_center = 0;
 						}
@@ -104,11 +144,11 @@ void setInput()
 					}
 				}
 				if (newinput < (1000 - (servo_dead_band << 1))) {
-					if (forward == (1 - eepromBuffer.direction_reversed)) {
+					if (forward == (1 - direction_reversed)) {
 						adjusted_input = 0;
 						prop_brake_active = 1;
 						if (return_to_center) {
-							forward = eepromBuffer.direction_reversed;
+							forward = direction_reversed;
 							prop_brake_active = 0;
 							return_to_center = 0;
 						}
@@ -128,10 +168,10 @@ void setInput()
 				}
 			} else {
 				if (newinput > (1000 + (servo_dead_band << 1))) {
-					if (forward == eepromBuffer.direction_reversed) {
+					if (forward == direction_reversed) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
-							forward = 1 - eepromBuffer.direction_reversed;
+							forward = 1 - direction_reversed;
 							zero_crosses = 0;
 							bemfZcResetTrend();
 							old_routine = 1;
@@ -145,13 +185,13 @@ void setInput()
 						map(newinput, 1000 + (servo_dead_band << 1), 2000, DSHOT_CMD_MAX, DSHOT_MAX_THROTTLE);
 				}
 				if (newinput < (1000 - (servo_dead_band << 1))) {
-					if (forward == (1 - eepromBuffer.direction_reversed)) {
+					if (forward == (1 - direction_reversed)) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
 							zero_crosses = 0;
 							bemfZcResetTrend();
 							old_routine = 1;
-							forward = eepromBuffer.direction_reversed;
+							forward = direction_reversed;
 							maskPhaseInterrupts();
 							brushed_direction_set = 0;
 						} else {
@@ -170,11 +210,11 @@ void setInput()
 		if (dshot) {
 			if (eepromBuffer.rc_car_reversing) {
 				if (newinput > DSHOT_3D_REVERSE_MAX) {
-					if (forward == eepromBuffer.direction_reversed) {
+					if (forward == direction_reversed) {
 						adjusted_input = 0;
 						prop_brake_active = 1;
 						if (return_to_center) {
-							forward = 1 - eepromBuffer.direction_reversed;
+							forward = 1 - direction_reversed;
 							prop_brake_active = 0;
 							return_to_center = 0;
 						}
@@ -186,11 +226,11 @@ void setInput()
 					}
 				}
 				if (newinput <= DSHOT_3D_REVERSE_MAX && newinput > DSHOT_CMD_MAX) {
-					if (forward == (1 - eepromBuffer.direction_reversed)) {
+					if (forward == (1 - direction_reversed)) {
 						adjusted_input = 0;
 						prop_brake_active = 1;
 						if (return_to_center) {
-							forward = eepromBuffer.direction_reversed;
+							forward = direction_reversed;
 							prop_brake_active = 0;
 							return_to_center = 0;
 						}
@@ -210,10 +250,10 @@ void setInput()
 				}
 			} else {
 				if (newinput > DSHOT_3D_REVERSE_MAX) {
-					if (forward == eepromBuffer.direction_reversed) {
+					if (forward == direction_reversed) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
-							forward = 1 - eepromBuffer.direction_reversed;
+							forward = 1 - direction_reversed;
 							zero_crosses = 0;
 							bemfZcResetTrend();
 							old_routine = 1;
@@ -227,13 +267,13 @@ void setInput()
 						((newinput - DSHOT_3D_FORWARD_MIN_THROTTLE) * 2 + DSHOT_CMD_MAX) - reversing_dead_band;
 				}
 				if (newinput <= DSHOT_3D_REVERSE_MAX && newinput > DSHOT_CMD_MAX) {
-					if (forward == (1 - eepromBuffer.direction_reversed)) {
+					if (forward == (1 - direction_reversed)) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
 							zero_crosses = 0;
 							bemfZcResetTrend();
 							old_routine = 1;
-							forward = eepromBuffer.direction_reversed;
+							forward = direction_reversed;
 							maskPhaseInterrupts();
 							brushed_direction_set = 0;
 						} else {
@@ -267,13 +307,14 @@ void setInput()
 		input = FIXED_DUTY_MODE_POWER * 20 + DSHOT_CMD_MAX;
 #	else
 		if (eepromBuffer.sine_startup) {
+			/* The dead band must win: a live DShot programming write can
+			 * leave sine_mode_range at 0 (the load-time clamp has not run),
+			 * and the range test below would then map zero throttle to 160. */
 			if (adjusted_input < 30) { // dead band ?
 				input = 0;
-			}
-			if (adjusted_input > 30 && adjusted_input < (eepromBuffer.sine_mode_range * 20)) {
+			} else if (adjusted_input < (eepromBuffer.sine_mode_range * 20)) {
 				input = map(adjusted_input, 30, (eepromBuffer.sine_mode_range * 20), DSHOT_CMD_MAX, 160);
-			}
-			if (adjusted_input >= (eepromBuffer.sine_mode_range * 20)) {
+			} else {
 				input = map(adjusted_input, (eepromBuffer.sine_mode_range * 20), DSHOT_MAX_THROTTLE, 160,
 					    DSHOT_MAX_THROTTLE);
 			}
@@ -314,6 +355,9 @@ void setInput()
 	}
 #endif
 #ifndef BRUSHED_MODE
+	if (dshot_direction_pending) {
+		input = 0; /* RPM/duty overrides must also finish the stop. */
+	}
 	if (escMaySixStepThrottle()) {
 		if (input >= DSHOT_CMD_MAX + (80 * eepromBuffer.sine_startup)) {
 			// Re-entry into six-step happens HERE, at input-frame rate -
@@ -430,11 +474,12 @@ void setInput()
 #	ifndef PWM_ENABLE_BRIDGE
 							if (eepromBuffer.brake_on_stop == 1) {
 								prop_brake_duty_cycle = eepromBuffer.drag_brake_strength * 200;
+								/* Flag first, for full brake too, so gateDriverPoll will
+								 * not sleep the driver mid-brake. */
+								prop_brake_active = 1;
 								if (prop_brake_duty_cycle >= (1999)) {
 									fullBrake();
 								} else {
-									/* Flag first so gateDriverPoll will not sleep mid-brake. */
-									prop_brake_active = 1;
 									proportionalBrake(); /* gateDriverEnsure inside */
 								}
 							}
@@ -606,6 +651,9 @@ void setInput()
 		}
 	}
 #endif
+	if (!escInSineStart()) {
+		dshotApplyPendingDirection();
+	}
 }
 
 RAM_FUNC void tenKhzRoutine()
@@ -620,7 +668,6 @@ RAM_FUNC void tenKhzRoutine()
 	duty_cycle = duty_cycle_setpoint;
 	tenkhzcounter++;
 	ledcounter++;
-	ramp_count++;
 	one_khz_loop_counter++;
 #if defined(USE_DRV_NFAULT)
 	{
@@ -636,7 +683,14 @@ RAM_FUNC void tenKhzRoutine()
 		}
 	}
 #endif
-	if (!escIsArmed()) {
+	/* A latched low-voltage cutoff clears `armed` but must never re-arm.
+	 * With the absolute cutoff cell_count stays 0, so without this check the
+	 * block below runs again: its one-second timer has already expired and
+	 * the cutoff path (runtime_loop.c) zeroed zero_input_count, so it takes
+	 * the "arming failed" branch and clears inputSet. Frames then stop being decoded, the
+	 * signal-loss watchdog resets the MCU after 2 s, and the reset wipes the
+	 * latch, so the ESC re-armed and was drivable for ~10 s every ~13 s. */
+	if (!escIsArmed() && !LOW_VOLTAGE_CUTOFF) {
 		if (cell_count == 0) {
 			if (inputSet) {
 				if (adjusted_input == 0) {
@@ -815,21 +869,22 @@ RAM_FUNC void tenKhzRoutine()
 				}
 			}
 		}
-		if (ramp_count > ramp_divider) {
-			ramp_count = 0;
-			// Single ramp path for all targets: the legacy compile-time
-			// VOLTAGE_BASED_RAMP variant (no target defined it) is
-			// subsumed by the runtime voltage compensation - _vcomp are
-			// the working copies scaled by measured Vbat at 1 kHz
-			// (runtimeTransientGovernorTick): same VOLTS/ms on any pack.
-			if (zero_crosses < 150 || last_duty_cycle < 150) {
-				max_duty_cycle_change = max_ramp_startup_vcomp;
-			} else {
-				if (average_interval > 500) {
-					max_duty_cycle_change = max_ramp_low_rpm_vcomp;
-				} else {
-					max_duty_cycle_change = max_ramp_high_rpm_vcomp;
-				}
+		{
+			// Configured ramp, never faster: whole counts per tick plus the
+			// regime's remainder in tenths carried here (settings.c), so a
+			// tick moves base or base + 1 counts and the average is exactly
+			// the setting. ramp_acc stays below 10, so at most one count is
+			// ever banked. No pack-voltage scaling.
+			static uint8_t ramp_acc;
+			uint8_t regime = 0; // startup
+			if (zero_crosses >= 150 && last_duty_cycle >= 150) {
+				regime = average_interval > 500 ? 1 : 2; // low / high rpm
+			}
+			max_duty_cycle_change = ramp_step[regime];
+			ramp_acc += ramp_rem[regime];
+			if (ramp_acc >= 10u) {
+				ramp_acc -= 10u;
+				max_duty_cycle_change++;
 			}
 #	ifdef CUSTOM_RAMP
 			//         max_duty_cycle_change = eepromBuffer[30];
@@ -857,8 +912,6 @@ RAM_FUNC void tenKhzRoutine()
 			if ((last_duty_cycle - duty_cycle) > max_duty_cycle_change) {
 				duty_cycle = last_duty_cycle - max_duty_cycle_change;
 			}
-		} else {
-			duty_cycle = last_duty_cycle;
 		}
 
 		/* Inside !escInSineStart(): escIsDriving() ≡ running. */
@@ -882,6 +935,11 @@ RAM_FUNC void tenKhzRoutine()
 		last_duty_cycle = duty_cycle;
 		SET_AUTO_RELOAD_PWM(tim1_arr);
 		SET_DUTY_CYCLE_ALL(adjusted_duty_cycle);
+	} else if (one_khz_loop_counter > PID_LOOP_DIVIDER) {
+		// Sine start runs no PID, but voltage cutoff, current and
+		// temperature still need fresh ADC samples (upstream 9696d28).
+		PROCESS_ADC_FLAG = 1;
+		one_khz_loop_counter = 0;
 	}
 #endif // ndef brushed_mode
 	faultSignalTimeoutTick();

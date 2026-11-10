@@ -720,7 +720,7 @@ def build_live_sources(rig: RigConfig, profile: Profile, *,
             raise FileNotFoundError(
                 f"no ELF for target {rig.target} in {rig.resolved_obj_dir()}; "
                 "build with HWCI_PERF=1 first")
-        dbg = openocd_from_rig(rig).open()
+        dbg = openocd_from_rig(rig, elf_path=str(elf)).open()
         perf_reader = PerfReader(dbg, str(elf))
         perf_source = perf_reader.read
         closers.append(dbg.close)

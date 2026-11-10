@@ -119,7 +119,12 @@ void gateDriverPoll(void)
 		return;
 	}
 #	endif
-	if (running || stepper_sine || prop_brake_active) {
+	/* A stop brake (full, proportional, or the active brake that the
+	 * 20 kHz loop applies with comStep(2)) holds the bridge whenever the
+	 * ESC is armed and stopped. Sleeping under it drops the brake, and the
+	 * next brake call wakes the driver with a blocking tWAKE - inside the
+	 * 20 kHz ISR for the active brake. */
+	if (running || stepper_sine || prop_brake_active || (armed && eepromBuffer.brake_on_stop)) {
 		gateDriverWakeBlocking();
 	} else {
 		gateDriverSleep();

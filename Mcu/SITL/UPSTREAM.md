@@ -79,8 +79,10 @@ CI runs ESCSim behavioral tests and native state-protocol regressions on
 Linux, Linux ASan/UBSan, and macOS. ESCSim adds scope acquisition, live v2/v3
 wire compatibility, repeated FC passthrough sessions and virtual USB/IP tests.
 Bootloader four-way and direct-serial tests require an explicit `--bootloader`
-SITL binary and otherwise report skips. Existing ARK pytest, calibration, GUI
-and Windows jobs remain.
+SITL binary and otherwise report skips. Existing ARK pytest, calibration and
+GUI jobs remain. ARK dropped the Windows SITL jobs (Cygwin build and MinGW
+GUI package): nobody at ARK develops on Windows. Upstream's Windows code is
+kept but untested.
 
 ```sh
 make AM32_SITL_CAN

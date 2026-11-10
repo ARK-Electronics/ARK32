@@ -24,6 +24,7 @@
 #include "sounds.h"
 /* commutation_interval for stall debug line */
 #include "motor_runtime.h"
+#include "dshot.h"
 
 #ifdef USE_RGB_LED
 extern void setIndividualRGBLed(uint8_t, uint8_t, uint8_t);
@@ -479,6 +480,9 @@ uint8_t faultHandleStuckRotorIfNeeded(void)
 /* RAM-resident: called from tenKhzRoutine every 50 us on F051. */
 RAM_FUNC void faultSignalTimeoutTick(void)
 {
+	if (dshot_programming_ticks) {
+		dshot_programming_ticks--;
+	}
 #if defined(FIXED_DUTY_MODE) || defined(FIXED_SPEED_MODE)
 	if (getInputPinState()) {
 		signaltimeout++;

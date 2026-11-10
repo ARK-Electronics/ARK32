@@ -607,8 +607,17 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 		switch (p->vtype) {
 			case T_UINT8: {
 				uint8_t *ptr8 = (uint8_t *)p->ptr;
-				if (ptr8 == &eepromBuffer.current_limit || ptr8 == &eepromBuffer.current_pid_p ||
-				    ptr8 == &eepromBuffer.current_pid_d) {
+				if (ptr8 == &eepromBuffer.motor_poles) {
+					/* Range-check the wire integer before narrowing: 256 would
+					 * wrap to zero. A rejected write leaves the stored value. */
+					if (req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE ||
+					    req.value.integer_value < MOTOR_POLES_MIN || req.value.integer_value > MOTOR_POLES_MAX) {
+						break;
+					}
+					*ptr8 = (uint8_t)req.value.integer_value;
+					set_log_val = (int32_t)req.value.integer_value;
+				} else if (ptr8 == &eepromBuffer.current_limit || ptr8 == &eepromBuffer.current_pid_p ||
+					   ptr8 == &eepromBuffer.current_pid_d) {
 					*ptr8 = req.value.integer_value / 2;
 					set_log_val = (int32_t)req.value.integer_value; /* user-facing amps */
 				} else {
@@ -626,14 +635,33 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 			}
 			case T_UINT16: {
 				uint16_t *ptr16 = (uint16_t *)p->ptr;
+				if (ptr16 == &motor_kv) {
+					/* Stored as (kv - 20) / 40. Ignore out-of-range requests
+					 * instead of wrapping them into the byte (10260 would
+					 * store 0). Raw 0 opts out of low-RPM protection
+					 * (settings.c), so only an explicit 20 kV selects it;
+					 * 21-59 kV store 60 kV and keep the limiter. Check the
+					 * tag first: value is a union, and a string's length
+					 * byte would otherwise read as the integer. */
+					const int64_t kv = req.value.integer_value;
+					if (req.value.union_tag == UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE && kv >= p->min_value &&
+					    kv <= p->max_value) {
+						uint8_t raw = (uint8_t)((kv - 20) / 40);
+						if (raw == 0 && kv > 20) {
+							raw = 1;
+						}
+						motor_kv = (uint16_t)kv;
+						eepromBuffer.motor_kv = raw;
+						set_log_val = (int32_t)kv;
+						/* Advance / RPM envelopes were computed at boot from
+						 * old kV - refresh them now (AM32 identity tables). */
+						applyMotorIdentitySettings();
+					}
+					break;
+				}
 				*ptr16 = req.value.integer_value;
 				set_log_val = (int32_t)req.value.integer_value;
-				if (ptr16 == &motor_kv) {
-					eepromBuffer.motor_kv = (uint8_t)((*(uint16_t *)p->ptr - 20) / 40);
-					/* Advance / RPM envelopes were computed at boot from
-					 * old kV — refresh them now (AM32 identity tables). */
-					applyMotorIdentitySettings();
-				} else if (ptr16 == &low_cell_volt_cutoff) {
+				if (ptr16 == &low_cell_volt_cutoff) {
 					eepromBuffer.low_voltage_threshold = (uint8_t)(*ptr16 - 250);
 				}
 				break;

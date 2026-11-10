@@ -27,12 +27,21 @@ def test_startup_tune(suite, sitl_path):
     expected = [(1047, 0.05), (1047, 0.15), (1319, 0.05), (1319, 0.15),
                 (1319, 0.05), (1568, 0.15), (1568, 0.05), (1568, 0.15)]
     tones = suite.ToneStream('127.0.0.1', suite.STATE_PORT)
+    # Subscribe from the SITL's first instruction. The stream's own
+    # subscription only lands once the state port is up, which on a slow
+    # macOS runner is after the first dot, so only the repeat of the
+    # signature (after the no-signal reset) was complete, and the repeat
+    # runs on a host busy enough to stretch notes past dur_tol. The SITL
+    # restores this subscriber from the environment when it opens its
+    # state port (sitl_state.c TONE_SUB_ENV), before the firmware boots.
+    os.environ['AM32_SITL_TONE_SUB'] = '127.0.0.1:%d' % tones.sock.getsockname()[1]
     try:
         with suite.Sitl(sitl_path, ['--can-uri', 'none']):
             found, notes = suite.wait_for_notes(tones, expected)
             suite.check('startup tune', found is not None,
                   'notes=%s' % ['%.1fHz %.3fs' % n[:2] for n in notes])
     finally:
+        os.environ.pop('AM32_SITL_TONE_SUB', None)
         tones.close()
 
 

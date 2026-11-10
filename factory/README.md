@@ -69,7 +69,8 @@ protection limits differ by product:
 |---------|---------------|--------------|
 | Variable PWM | PWM by RPM | PWM by RPM |
 | Motor kV | 1020 | 1020 |
-| Throttle ramp | **2 %/ms** | **0.5 %/ms** (200 ms full scale) |
+| Motor poles | 14 | 14 |
+| Throttle ramp | **1 %/ms** (`max_ramp = 10`) | **0.5 %/ms** (`max_ramp = 5`, 200 ms full scale) |
 | Timing advance | **15° fixed** | **15° fixed** |
 | PWM input min/max | 1020 / 1980 µs | 1020 / 1980 µs |
 | Input type | DShot (`1`) | **DroneCAN** (`5`) |
@@ -80,13 +81,12 @@ protection limits differ by product:
 
 The 12S CAN board ramps at **0.5 %/ms** (full scale in 200 ms), matching what
 larger 12S ESCs ship — APD and Hargrave default to 50 % per 100 ms — rather
-than the 4IN1's 2.0 %/ms. Two consequences worth knowing:
+than the 4IN1's 1.0 %/ms. Two consequences worth knowing:
 
-- Below 10 the stored byte selects the firmware's *fine* mode
-  (`ramp_divider 9`, a step every 500 µs) and applies the rate to **all three
-  regimes including startup**, instead of min-ing against the `RAMP_SPEED_*`
-  ceilings in `targets.h`. So spool-up slews at 0.5 %/ms too; that is the part
-  to watch on the bench.
+- EEPROM layout 4 runs the stored ramp exactly in **all three regimes
+  including startup**: the `RAMP_SPEED_*` ceilings in `targets.h` only ever
+  lower it, and nothing ramps faster than the setting. So spool-up slews at
+  0.5 %/ms too; that is the part to watch on the bench.
 - It is a rate limit, not a bandwidth limit: only commands large enough to hit
   the limit are slewed, so ordinary attitude corrections are untouched while a
   full-stick step takes 200 ms.

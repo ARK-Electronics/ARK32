@@ -436,7 +436,7 @@ def cmd_settings(args) -> int:
                   "eeprom_address is resolved from the flashed ELF",
                   file=sys.stderr)
             return 2
-        make = lambda: openocd_from_rig(rig)  # noqa: E731
+        make = lambda: openocd_from_rig(rig, elf_path=str(elf))  # noqa: E731
         dbg = make().open()
         closer = dbg.close
         addr = st.resolve_eeprom_address(dbg, str(elf))

@@ -30,10 +30,10 @@ def control_socket(sitl):
 
 
 class Watch:
-    def __init__(self, sock, variables):
+    def __init__(self, sock, variables, min_period_ns=1_000_000):
         self.sock = sock
         self.request = struct.pack('<HBBI', STATE_MAGIC_CMD, 8,
-                                   len(variables), 1_000_000)
+                                   len(variables), min_period_ns)
         for size, name in variables:
             self.request += bytes([size]) + name.encode('ascii') + b'\0'
         self.resolved = None

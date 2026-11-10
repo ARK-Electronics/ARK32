@@ -54,6 +54,10 @@
         tracking snapshot (magic 0x5356, versioned fields)
       cmd 0x82 GOV_FORCE: u16 slope_q10, u16 conf — force governor
         state for un-latch engagement tests
+      cmd 0x83 CURRENT_INJECT: pad bit0 arms a one-shot replacement of
+        the next current ADC sample, int16 offset_ca (0.01 A, applied
+        to every sample), uint16 spike_raw (12-bit counts used when
+        bit0 is set). For the median current-filter test.
   SITL -> client:
     u16 magic 0x5354, u8 version=2 or 3, u8 count, count * sample
         v3 appends: float bemf[3], filtered_phase[3], filtered_neutral;
@@ -91,7 +95,7 @@
       u16 gov_conf, u16 gov_slope_q10, u16 gov_duty_ceiling,
       u16 gov_stuck_ms, u16 gov_release_ceil, u16 gov_unlatch_count (v5 PR 65)
       u8 max_ramp_startup, u8 max_ramp_low, u8 max_ramp_high,
-      u8 ramp_divider, u8 max_ramp_startup_vcomp, u8 acq_resist,
+      u8 ramp_rem_low, u8 max_ramp_startup_vcomp, u8 acq_resist,
       u8 desync_episode_bucket                    (v6 ramp settings +
                                                    episode observability)
       u16 thermal_duty_ceiling, u16 current_duty_ceiling,
@@ -137,6 +141,7 @@
 #define STATE_CMD_ZC_FAULT 0x80
 #define STATE_CMD_ZC_STATS 0x81
 #define STATE_CMD_GOV_FORCE 0x82
+#define STATE_CMD_CURRENT_INJECT 0x83
 
 struct __attribute__((packed)) state_sample {
 	uint64_t t_ns;
@@ -840,7 +845,7 @@ void sitl_state_poll(void)
 			uint8_t max_ramp_startup_v;
 			uint8_t max_ramp_low_v;
 			uint8_t max_ramp_high_v;
-			uint8_t ramp_divider_v;
+			uint8_t ramp_rem_low_v; /* was ramp_divider */
 			uint8_t max_ramp_startup_vcomp_v;
 			uint8_t acq_resist_v;
 			uint8_t desync_episode_bucket_v;
@@ -885,8 +890,8 @@ void sitl_state_poll(void)
 			.max_ramp_startup_v = max_ramp_startup,
 			.max_ramp_low_v = max_ramp_low_rpm,
 			.max_ramp_high_v = max_ramp_high_rpm,
-			.ramp_divider_v = ramp_divider,
-			.max_ramp_startup_vcomp_v = max_ramp_startup_vcomp,
+			.ramp_rem_low_v = ramp_rem[1],		      /* low-rpm remainder, tenths */
+			.max_ramp_startup_vcomp_v = max_ramp_startup, /* no vcomp: equals the configured step */
 			.acq_resist_v = fault_acq_resist_events,
 			.desync_episode_bucket_v = desync_episode_bucket,
 			.thermal_duty_ceiling_v = thermal_duty_ceiling,
@@ -905,6 +910,13 @@ void sitl_state_poll(void)
 		memcpy(&slope, pkt + 4, 2);
 		memcpy(&conf, pkt + 6, 2);
 		runtimeGovForceForTest(slope, conf);
+	} else if (cmd == STATE_CMD_CURRENT_INJECT && ret >= 8) {
+		// CURRENT_INJECT: pad bit0 = arm one-shot spike, int16 offset_ca, uint16 spike_raw
+		int16_t offset_ca;
+		uint16_t spike_raw;
+		memcpy(&offset_ca, pkt + 4, 2);
+		memcpy(&spike_raw, pkt + 6, 2);
+		sitl_current_inject(offset_ca, spike_raw, (pkt[3] & 1) != 0);
 	}
 }
 

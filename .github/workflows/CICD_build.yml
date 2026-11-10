@@ -5,7 +5,7 @@ name: CI Build Linux
 #
 # Ubuntu-only: release assets and size-gated firmware builds are produced with
 # the Linux xPack toolchain. (Windows host cross-builds currently overflow F051
-# FLASH; native SITL on Windows is covered by the SITL workflow.)
+# FLASH.)
 #
 # - Push/PR on main: build + artifact.
 # - Version tags (vMAJOR.MINOR[-suffix]): GitHub Release with obj/*.hex, the G431 *.uavcan.bin, and schema/eeprom.json.

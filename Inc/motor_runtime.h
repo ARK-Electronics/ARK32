@@ -102,17 +102,14 @@ extern volatile uint8_t running;
 extern volatile char stepper_sine;
 extern char maximum_throttle_change_ramp;
 extern uint8_t max_duty_cycle_change;
-extern volatile uint8_t max_ramp_startup;
-extern volatile uint8_t max_ramp_low_rpm;
-extern volatile uint8_t max_ramp_high_rpm;
-/* Voltage-compensated working copies + BEMF-headroom governor ceiling
- * (computed in runtime_loop.c at 1 kHz; see runtimeTransientGovernorTick) */
-extern volatile uint8_t max_ramp_startup_vcomp;
-extern volatile uint8_t max_ramp_low_rpm_vcomp;
-extern volatile uint8_t max_ramp_high_rpm_vcomp;
+extern volatile uint8_t ramp_step[3];
+extern volatile uint8_t ramp_rem[3];
+#define max_ramp_startup (ramp_step[0])
+#define max_ramp_low_rpm (ramp_step[1])
+#define max_ramp_high_rpm (ramp_step[2])
+/* BEMF-headroom governor ceiling (runtime_loop.c, 1 kHz;
+ * see runtimeTransientGovernorTick) */
 extern volatile uint16_t gov_duty_ceiling;
-extern volatile uint8_t ramp_divider;
-extern uint16_t ramp_count;
 extern volatile uint32_t pwm_to_arr_scale_q16;
 extern volatile uint32_t throttle_duty_slope_q16;
 extern volatile uint32_t sine_throttle_duty_slope_q16;
@@ -166,15 +163,6 @@ extern uint16_t desired_angle;
 extern int16_t phase_A_position;
 extern int16_t phase_B_position;
 extern int16_t phase_C_position;
-/* Half-period sine table + reconstructing lookup. The original 360-entry
- * table satisfies pwmSin[i] + pwmSin[i+180] == 360 exactly, so the lookup
- * returns bit-identical values for the full [0,360) range while the flash
- * table halves to 360 bytes. */
-extern const int16_t pwmSinHalf[180];
-static inline int16_t pwmSinLookup(int16_t a)
-{
-	return (a < 180) ? pwmSinHalf[a] : (int16_t)(360 - pwmSinHalf[a - 180]);
-}
 extern uint16_t step_delay;
 extern uint16_t gate_drive_offset;
 extern uint16_t motor_kv;
@@ -195,10 +183,12 @@ extern uint16_t ADC_raw_ntc;
 extern uint16_t ADC_smoothed_input;
 extern int16_t converted_degrees;
 extern uint8_t temperature_offset;
-/* Boxcar average of the raw current ADC (getSmoothedCurrent(), control_loop.c).
- * The window is a macro, not a `const uint8_t`: Cortex-M0 has no hardware
- * divide, and a runtime divisor pulls in the __aeabi_uidiv helper on every ADC
- * conversion. As a compile-time constant the divide folds to a multiply-shift. */
+/* Boxcar average of the median-of-3 current ADC (getSmoothedCurrent(),
+ * control_loop.c). The median drops a single-sample shunt spike before it
+ * can leak into this average at 1/N. The window is a macro, not a
+ * `const uint8_t`: Cortex-M0 has no hardware divide, and a runtime divisor
+ * pulls in the __aeabi_uidiv helper on every ADC conversion. As a compile-time
+ * constant the divide folds to a multiply-shift. */
 #define NUM_CURRENT_READINGS 50
 extern uint8_t current_read_index;
 extern uint32_t current_total;
@@ -220,6 +210,11 @@ extern char dshot;
 extern uint8_t dshotcommand;
 extern uint8_t last_dshot_command;
 extern char play_tone_flag;
+/* Power-on low-RPM limiter values. loadEEpromSettings() resets to these
+ * before applying the EEPROM, so a reload never builds on the previous one. */
+#define LOW_RPM_LEVEL_DEFAULT 20
+#define HIGH_RPM_LEVEL_DEFAULT 70
+#define THROTTLE_MAX_AT_LOW_RPM_DEFAULT 400
 extern char low_rpm_throttle_limit;
 extern uint16_t low_rpm_level;
 extern uint16_t high_rpm_level;

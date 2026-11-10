@@ -44,7 +44,7 @@ Source: [`Src/bemf_zc.c`](Src/bemf_zc.c) (deadline, blind step, stall handoff), 
 
 ### Throttle and protection
 
-The ramp you set is the ramp that runs. It is scaled by pack voltage so the same setting means the same volts per millisecond on a 4S or an 8S pack. The firmware does **not** secretly slow the ramp after a desync (that made one motor lag the others).
+The ramp you set is the ramp that runs, on every pack: 1 %/ms means 0→100 % takes 100 ms on 3S or 12S alike. Once the motor is running, throttle never moves duty faster than the setting (the control tick is 51 µs, so it runs about 2 % under it). The start kick to the startup power level, protective cuts and braking are not throttle ramps. EEPROM layout 4 marks this. Under layout 3 the firmware scaled the ramp by 14.8 V / pack voltage (0.5x-1.5x) and rounded it down, so above 14.8 V it flew slower than set (the factory 2.0 %/ms flew 1.0, and settings under 1.0 flew as little as a third), while on 2S-3S some settings flew faster. The ARK32 configurator migrates a layout-3 ramp when it updates the firmware. The firmware does **not** secretly slow the ramp after a desync (that made one motor lag the others).
 
 A BEMF-headroom ceiling also caps duty from measured rpm. A snap throttle on a heavy prop cannot command more slip than the motor can follow.
 
@@ -116,7 +116,7 @@ make factory-image
 make factory-image-check   # same + layout/defaults gate (CI)
 ```
 
-Firmware objects land under `obj/`. This fork’s product targets are **`ARK_4IN1_F051`** (ship firmware) and **`AM32_SITL_CAN`** (host sim). See [`Inc/targets.h`](Inc/targets.h). MCU HAL trees for other AM32 families are still in `Mcu/`, but they are not buildable products here.
+Firmware objects land under `obj/`. This fork’s product targets are **`ARK_4IN1_F051`** (ship firmware) and **`AM32_SITL_CAN`** (host sim). An additional NXP MCXA133 reference target **`MR_ESC_ARK32_A133`** (NXP MR-ESC-ARK32 reference design, built by `a133makefile.mk`) is provided for evaluation; its analog scale factors are inherited from upstream AM32's `FRDM_A133` and must be verified against the MR-ESC-ARK32 schematic. See [`Inc/targets.h`](Inc/targets.h). Other MCU HAL trees are still in `Mcu/`, but they are not buildable products here.
 
 ### Production release image (ARK 4IN1)
 
@@ -134,7 +134,7 @@ That links the release app, then runs [`scripts/build_factory_image.py`](scripts
 | Application @ `0x08001000` | `make ARK_4IN1_F051` |
 | EEPROM @ `0x08007C00` | [`factory/ARK_4IN1_F051_eeprom_defaults.json`](factory/ARK_4IN1_F051_eeprom_defaults.json) |
 
-Ship/program `obj/ARK32_ARK_4IN1_F051_*.factory.img` (or `.factory.hex`). Defaults (variable PWM, 1020 kV, 2 %/ms ramp, 15° fixed advance, PWM min/max 1020/1980 µs) are documented in [`factory/README.md`](factory/README.md).
+Ship/program `obj/ARK32_ARK_4IN1_F051_*.factory.img` (or `.factory.hex`). Defaults (variable PWM, 1020 kV, 1 %/ms ramp, 15° fixed advance, PWM min/max 1020/1980 µs) are documented in [`factory/README.md`](factory/README.md).
 
 Optional static analysis / size / format helpers:
 
@@ -220,6 +220,8 @@ Only for **servo PWM** input when stick calibration is not disabled. Sequence in
 
 DShot commands run only when **armed**, **motor not running**, and the command is repeated enough times (`Src/dshot.c`). Beacons 1–5 set `play_tone_flag`; actual audio plays on the next idle/low-throttle slot in `setInput` (`Src/control_loop.c`).
 
+Temporary direction commands **20/21** are also accepted at zero throttle while `running` is still set. They hold input at zero until the existing stop/brake path finishes, then change the direction for the next start. Six-step operation also waits for duty to reach zero. Sine mode applies the request in the same stop pass, after stepping has stopped and the stop/brake output is set; its cached six-step duty does not delay the request. They leave the stored motor direction unchanged and also reverse the direction reference used by 3D throttle mapping.
+
 | DShot cmd | `play_tone_flag` | Sound | Typical use |
 |-----------|------------------|-------|-------------|
 | **1** | 1 | `playDefaultTone` — 2 notes rising | Beacon 1 |
@@ -303,6 +305,9 @@ Field sequence that works: copy the `.uavcan.bin` → unassign the ESC in Actuat
 ## EEPROM settings
 
 Every user-facing EEPROM field is documented in [`doc/eeprom-settings.md`](doc/eeprom-settings.md): what it does, the range the configurator shows, and the ARK 4IN1 factory default. The same text is the **Settings guide** in [ARK32 Configurator](https://github.com/ARK-Electronics/ark32-configurator).
+
+Low-kV limiter behavior, stored-kV examples and bench validation are covered in
+[`doc/low-kv-protection.md`](doc/low-kv-protection.md).
 
 ## Configuration tools & stock firmware
 

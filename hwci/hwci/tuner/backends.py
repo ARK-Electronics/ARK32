@@ -142,7 +142,7 @@ class HwTuneBackend(TuneBackend):
         # Layout drift between EEPROM_FIELDS and the flashed firmware is
         # caught HERE, before any page is written.
         check_eeprom_layout(self.elf_path)
-        self._make_dbg = lambda: openocd_from_rig(rig)
+        self._make_dbg = lambda: openocd_from_rig(rig, elf_path=self.elf_path)
         dbg = self._make_dbg().open()
         try:
             self.eeprom_address = resolve_eeprom_address(dbg, self.elf_path)

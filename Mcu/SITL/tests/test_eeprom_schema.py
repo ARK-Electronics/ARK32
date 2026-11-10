@@ -14,7 +14,9 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / 'scripts' / 'eeprom'))
 
-from schema import default_bytes, load_schema, resolve_schema, snake_case  # noqa: E402
+from schema import build_context, default_bytes, load_schema, resolve_schema, snake_case  # noqa: E402
+
+LAYOUT, FIRMWARE = build_context()  # Inc/version.h
 from sitl_gui_backend import EepromClient  # noqa: E402
 from sitl_harness import Sender  # noqa: E402
 import sitl_dshot as sd  # noqa: E402
@@ -27,7 +29,7 @@ def document():
 
 @pytest.fixture(scope='module')
 def current_schema(document):
-    return resolve_schema(document, layout=3, firmware='32.0')
+    return resolve_schema(document, layout=LAYOUT, firmware=FIRMWARE)
 
 
 def _fetch(client):
@@ -130,8 +132,8 @@ def test_eeprom_boot_version_and_surviving_raw_values(sitl_factory, current_sche
     sender = Sender('127.0.0.1', sitl.input_port, sd.TYPE_DSHOT600)
     try:
         base = _fetch(client)
-        assert base[1] == 3
-        assert base[3:5] == bytes([32, 0])
+        assert base[1] == LAYOUT
+        assert base[3:5] == bytes(FIRMWARE)
         checked = set()
         for key, field in current_schema['fields'].items():
             bounds = field.get('raw', {})

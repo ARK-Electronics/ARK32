@@ -1,4 +1,4 @@
 # python dependencies for the SITL control GUI (sitl_gui.py)
-PySide6
+PySide6==6.11.2  # 6.12.0 crashes this GUI; see requirements.txt
 pyqtgraph
 dronecan

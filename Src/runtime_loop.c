@@ -488,10 +488,8 @@ void runtimeThermalLimitTick(void)
 /*
  * Transient governor, 1 kHz (main-loop context, fresh battery_voltage).
  *
- * (a) Voltage-compensated ramp: max_ramp_* are duty-per-tick, so the same
- * setting slews 1.7x the VOLTS/ms on 8S that it does on 4S. Scale the
- * working copies by GOV_RAMP_VREF_CV/Vbat (clamped 0.5x-1.5x) so a tuned
- * ramp means the same electrical transient on any pack.
+ * (a) The configured ramp is NOT scaled by pack voltage: it is the duty
+ * rate the user set, exactly, and nothing here may raise it (settings.c).
  *
  * (b) BEMF-headroom ceiling: bound duty to the equilibrium duty implied by
  * the LIVE eRPM plus a fixed voltage headroom. Slip current is
@@ -515,7 +513,7 @@ void runtimeThermalLimitTick(void)
  * samples (~0.3 s cumulative steady running per power-up).
  */
 #ifndef BRUSHED_MODE
-#	define GOV_RAMP_VREF_CV 1480 /* 4S nominal: legacy ramp feel is preserved there */
+#	define GOV_RAMP_VREF_CV 1480 /* headroom scale reference (c); not applied to the ramp */
 #	define GOV_HEADROOM_CV 300   /* 3.0 V of slip headroom above the BEMF line */
 #	define GOV_CEIL_FLOOR 350    /* ceiling never below this (nor min_startup_duty+100) */
 #	define GOV_CONF_ARM 300
@@ -567,7 +565,7 @@ static void runtimeTransientGovernorTick(void)
 	const uint32_t duty = duty_cycle;
 	const uint8_t closed = (running && !old_routine && zero_crosses > 150);
 
-	// (a) voltage-compensated ramp working copies
+	// VREF/Vbat in Q8: folds the headroom divide in (c) below.
 	uint32_t scale_q8 = 256;
 	if (v > 600) {
 		scale_q8 = ((uint32_t)GOV_RAMP_VREF_CV << 8) / v;
@@ -578,17 +576,8 @@ static void runtimeTransientGovernorTick(void)
 			scale_q8 = 384;
 		}
 	}
-	uint16_t r;
-	r = (uint16_t)((max_ramp_startup * scale_q8) >> 8);
-	max_ramp_startup_vcomp = r ? (uint8_t)r : 1;
-	r = (uint16_t)((max_ramp_low_rpm * scale_q8) >> 8);
-	max_ramp_low_rpm_vcomp = r ? (uint8_t)r : 1;
-	r = (uint16_t)((max_ramp_high_rpm * scale_q8) >> 8);
-	max_ramp_high_rpm_vcomp = r ? (uint8_t)r : 1;
-
 	// Coast / poll / not yet established: wipe slope state so a previous
-	// run's latch cannot re-bind on the next start. Ramp vcomp above still
-	// applied. Test inject (gov_force_hold_ms) survives brief !closed so a
+	// run's latch cannot re-bind on the next start. Test inject (gov_force_hold_ms) survives brief !closed so a
 	// desync mid-inject cannot abort the engagement check.
 	if (!closed && !gov_force_hold_ms) {
 		runtimeGovClearState();
@@ -1044,6 +1033,7 @@ void runtimeMotorModeTick(void)
 			}
 
 		} else {
+			running = 0;
 			do_once_sinemode = 1;
 			if (eepromBuffer.brake_on_stop == 1) {
 #	ifndef PWM_ENABLE_BRIDGE
@@ -1067,6 +1057,7 @@ void runtimeMotorModeTick(void)
 				allOff();
 			}
 			e_rpm = 0;
+			dshotApplyPendingDirection();
 		}
 
 #endif // gimbal mode
