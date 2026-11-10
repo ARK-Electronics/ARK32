@@ -85,8 +85,8 @@ LoopFillZerobss:
 
 /* Call the clock system intitialization function.*/
   bl  SystemInit
-/* Call static constructors */
-  bl __libc_init_array
+/* No static constructors: this is a C-only image linked with -nostartfiles
+ * (see f051makefile.mk), so there is no __libc_init_array call here. */
 /* Call the application's entry point.*/
   bl main
 

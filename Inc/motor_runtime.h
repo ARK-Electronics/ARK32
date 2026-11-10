@@ -141,15 +141,6 @@ extern uint16_t desired_angle;
 extern int16_t phase_A_position;
 extern int16_t phase_B_position;
 extern int16_t phase_C_position;
-/* Half-period sine table + reconstructing lookup. The original 360-entry
- * table satisfies pwmSin[i] + pwmSin[i+180] == 360 exactly, so the lookup
- * returns bit-identical values for the full [0,360) range while the flash
- * table halves to 360 bytes. */
-extern const int16_t pwmSinHalf[180];
-static inline int16_t pwmSinLookup(int16_t a)
-{
-	return (a < 180) ? pwmSinHalf[a] : (int16_t)(360 - pwmSinHalf[a - 180]);
-}
 extern uint16_t step_delay;
 extern uint16_t gate_drive_offset;
 extern uint16_t motor_kv;
