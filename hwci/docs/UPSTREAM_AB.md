@@ -64,11 +64,14 @@ usually means a rig file points at the wrong checkout.
 
 ## 3. Identical settings on both arms
 
-**Layout:** offsets 0–191 are the same in ARK32's schema (EEPROM v3) and
-upstream's `eeprom.h` (v4), with one exception. Byte 13 is
-`brake_on_zero_throttle` upstream and reserved in ARK32. The factory page has
-`0x30` there (an old firmware-name byte), which upstream treats as invalid and
-runs as 0, meaning off.
+**Layout:** both firmwares call this layout 4, and offsets 0–191 have the same
+meaning in each. The exception is bytes 13 and 14: upstream's
+`brake_on_zero_throttle` (2.21) and `demag_comp` (2.22). ARK32 names both bytes
+but does not use them (#138).
+
+The current factory page has 0 in both, which upstream runs as off. Pages built
+before #138 have `0x30`/`0x35` there (old firmware-name bytes), which upstream
+also runs as off. The #124 arm (8574381) predates `demag_comp`.
 
 **Header bytes:** bytes 0–4 belong to whichever firmware is flashed (boot
 byte, EEPROM version, bootloader version, firmware version). If a firmware
@@ -82,7 +85,7 @@ with motor kV and pole count set to the bench motor:
 
 | Setting | Value |
 |---|---|
-| Ramp | 2 %/ms (`max_ramp` 20) |
+| Ramp | 1 %/ms (`max_ramp` 10, the factory value since #128) |
 | Advance | 15° fixed (`advance_level` 26, `auto_advance` 0) |
 | PWM | Variable PWM by RPM, 24 kHz |
 | Complementary PWM | On |
@@ -100,7 +103,7 @@ sys.path.insert(0, "scripts")
 from build_factory_image import build_eeprom_page
 d = json.load(open("factory/ARK_4IN1_F051_eeprom_defaults.json"))
 d["settings"].update(motor_kv=1780, motor_poles=14)      # the bench motor
-open("hwci/runs/ab/settings_2306.bin", "wb").write(build_eeprom_page(d, 32, 0, 3)[:192])
+open("hwci/runs/ab/settings_2306.bin", "wb").write(build_eeprom_page(d, 32, 0, 4)[:192])
 EOF
 ```
 
@@ -229,7 +232,7 @@ with any README change that cites them.
   `-O3`.
 - Zero-cross filter: upstream rejects on any single disagreeing sample; ARK32
   tolerates up to 25%.
-- ARK32-only mechanisms, for example blind steps, the transient governor,
-  voltage-compensated ramp and demag-late detection, and upstream behaviours
+- ARK32-only mechanisms, for example blind steps, the transient governor
+  and demag-late detection, and upstream behaviours
   ARK32 changed (for example, the poll-mode fallback). These are the point of
   the comparison.
