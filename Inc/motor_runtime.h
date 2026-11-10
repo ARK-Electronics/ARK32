@@ -102,17 +102,14 @@ extern volatile uint8_t running;
 extern volatile char stepper_sine;
 extern char maximum_throttle_change_ramp;
 extern uint8_t max_duty_cycle_change;
-extern volatile uint8_t max_ramp_startup;
-extern volatile uint8_t max_ramp_low_rpm;
-extern volatile uint8_t max_ramp_high_rpm;
-/* Voltage-compensated working copies + BEMF-headroom governor ceiling
- * (computed in runtime_loop.c at 1 kHz; see runtimeTransientGovernorTick) */
-extern volatile uint8_t max_ramp_startup_vcomp;
-extern volatile uint8_t max_ramp_low_rpm_vcomp;
-extern volatile uint8_t max_ramp_high_rpm_vcomp;
+extern volatile uint8_t ramp_step[3];
+extern volatile uint8_t ramp_rem[3];
+#define max_ramp_startup (ramp_step[0])
+#define max_ramp_low_rpm (ramp_step[1])
+#define max_ramp_high_rpm (ramp_step[2])
+/* BEMF-headroom governor ceiling (runtime_loop.c, 1 kHz;
+ * see runtimeTransientGovernorTick) */
 extern volatile uint16_t gov_duty_ceiling;
-extern volatile uint8_t ramp_divider;
-extern uint16_t ramp_count;
 extern volatile uint32_t pwm_to_arr_scale_q16;
 extern volatile uint32_t throttle_duty_slope_q16;
 extern volatile uint32_t sine_throttle_duty_slope_q16;

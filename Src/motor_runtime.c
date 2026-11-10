@@ -24,6 +24,8 @@
 #else
 #	define FIRMWARE_VERSION_EMBED AM32_VER_STR(VERSION_MAJOR) "." AM32_VER_STR(VERSION_MINOR)
 #endif
+/* EEPROM layout this image runs, after the version in .file_name: "e4". */
+#define FIRMWARE_EEPROM_EMBED "e" AM32_VER_STR(EEPROM_VERSION)
 
 //===========================================================================
 //=============================  Defaults =============================
@@ -65,22 +67,16 @@ volatile uint8_t zc_pre_seen = 0;
 volatile uint8_t zc_demag_run = 0;
 volatile uint32_t zc_demag_accepts = 0;
 /* Blind-grind rail (faults.c): blind steps this 100 ms window / cut hold */
-volatile uint8_t ramp_divider;
-volatile uint8_t max_ramp_startup = RAMP_SPEED_STARTUP;
-volatile uint8_t max_ramp_low_rpm = RAMP_SPEED_LOW_RPM;
-volatile uint8_t max_ramp_high_rpm = RAMP_SPEED_HIGH_RPM;
-/* Voltage-compensated working copies (runtime_loop.c, 1 kHz); the 20 kHz
- * ramp regime reads these so the hot path pays nothing for the scaling. */
-volatile uint8_t max_ramp_startup_vcomp = RAMP_SPEED_STARTUP;
-volatile uint8_t max_ramp_low_rpm_vcomp = RAMP_SPEED_LOW_RPM;
-volatile uint8_t max_ramp_high_rpm_vcomp = RAMP_SPEED_HIGH_RPM;
+/* Ramp per regime (startup, low rpm, high rpm): whole duty counts per 20 kHz
+ * tick and the remainder in tenths the slew limiter carries (settings.c). */
+volatile uint8_t ramp_step[3] = {RAMP_SPEED_STARTUP, RAMP_SPEED_LOW_RPM, RAMP_SPEED_HIGH_RPM};
+volatile uint8_t ramp_rem[3];
 /* BEMF-headroom governor ceiling (runtime_loop.c); 2000 = disarmed/no cap */
 volatile uint16_t gov_duty_ceiling = 2000;
 char send_esc_info_flag;
 uint32_t eeprom_address = EEPROM_START_ADD;
 uint16_t prop_brake_duty_cycle = 0;
 uint16_t ledcounter = 0;
-uint16_t ramp_count;
 uint32_t process_time = 0;
 uint32_t start_process = 0;
 uint16_t one_khz_loop_counter = 0;
@@ -115,12 +111,17 @@ uint16_t low_cell_volt_cutoff = 330; // 3.3volts per cell
  * out of the image - so LTO drops it as dead without the attribute, leaving the
  * section empty and the firmware unidentifiable.
  *
- * Layout (32-byte region below EEPROM): `FILE_NAME\0VERSION\0…`
- * VERSION is the ship string (e.g. 32.0). Older tools only decode
- * up to the first NUL and still see the board identity for asset matching.
+ * Layout (32-byte region below EEPROM): `FILE_NAME\0VERSION\0eLAYOUT\0…`
+ * VERSION is the ship string (e.g. 32.0). eLAYOUT is EEPROM_VERSION (e.g. e4):
+ * the ARK32 configurator reads it from the hex before flashing, because the
+ * version string does not say which EEPROM layout a build uses and a layout-3
+ * page needs its ramp migrated for layout 4 (version.h). Older tools only
+ * decode up to the first NUL (or the second) and still see the board identity
+ * and version.
  */
-const char filename[32] __attribute__((used)) AM32_FLASH_SECTION(".file_name") = FILE_NAME "\0" FIRMWARE_VERSION_EMBED;
-_Static_assert(sizeof(FILE_NAME "\0" FIRMWARE_VERSION_EMBED) <= 32, "FILE_NAME + version exceed .file_name region");
+#define FIRMWARE_NAME_REGION FILE_NAME "\0" FIRMWARE_VERSION_EMBED "\0" FIRMWARE_EEPROM_EMBED
+const char filename[32] __attribute__((used)) AM32_FLASH_SECTION(".file_name") = FIRMWARE_NAME_REGION;
+_Static_assert(sizeof(FIRMWARE_NAME_REGION) <= 32, "FILE_NAME + version + layout exceed .file_name region");
 _Static_assert(sizeof(FIRMWARE_NAME) <= 13, "Firmware name too long"); // max 12 character firmware name plus NULL
 
 // move these to targets folder or peripherals for each mcu

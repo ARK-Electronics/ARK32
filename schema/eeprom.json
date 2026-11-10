@@ -16,6 +16,12 @@
       "minSize": 48,
       "bufferSize": 192,
       "notes": "Added current PID, ramp rate, min duty cycle, absolute voltage cutoff at offsets 5-12"
+    },
+    "4": {
+      "description": "Exact ramp rate",
+      "minSize": 48,
+      "bufferSize": 192,
+      "notes": "Same byte layout as 3. maxRampSpeed is an exact duty rate (no pack-voltage scaling); under v3 the ramp was scaled by 14.8 V / pack voltage (0.5x-1.5x) and rounded down, so the same number flew slower above 14.8 V (2x for 2.0 %/ms, up to 3x for fine settings) and some fine settings faster on 2S-3S; migration depends on cell count. Firmware does not rewrite the stored ramp; the configurator migrates it (read the v3 page before flashing: boot stamps version 4)."
     }
   },
   "fields": {
@@ -46,7 +52,7 @@
       ],
       "preserveOnDefaults": true,
       "default": {
-        "raw": 3
+        "raw": 4
       },
       "sitl": {
         "name": "EEPROM_VERSION"
@@ -329,6 +335,8 @@
       "default": {
         "raw": 2
       },
+      "onLoad": "clamp",
+      "onLoadFallbackRaw": 0,
       "ui": {
         "disabledWhen": {
           "field": "brakeOnStop",
@@ -343,17 +351,41 @@
         "key": "active_brake_power"
       }
     },
-    "reserved0": {
+    "brakeOnZeroThrottle": {
       "offset": 13,
-      "size": 4,
+      "size": 1,
       "type": "reserved",
-      "name": "Reserved",
-      "description": "Reserved bytes for future use",
+      "name": "Upstream Brake On Zero Throttle",
+      "description": "Upstream AM32 2.21+ brake_on_zero_throttle (0-9; upstream firmware treats anything above 9 as 0). ARK32 does not use it. Named so ARK32 never reuses the byte and an upstream value survives a round trip.",
       "hidden": true,
       "default": {
         "raw": [
-          48,
-          53,
+          0
+        ]
+      }
+    },
+    "demagComp": {
+      "offset": 14,
+      "size": 1,
+      "type": "reserved",
+      "name": "Upstream Demag Compensation",
+      "description": "Upstream AM32 2.22 demag_comp (0 off, 1 coast only, 2-4 = 1/32, 1/16, 1/8 power cut; upstream firmware treats anything above 4 as 0). ARK32 does not use it. Named so ARK32 never reuses the byte and an upstream value survives a round trip.",
+      "hidden": true,
+      "default": {
+        "raw": [
+          0
+        ]
+      }
+    },
+    "reserved0": {
+      "offset": 15,
+      "size": 2,
+      "type": "reserved",
+      "name": "Reserved",
+      "description": "Reserved bytes for future use (upstream reserved_eeprom_3). The default matches upstream's default page.",
+      "hidden": true,
+      "default": {
+        "raw": [
           49,
           32
         ]
@@ -1903,7 +1935,7 @@
         "canDebugRate",
         "canTermEnable"
       ],
-      "description": "CAN bus communication settings (also available on ARK32 layout 3)",
+      "description": "CAN bus communication settings (also available on ARK32 layout 3 and later)",
       "panel": "none"
     }
   },

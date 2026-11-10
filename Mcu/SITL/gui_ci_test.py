@@ -140,6 +140,8 @@ def test_launcher(args, env):
         out = gui.stdout.read() if gui.stdout else ''
         check('launcher GUI no tracebacks', 'Traceback' not in out,
               out[-300:] if 'Traceback' in out else 'clean')
+        if gui.returncode != 0:
+            print('--- launcher GUI output (exit %s) ---\n%s' % (gui.returncode, out[-4000:]))
 
 
 def main():
@@ -153,6 +155,9 @@ def main():
 
     env = dict(os.environ)
     env['QT_QPA_PLATFORM'] = 'offscreen'
+    # a crash at exit (abort / segfault) prints the Python stacks of
+    # every thread to the GUI's output, which the checks below show
+    env['PYTHONFAULTHANDLER'] = '1'
     control_port = free_control_port()
 
     with Sitl(args.sitl, ['--input-type', '1'], can_uri='none') as sitl:
@@ -284,6 +289,8 @@ def main():
         out = gui.stdout.read() if gui.stdout else ''
         check('gui no tracebacks', 'Traceback' not in out,
               (out[-300:] if 'Traceback' in out else 'clean'))
+        if gui.returncode != 0:
+            print('--- gui output (exit %s) ---\n%s' % (gui.returncode, out[-4000:]))
 
     test_launcher(args, env)
 
