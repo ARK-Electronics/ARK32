@@ -24,7 +24,7 @@ void loadEEpromSettings(void)
 	/* All consumers, including sine startup and RPM control, need nonzero
 	 * poles and pole pairs. Do not merely guard the derived schedules. */
 	eepromBuffer.motor_poles = sanitizeMotorPoles(eepromBuffer.motor_poles);
-	if (eepromBuffer.eeprom_version < EEPROM_VERSION) {
+	if (eepromBuffer.eeprom_version < 3) {			       // layout 3 added these fields; layout 4 changed none
 		eepromBuffer.max_ramp_speed = TARGET_DEFAULT_MAX_RAMP; // 0.1% per ms steps (see targets.h)
 		eepromBuffer.min_duty_cycle = 1;		       // 0.2% to 51 percent
 		eepromBuffer.disable_stick_calibration = 0;	       //
@@ -33,10 +33,10 @@ void loadEEpromSettings(void)
 		eepromBuffer.current_pid_i = 0;			       // 0-255
 		eepromBuffer.current_pid_d = 100;		       // 0-255
 		eepromBuffer.active_brake_power = 0;		       // 1-5 percent duty cycle
-		eepromBuffer.reserved0[0] = 0;			       //14-16  for crsf input
+		eepromBuffer.brake_on_zero_throttle = 0;	       // 13-14: upstream AM32 fields, unused here
+		eepromBuffer.demag_comp = 0;
+		eepromBuffer.reserved0[0] = 0; // 15-16
 		eepromBuffer.reserved0[1] = 0;
-		eepromBuffer.reserved0[2] = 0;
-		eepromBuffer.reserved0[3] = 0;
 	}
 	// eepromBuffer.timing_advance can either be set to 0-3 with config tools less than 1.90 or 10-42 with 1.90 or above
 	if (eepromBuffer.timing_advance > 42 || (eepromBuffer.timing_advance < 10 && eepromBuffer.timing_advance > 3)) {
@@ -150,38 +150,6 @@ void loadEEpromSettings(void)
 			EDT_ARMED = 1;
 		}
 
-		// Reset to compile defaults first so this load is idempotent: the
-		// eeprom value below only lowers (min semantics). Nothing at
-		// runtime writes these - the ramp an ESC flies is the ramp
-		// configured here (see faultDesyncEpisodeCharge for why the
-		// learned back-off that used to clamp them was removed).
-		//
-		// NOTE the min semantics flatten the graded schedule: max_ramp 20
-		// (the current factory default, 2.0 %/ms) clamps ALL THREE regimes
-		// to 2, so the 2/6/16 startup->low->high progression in targets.h
-		// never engages and the ESC flies the startup rate at cruise.
-		// max_ramp >= 160 is what preserves the full progression.
-		max_ramp_startup = RAMP_SPEED_STARTUP;
-		max_ramp_low_rpm = RAMP_SPEED_LOW_RPM;
-		max_ramp_high_rpm = RAMP_SPEED_HIGH_RPM;
-		if (eepromBuffer.max_ramp_speed < 10) {
-			ramp_divider = 9;
-			max_ramp_startup = eepromBuffer.max_ramp_speed;
-			max_ramp_low_rpm = eepromBuffer.max_ramp_speed;
-			max_ramp_high_rpm = eepromBuffer.max_ramp_speed;
-		} else {
-			ramp_divider = 0;
-			if ((eepromBuffer.max_ramp_speed / 10) < max_ramp_startup) {
-				max_ramp_startup = eepromBuffer.max_ramp_speed / 10;
-			}
-			if ((eepromBuffer.max_ramp_speed / 10) < max_ramp_low_rpm) {
-				max_ramp_low_rpm = eepromBuffer.max_ramp_speed / 10;
-			}
-			if ((eepromBuffer.max_ramp_speed / 10) < max_ramp_high_rpm) {
-				max_ramp_high_rpm = eepromBuffer.max_ramp_speed / 10;
-			}
-		}
-
 		if (motor_kv < 300) {
 			low_rpm_throttle_limit = 0;
 		}
@@ -205,6 +173,32 @@ void loadEEpromSettings(void)
 		 * 2405 kerpm, well inside the uint16 the levels are stored in. */
 		low_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (100U * 32U);
 		high_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (17U * 32U);
+	}
+	// Exact ramp, never faster than configured. max_ramp_speed R is in
+	// 0.1 %/ms of full duty, i.e. R/10 duty counts per 20 kHz control tick
+	// (2000 counts = 100 %). Each regime gets whole counts per tick plus
+	// a remainder in tenths that the slew limiter carries tick to tick
+	// (control_loop.c), so any tick moves base or base + 1 counts and the
+	// average is exactly R/10: 1.5 %/ms is 1,2,1,2,... not 1 or a burst.
+	// No pack-voltage scaling, and nothing may ramp faster than this.
+	//
+	// The targets.h regime ceilings (startup / low / high rpm) only
+	// lower it, and the load is idempotent: nothing at runtime writes
+	// these (see faultDesyncEpisodeCharge for why the learned back-off
+	// that used to clamp them was removed). A ramp below the startup
+	// ceiling flattens all three regimes to the configured rate. Outside
+	// the layout >= 1 block so a first boot of an unconfigured page (layout
+	// 0, ramp just defaulted above) does not fly the compile-time 2/6/16.
+	{
+		static const uint8_t ceiling[3] = {RAMP_SPEED_STARTUP, RAMP_SPEED_LOW_RPM, RAMP_SPEED_HIGH_RPM};
+		const uint8_t ramp = eepromBuffer.max_ramp_speed ? eepromBuffer.max_ramp_speed : 1;
+		const uint8_t base = ramp / 10u;
+		const uint8_t rem = (uint8_t)(ramp - base * 10u);
+		for (uint8_t i = 0; i < 3u; i++) {
+			const uint8_t capped = base >= ceiling[i];
+			ramp_step[i] = capped ? ceiling[i] : base;
+			ramp_rem[i] = capped ? 0u : rem;
+		}
 	}
 	/*
 	 * Advance-schedule normalization (see motor_runtime.h and the advance block

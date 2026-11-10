@@ -2291,6 +2291,16 @@ def main():
             can.running = False
             # let the CAN thread close the node and its IO child
             can.thread.join(2.0)
+        if sitl_tones._stuck_sink_threads:
+            # an audio backend that never returned from setup: Qt aborts
+            # the process if a running QThread is destroyed at teardown,
+            # so leave without it and say why instead
+            sys.stderr.write('audio: %d audio thread(s) never stopped; '
+                             'exiting without teardown\n'
+                             % len(sitl_tones._stuck_sink_threads))
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(3)
 
 
 def _ensure_stdio():

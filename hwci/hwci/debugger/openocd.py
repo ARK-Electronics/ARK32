@@ -42,8 +42,13 @@ class OpenOcdDebugger(Debugger):
         tcl_port: int = 6666,
         search_dirs: list[str] | None = None,
         connect_timeout: float = 10.0,
+        elf_path: str | None = None,
     ):
         self.configs = configs or list(DEFAULT_CONFIGS)
+        # Flashed firmware's ELF: ensure_app_running() reads the app's
+        # eeprom_address global from it to tell a running app from a stuck
+        # bootloader. None -> no probe, never force-boot.
+        self.elf_path = elf_path
         self.openocd_bin = openocd_bin
         self.tcl_port = tcl_port
         self.search_dirs = search_dirs or []
@@ -134,15 +139,20 @@ class OpenOcdDebugger(Debugger):
     def ensure_app_running(self) -> None:
         """If the AM32 bootloader is stuck, jump to the app vector table.
 
-        Safe to call when the app is already running: reading the app
-        vectors and rewriting pc/msp only happens when ``eeprom_address``
-        is not a known settings page (app never initialized it).
+        Safe to call when the app is already running: the app is left alone
+        unless there is positive evidence it is not running. A force-boot of a
+        running app restarts it from its vectors without a reset, which wipes
+        its RAM and can leave its timers/ADC half-initialised.
+
+        Evidence, in order:
+        - PC in the bootloader flash window (only readable while halted).
+        - The app's ``eeprom_address`` global, at its RAM address in
+          ``elf_path``, not holding a known settings page. The app sets it at
+          boot; the bootloader never does.
+
+        Without an ELF there is no safe probe, so nothing is done; flash()
+        already hands off to the app after programming.
         """
-        # Known eeprom_address values (mirrors hwci.settings.KNOWN_EEPROM_ADDRESSES)
-        known = {0x08007C00, 0x0800F800, 0x0801F800}
-        # Symbol is in RAM; when BL is stuck the app BSS is not live, so
-        # read a few candidate RAM slots is fragile. Instead: if PC is in
-        # the bootloader flash window (below app base), force the handoff.
         try:
             pc_out = self._rpc("reg pc")
             # OpenOCD: "pc (/32): 0x08000b42" or similar
@@ -160,18 +170,21 @@ class OpenOcdDebugger(Debugger):
                 return
         except DebuggerError:
             pass
-        # Fallback: try reading a common BSS location used by recent
-        # builds; if zero / garbage, force boot.
+        if self.elf_path is None:
+            return
+        # Lazy imports: hwci.settings imports this package, and pyelftools is
+        # optional.
+        from .. import elf
+        from ..settings import EEPROM_ADDRESS_SYMBOL, KNOWN_EEPROM_ADDRESSES
         try:
-            # mrw returns hex or decimal; use read_memory for consistency
-            raw = self.read_memory(0x20000FB4, 4)  # typical eeprom_address
-            val = struct.unpack("<I", raw)[0]
-            if val not in known:
-                raw2 = self.read_memory(0x20000EB4, 4)
-                val2 = struct.unpack("<I", raw2)[0]
-                if val2 not in known:
-                    self._boot_app_from_vectors()
+            probe = elf.find_symbol(self.elf_path, EEPROM_ADDRESS_SYMBOL).address
+        except (elf.ElfError, OSError):
+            return  # cannot locate the global: no evidence either way
+        try:
+            val = struct.unpack("<I", self.read_memory(probe, 4))[0]
         except (DebuggerError, struct.error):
+            return  # SWD read failed: no evidence either way
+        if val not in KNOWN_EEPROM_ADDRESSES:
             self._boot_app_from_vectors()
 
     def _boot_app_from_vectors(self) -> None:
