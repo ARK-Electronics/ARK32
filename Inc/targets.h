@@ -14,6 +14,7 @@
 #ifndef USE_MAKE
 // convenience defines for IDE builds without make - pick one board
 // #define ARK_4IN1_F051
+// #define MR_ESC_ARK32_A133
 // #define AM32_SITL_CAN
 #endif
 
@@ -75,17 +76,20 @@
 #	define NFAULT_PIN LL_GPIO_PIN_5
 #	define TARGET_MIN_BEMF_COUNTS 3
 /* Unconfigured-eeprom max_ramp default (settings.c version-upgrade path).
-	 * Production ships 2%%/ms via factory/ARK_4IN1_F051_eeprom_defaults.json
-	 * (full-flash image). The generic 160 (16%/ms) is a racing-quad value;
-	 * ARK vehicles fly 5-10"+ where nothing needs it and heavy props desync
-	 * on it (bench 2026-07-23 bracket on 900KV+10x5x3: snap 20->55%% breaks
-	 * lock at max_ramp 5/10/20/40, clean at 1). 20 (2%%/ms) matches the
-	 * factory image so an eeprom version bump does not re-widen the ramp. */
-#	define TARGET_DEFAULT_MAX_RAMP 20
+	 * Production ships 1%%/ms via factory/ARK_4IN1_F051_eeprom_defaults.json
+	 * (full-flash image). Until the exact-ramp change the factory 2%%/ms was
+	 * truncated by voltage compensation to 1 count/tick on every pack above
+	 * 14.8 V, so 1%%/ms is the rate 4S-6S vehicles actually flew and were
+	 * validated on. The generic 160 (16%/ms) is a racing-quad value; heavy
+	 * props desync on it (bench 2026-07-23 bracket on 900KV+10x5x3: snap
+	 * 20->55%% breaks lock at max_ramp 5/10/20/40, clean at 1). An
+	 * unconfigured page (layout < 3, settings.c) gets this; 10 matches the
+	 * factory image. */
+#	define TARGET_DEFAULT_MAX_RAMP 10
 /*
 	 * Ramp-regime ceilings stay the generic AM32 6/16 (startup 2). eeprom
-	 * max_ramp can only lower them, so the factory 2%%/ms image still
-	 * flattens every regime to 2 - the production 5-10"+ vehicle preset.
+	 * max_ramp can only lower them, so the factory 1%%/ms image
+	 * flattens every regime to 1 - the production 5-10"+ vehicle preset.
 	 * Raising the slider toward 16%%/ms restores the graded 2/6/16
 	 * schedule so a high-kV 5-7" can match AM32 punch on this firmware.
 	 * Do not raise it on large props: the 900KV+10" snap 20->55%% bench
@@ -103,11 +107,49 @@
 #endif
 
 /*
+ * MR-ESC-ARK32 (NXP MCXA133 mobile-robotics reference ESC).
+ *
+ * Board target for the NXP MR-ESC-ARK32 reference design. The MCU HAL and
+ * the MCXA133 pin/comparator/ADC map are reused unchanged from upstream
+ * AM32 (HARDWARE_GROUP_NXP_MCXA133 below); only the board-electrical scale
+ * factors and feature flags live here. This block mirrors upstream AM32's
+ * FRDM_A133 target, which is the same silicon.
+ *
+ * The FILE_NAME ends in _A133 so get_targets (make/tools.mk) discovers it
+ * and builds it with a133makefile.mk - no Makefile edit is required.
+ *
+ * VERIFY-ON-HARDWARE: the three analog scale factors below
+ * (TARGET_VOLTAGE_DIVIDER, MILLIVOLT_PER_AMP, CURRENT_OFFSET) are copied
+ * from FRDM_A133 and are only correct if the MR-ESC-ARK32 shield uses the
+ * same divider ratio and current-sense gain. Confirm against the
+ * MR-ESC-ARK32 schematic (voltage divider ratio, shunt value + amp gain,
+ * amp offset) before trusting telemetry/OV-OC behaviour. DEAD_TIME must
+ * match the gate driver on the board; FRDM_A133 uses 70 (dead-time in
+ * ns-equivalent ticks at the MCXA133 FlexPWM clock).
+ */
+#ifdef MR_ESC_ARK32_A133
+#	define FILE_NAME "MR_ESC_ARK32_A133"
+#	define FIRMWARE_NAME "MR-ESC-ARK32"
+#	define NEED_INPUT_READY
+#	define DEAD_TIME 70
+#	define HARDWARE_GROUP_NXP_MCXA133
+#	define TARGET_VOLTAGE_DIVIDER 100 // 10k / 100k, result in centivolts (VERIFY)
+#	define CURRENT_OFFSET 0	   // millivolts (VERIFY)
+#	define MILLIVOLT_PER_AMP 20	   // shunt + amp gain (VERIFY)
+#	define USE_SERIAL_TELEMETRY
+#	define USE_LED_STRIP
+#	define NUM_LEDS 1   // APA102 RGB LED count
+#	define BRIGHTNESS 3 // 0..31
+#	define RESET 0	     // unused, required for a clean build
+#	define TARGET_MIN_BEMF_COUNTS 3
+#endif
+
+/*
  * ARK_4IN1_RAMP_F051 ("ARK 4IN1 SLO") removed: its entire delta was a
  * compile-frozen 0.5%/ms ramp (RAMP_SPEED_LOW/HIGH_RPM 1 at a 10 kHz
  * loop). The regular firmware reaches the identical rate as an EEPROM
- * setting - max_ramp = 5 (fine mode, 0.1%/ms steps, all regimes) - and
- * additionally voltage-compensates it, bounds slip current with the
+ * setting - max_ramp = 5 (0.5%/ms, all regimes, exact on every pack) - and
+ * additionally bounds slip current with the
  * BEMF-headroom governor, and latches misconfiguration via the desync
  * rails. Heavy-prop builds are a config preset, not a second firmware.
  */
@@ -1929,10 +1971,10 @@
 
 #endif
 
-//NXP hardware group of the MCXA153
-#ifdef HARDWARE_GROUP_NXP_MCXA153
+//NXP hardware group of the MCXA133
+#ifdef HARDWARE_GROUP_NXP_MCXA133
 
-#	define MCU_A153
+#	define MCU_A133
 
 //This is the Dshot/PWM input pin
 #	define INPUT_PIN 2 //P1.2
@@ -2379,8 +2421,8 @@
 #	define USE_ADC
 #endif
 
-//NXP MCXA153/133
-#ifdef MCU_A153
+//NXP MCXA133/133
+#ifdef MCU_A133
 //#define STMICRO
 #	define NXP
 #	define CPU_FREQUENCY_MHZ 96 //Is the CPU/System clock, main_clk is 192MHz

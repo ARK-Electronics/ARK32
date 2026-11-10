@@ -144,7 +144,7 @@ class HwTuneBackend(TuneBackend):
         check_eeprom_layout(self.elf_path)
         self._make_dbg = lambda: OpenOcdDebugger(
             rig.openocd_configs, openocd_bin=rig.openocd_bin,
-            search_dirs=rig.openocd_search_dirs)
+            search_dirs=rig.openocd_search_dirs, elf_path=self.elf_path)
         dbg = self._make_dbg().open()
         try:
             self.eeprom_address = resolve_eeprom_address(dbg, self.elf_path)
