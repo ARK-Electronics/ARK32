@@ -31,11 +31,11 @@ ARK32 raises the changeover on the ARK 4IN1 (`POLLING_MODE_THRESHOLD` 5000, upst
 
 **Startup.** The motor starts in poll. When the step time is short enough (`polling_mode_changeover`), it switches to interrupts. Until 100 crossings have been counted since the start (poll and interrupt together), a still-slow average puts it back in poll. That stops a noisy first kick from jumping into interrupt mode with no real BEMF. With stall protection or RC-car reverse enabled, it switches after 20 crossings with a step below 2000 instead.
 
-**Missed crossings (interrupt mode).** Once 100 crossings have been counted, after each step the ESC sets a deadline for the next crossing: expected time plus 50%. If the crossing arrives, the deadline is cancelled. If the deadline fires first, the ESC steps anyway (a **blind step**) and uses that late time as the interval. Timing moves slower — the safe direction if the rotor is slowing. The next real crossing locks on again. Blind steps do not count as zero-crosses.
+**Missed crossings (interrupt mode).** Once 100 crossings have been counted, after each step the ESC sets a deadline for the next crossing: expected time plus 50%. If the crossing arrives, the deadline is cancelled. If the deadline fires first, the ESC steps anyway (a **blind step**). It places the missed crossing where it was expected, one estimated interval after the last real one, keeps that interval as the estimate, and times the next deadline and the comparator blanking from that virtual crossing. A dropout of one or two windows therefore costs about one blind step per window, and the next real crossing locks on again. Blind steps do not count as zero-crosses.
 
 **How long it will run blind.** Time spent without a real crossing is added up (`zc_blind_ticks`). A real crossing clears it. If that time reaches the same stall budget as upstream (`BEMF_STALL_TICKS`, 22.5 ms), the ESC no longer knows rotor position: it stops and restarts through poll. As the budget is used, duty is scaled down in proportion to what is left. The applied duty drops at once and climbs back at the configured ramp after a real crossing. Crossings that arrive demag-late (no pre-crossing level seen) get the same fade, floored at half.
 
-How high a sustained miss rate the motor can fly through has not been measured on hardware. SITL checks a 50% alternating-miss case only as an expected failure (`xfail`).
+In SITL a 50% alternating-miss case now rides through without a restart; it stays a non-strict `xfail` until CI has run it enough to enforce. On the ARK 4IN1 bench, injected dropouts went from 20 cascades in 70 on the old blind step to none in steady holds, and one of 24 at 70% throttle still ran 13 blind steps (#137). A sustained miss rate has not been measured on hardware.
 
 **When it does go back to poll after startup**
 
@@ -51,7 +51,7 @@ Source: [`Src/bemf_zc.c`](Src/bemf_zc.c) (deadline, blind step, stall handoff, d
 The ramp you set is the ramp that runs, on every pack: 1 %/ms means 0→100 % takes 100 ms on 3S or 12S alike. Once the motor is running, throttle never moves duty faster than the setting (the control tick is 51 µs, so it runs about 2 % under it). The start kick to the startup power level, protective cuts and braking are not throttle ramps. EEPROM layout 4 marks this. Under layout 3 the firmware scaled the ramp by 14.8 V / pack voltage (0.5x-1.5x) and rounded it down, so above 14.8 V it flew slower than set (the factory 2.0 %/ms flew 1.0, and settings under 1.0 flew as little as a third), while on 2S-3S some settings flew faster. The ARK32 configurator migrates a layout-3 ramp when it updates the firmware. The firmware does **not** secretly slow the ramp after a desync (that made one motor lag the others).
 
 
-**Speed-based duty ceiling.** After about 0.3 s of steady closed-loop running above 12.5% duty, the ESC learns how much rpm each unit of duty buys. It then caps duty at what the measured rpm needs plus about 3 V of headroom, which bounds slip current while a heavy prop spools. The ceiling starts from scratch whenever the motor coasts, drops to poll or desyncs. Until it has re-learned, a snap is not limited, including the first snap after every start. If the cap holds rpm flat for 1 s, it releases gradually.
+**Speed-based duty ceiling.** After about 0.3 s of steady closed-loop running above 12.5% duty, the ESC learns how much rpm each unit of duty buys. It then caps duty at what the measured rpm needs plus about 3 V of headroom, which bounds slip current while a heavy prop spools. The ceiling starts from scratch whenever the motor coasts, drops to poll or desyncs. Until it has re-learned, a snap is not limited, including the first snap after every start. If rpm gains less than about 800 eRPM per ms for 1 s while held at the cap, it releases gradually.
 
 **Repeat desyncs or stalls** charge a bucket. Only runs that got past 100 crossings count. The first one restarts immediately. Back to back, later ones go:
 
@@ -62,7 +62,7 @@ The ramp you set is the ramp that runs, on every pack: 1 %/ms means 0→100 % ta
 
 Healthy closed-loop running drains the bucket. Zero throttle clears the bucket and the stuck latch.
 
-Source: [`Src/control_loop.c`](Src/control_loop.c) (slew limit), [`Src/settings.c`](Src/settings.c) (ramp ceilings), [`Src/runtime_loop.c`](Src/runtime_loop.c) (voltage scaling, duty ceiling), [`Src/faults.c`](Src/faults.c) (episode bucket).
+Source: [`Src/control_loop.c`](Src/control_loop.c) (slew limit), [`Src/settings.c`](Src/settings.c) (ramp ceilings), [`Src/runtime_loop.c`](Src/runtime_loop.c) (duty ceiling), [`Src/faults.c`](Src/faults.c) (episode bucket).
 
 ### Performance vs upstream: what is measured
 
