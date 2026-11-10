@@ -15,6 +15,7 @@
 #include "comparator.h"
 #include "peripherals.h"
 #include "motor_runtime.h"
+#include "esc_state.h"
 #if DRONECAN_SUPPORT
 #	include "DroneCAN/DroneCAN.h"
 #endif
@@ -73,7 +74,10 @@ volatile uint8_t dshot_direction_pending;
 
 void dshotApplyPendingDirection(void)
 {
-	if (dshot_direction_pending && !running && !duty_cycle) {
+	/* The sine caller has already stopped stepping and applied its static
+	 * stop/brake output. Its cached six-step duty need not reach zero:
+	 * the six-step slew is paused, so waiting for it can latch input off. */
+	if (dshot_direction_pending && !running && (!duty_cycle || escInSineStart())) {
 		/* Retire any outstanding commutation before changing its direction.
 		 * Keep input held at zero until all direction state is published. */
 		__disable_irq();
