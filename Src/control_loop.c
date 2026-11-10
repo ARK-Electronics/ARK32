@@ -60,17 +60,51 @@ int32_t doPidCalculations(struct fastPID *pidnow, int actual, int target)
 	return pidnow->pid_output;
 }
 
+/* Median of three raw samples. No divide: Cortex-M0 has no hardware divider,
+ * and this runs on every 1 kHz current sample. Branchy compares are the cheap
+ * form. A window of three drops one outlier, which is the 4IN1 case (one
+ * L*di/dt hit in the 7 us aperture). Median-of-5 would reject two hits but
+ * costs more flash than the F051 has, and two hits inside 3 ms is not the
+ * noise the shunt actually produces. Group delay on a real step is one
+ * sample (1 ms), against the 50 ms boxcar behind it. */
+static uint16_t median3(uint16_t a, uint16_t b, uint16_t c)
+{
+	/* Three compares, no divide. Cortex-M0 has no conditional move. */
+	if (a > b) {
+		const uint16_t swap = a;
+		a = b;
+		b = swap;
+	}
+	if (b > c) {
+		const uint16_t swap = b;
+		b = c;
+		c = swap;
+	}
+	if (a > b) {
+		const uint16_t swap = a;
+		a = b;
+		b = swap;
+	}
+	return b;
+}
+
 uint16_t getSmoothedCurrent()
 {
 	// Sample once: ADC_raw_current is written by ADC_DMA_Callback(), which also
 	// runs from the DMA ISR. The sum is incremental, so the value stored in the
 	// ring and the value added here must be the same one or the running total
 	// drifts permanently when the two reads straddle an update.
+	// The median history is only touched here (main loop, once per tick).
 	const uint16_t sample = ADC_raw_current;
+	static uint16_t older;
+	static uint16_t newer;
+	const uint16_t filtered = median3(older, newer, sample);
+	older = newer;
+	newer = sample;
 
 	current_total -= current_readings[current_read_index];
-	current_readings[current_read_index] = sample;
-	current_total += sample;
+	current_readings[current_read_index] = filtered;
+	current_total += filtered;
 
 	current_read_index++;
 	if (current_read_index >= NUM_CURRENT_READINGS) {
