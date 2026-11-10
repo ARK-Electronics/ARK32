@@ -34,34 +34,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python3 Mcu/SITL/gui_ci_test.py --gui-python python3
 
-  # cross-compile the native Windows SITL exe on Linux with MinGW-w64,
-  # so the Windows packaging job bundles a dependency-free binary (no
-  # cygwin1.dll) that runs the real-time simulator reliably
-  sitl-windows-exe:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install MinGW-w64
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64
-
-      - uses: ./.github/actions/setup-eeprom
-
-      - name: Cross-build native Windows SITL
-        run: |
-          make AM32_SITL_CAN SITL_CROSS=win
-          mkdir -p sitl-windows
-          cp obj/ARK32_AM32_SITL_CAN_*.elf sitl-windows/AM32_SITL_CAN.exe
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sitl-windows-exe
-          path: sitl-windows/AM32_SITL_CAN.exe
-
   build:
-    needs: [sitl-windows-exe]
     strategy:
       fail-fast: false
       matrix:
@@ -69,9 +42,6 @@ jobs:
           - os: ubuntu-latest
             artifact: am32-sitl-gui-linux
             binary: dist/am32-sitl-gui
-          - os: windows-latest
-            artifact: am32-sitl-gui-windows
-            binary: dist/am32-sitl-gui.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -80,8 +50,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Qt runtime libraries (Linux)
-        if: runner.os == 'Linux'
+      - name: Install Qt runtime libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1 libegl1 libxkbcommon0 libfontconfig1 \
@@ -90,16 +59,8 @@ jobs:
       - uses: ./.github/actions/setup-eeprom
 
       # the SITL is bundled so the GUI runs the simulator out of the box
-      - name: Build SITL (Linux)
-        if: runner.os == 'Linux'
+      - name: Build SITL
         run: make AM32_SITL_CAN
-
-      - name: Download native Windows SITL
-        if: runner.os == 'Windows'
-        uses: actions/download-artifact@v4
-        with:
-          name: sitl-windows-exe
-          path: sitl-windows
 
       - name: Install build dependencies
         # a clean environment on purpose: a system python with other Qt

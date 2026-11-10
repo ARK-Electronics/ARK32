@@ -161,8 +161,35 @@ def _run_sink_on_thread(build):
 
     t = SinkThread()
     t.start()
-    ready.wait(3.0)
+    if not ready.wait(3.0):
+        # Too slow to use (a loaded CI host with no audio server). The
+        # owner reports inactive and the GUI drops an inactive player
+        # without stop(), and a QThread destroyed while it runs aborts
+        # the process ("QThread: Destroyed while thread is still
+        # running", exit -6). So end it here, before anyone can drop it.
+        _stop_sink_thread(t)
+        return t, False, res['err'] or 'audio device did not open within 3 s'
     return t, res['ok'], res['err']
+
+
+# Sink threads that would not stop. Never let a running QThread be
+# destroyed: holding the reference keeps the abort away at least until exit.
+_stuck_sink_threads = []
+
+
+def _stop_sink_thread(thread, timeout_ms=10000):
+    '''end a thread from _run_sink_on_thread, whether or not it came up.
+
+    Qt keeps a quit() that arrives before exec() starts, so a thread still
+    inside build() returns from exec() at once, and the wait covers the
+    rest of a slow build().'''
+    if thread is None:
+        return
+    thread.quit()                   # ends the audio thread's event loop
+    if not thread.wait(timeout_ms):
+        print('audio thread did not stop within %d ms' % timeout_ms,
+              file=sys.stderr)
+        _stuck_sink_threads.append(thread)
 
 
 class ToneSynth(object):
@@ -262,10 +289,8 @@ class ToneSynth(object):
         self.volume = volume
 
     def stop(self):
-        if self.active:
-            self.thread.quit()      # ends the audio thread's event loop
-            self.thread.wait(2000)
-            self.active = False
+        _stop_sink_thread(getattr(self, 'thread', None))
+        self.active = False
 
 
 def goertzel(samples, freq_hz, rate=SAMPLE_RATE):
@@ -423,10 +448,8 @@ class PhysicsAudio(object):
         self.volume = volume
 
     def stop(self):
-        if self.active:
-            self.thread.quit()      # ends the audio thread's event loop
-            self.thread.wait(2000)
-            self.active = False
+        _stop_sink_thread(getattr(self, 'thread', None))
+        self.active = False
 
 
 def parse_expected(spec):
