@@ -108,6 +108,25 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(golden[3:5], bytes([1, 35]))
         self.assertEqual(golden[43:45], bytes([141, 102]))
 
+    def test_defaults_match_upstream_default_page(self):
+        # Upstream AM32 2.22 default_settings[] (Src/DroneCAN/DroneCAN.c at
+        # am32-firmware/AM32 22c85490). Upstream layout 4 uses bytes 13-14
+        # (brake_on_zero_throttle 0-9, demag_comp 0-4); before this they held
+        # the legacy name characters "05", which an upstream tool reads as
+        # out-of-range values. Byte 1 differs only because upstream's literal
+        # still says 3 and its boot stamps 4.
+        upstream = bytes.fromhex('0103010123a004000a64003202000031200000000101011a'
+                                 '1864370e0000050080808032003200000f0a0a8d66060100')
+        ours = default_bytes(self.document, 4)
+        self.assertEqual(len(ours), len(upstream))
+        self.assertEqual([i for i in range(len(ours)) if ours[i] != upstream[i]], [1])
+        fields = resolve_schema(self.document, 4)['fields']
+        self.assertEqual((fields['brakeOnZeroThrottle']['offset'], fields['demagComp']['offset']), (13, 14))
+        product = json.loads((REPO_ROOT / 'factory/ARK_4IN1_F051_eeprom_defaults.json').read_text())
+        page = build_eeprom_page(product, 32, 0, 4)
+        self.assertLessEqual(page[13], 9)
+        self.assertLessEqual(page[14], 4)
+
     def test_exact_factory_conversion_rejects_quantization(self):
         self.assertEqual(encode_motor_kv(1020), 25)
         self.assertEqual(encode_advance_degrees(15), 26)
@@ -123,9 +142,16 @@ class SchemaTests(unittest.TestCase):
         product = json.loads((REPO_ROOT / 'factory/ARK_4IN1_F051_eeprom_defaults.json').read_text())
         page = build_eeprom_page(product, 32, 0, 3)
         import hashlib
-        # Captured from the pre-schema production encoder and product JSON.
-        self.assertEqual(hashlib.sha256(page).hexdigest(), '0ddd802a96d82220bef23ea7901b560caf2e393c947194befddf1ad17ffdb864')
+        # Captured from the pre-schema production encoder and product JSON
+        # (0ddd802a...), then byte 5 max_ramp 20 -> 10 for the exact ramp,
+        # then bytes 13-14 "05" -> 0 (upstream brake_on_zero_throttle and
+        # demag_comp; see test_defaults_match_upstream_default_page).
+        self.assertEqual(hashlib.sha256(page).hexdigest(), 'd1583b2508e72dadc16cef33fe4e1a8ae18ab8f6d2175bde5ad5b73b2ef8c304')
         self.assertEqual(page[48:], b'\xff' * (1024 - 48))
+        # The shipped page is layout 4: identical except the version byte.
+        page4 = build_eeprom_page(product, 32, 0, 4)
+        self.assertEqual(page4[1], 4)
+        self.assertEqual(page4[:1] + page4[2:], page[:1] + page[2:])
 
     def test_factory_temperature_accepts_disabled_sentinels_and_endpoints(self):
         product = json.loads((REPO_ROOT / 'factory/ARK_4IN1_F051_eeprom_defaults.json').read_text())

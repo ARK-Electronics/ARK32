@@ -56,7 +56,7 @@ Defined in [`ARK_4IN1_F051_eeprom_defaults.json`](ARK_4IN1_F051_eeprom_defaults.
 | Variable PWM | **PWM by RPM** (`variable_pwm = 1`) |
 | Motor kV | **1020** |
 | Motor poles | 14 |
-| Throttle ramp | **2 %/ms** (`max_ramp = 20`) |
+| Throttle ramp | **1 %/ms** (`max_ramp = 10`) |
 | Timing advance | **15° fixed** (`advance_level = 26`, `auto_advance = 0`) |
 | PWM input min | **1020 µs** |
 | PWM input max | **1980 µs** |

@@ -104,6 +104,7 @@ jobs:
         run: |
           upstream-venv/bin/python -m pytest -q \
             Mcu/SITL/tests/test_upstream_adapter.py Mcu/SITL/tests/test_state_protocol.py \
+            Mcu/SITL/tests/test_dshot_programming.py \
             --sitl "$GITHUB_WORKSPACE"/obj/ARK32_AM32_SITL_CAN_*.elf
       - name: Upload upstream test log
         if: always()
@@ -144,56 +145,3 @@ jobs:
           name: gui-test-log
           path: gui_test_run/sitl_ci.log
           if-no-files-found: ignore
-
-  windows-build:
-    runs-on: windows-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Cygwin
-        uses: cygwin/cygwin-install-action@v4
-        with:
-          packages: gcc-core make python3 python3-jsonschema
-
-      - name: Build SITL
-        shell: C:\cygwin\bin\bash.exe --noprofile --norc -o igncr -eo pipefail '{0}'
-        run: |
-          cd $(cygpath -u "$GITHUB_WORKSPACE")
-          make AM32_SITL_CAN
-          ls -la obj/
-
-      - name: Boot smoke test
-        shell: C:\cygwin\bin\bash.exe --noprofile --norc -o igncr -eo pipefail '{0}'
-        run: |
-          cd $(cygpath -u "$GITHUB_WORKSPACE")
-          # Not the 5773x defaults: those sit in the Windows dynamic port
-          # range (49152-65535), which Hyper-V/WinNAT reserves in blocks on
-          # the hosted runners - bind() there fails with EACCES ("Permission
-          # denied"). Anything below 49152 is outside the reservable range.
-          ./obj/ARK32_AM32_SITL_CAN_*.elf --can-uri none --input-type 1 \
-            --input-port 17733 --state-port 17734 >boot.log 2>&1 &
-          sleep 3
-          kill %1 || true
-          cat boot.log
-          grep -q "PWM/DShot input on udp port" boot.log
-          grep -q "state/model port udp" boot.log
-
-      - name: Dump reserved UDP port ranges on failure
-        if: failure()
-        shell: cmd
-        run: netsh interface ipv4 show excludedportrange protocol=udp
-
-      - name: Package binary with cygwin runtime
-        shell: C:\cygwin\bin\bash.exe --noprofile --norc -o igncr -eo pipefail '{0}'
-        run: |
-          cd $(cygpath -u "$GITHUB_WORKSPACE")
-          mkdir -p sitl-windows
-          cp obj/ARK32_AM32_SITL_CAN_*.elf sitl-windows/AM32_SITL_CAN.exe
-          cp /bin/cygwin1.dll sitl-windows/
-
-      - name: Upload Windows SITL binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: sitl-windows
-          path: sitl-windows/

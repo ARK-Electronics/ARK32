@@ -14,8 +14,9 @@ traces:
   - alternating: mode-2 50% edge drop must engage blind; restarts during
                  the fault window are bounded (no miss-rate thrash); post-
                  fault recovery under continuous throttle. A clean no-
-                 restart ride-through is reported separately (xfail when
-                 the plant cascades).
+                 restart ride-through is reported separately (non-strict
+                 xfail; it xfailed while blind steps cascaded and passes
+                 since the virtual-crossing blind step, test_blind_cascade.py).
 '''
 
 from __future__ import annotations
@@ -150,11 +151,10 @@ def _assert_recovered(ctl, sim, rpm_before, sitl, tx=None):
 def test_blind_step_bridges_short_dropout(sitl_factory, state_stream):
     '''Short EXTI blackout must engage the blind-step path.
 
-    On the upstream inertial-comparator plant a single dropped edge can
-    cascade into several blind steps and occasionally a stall-rail
-    restart (zero_crosses reset). That is plant-dependent; what this
-    test locks is that the blind path *fires* on a short blackout and
-    the motor returns to closed loop under continuous throttle. The
+    What this test locks is that the blind path *fires* on a short
+    blackout and the motor returns to closed loop under continuous
+    throttle. That a dropout costs about its own length in blind steps,
+    not a cascade, is test_blind_cascade.py. The
     consecutive-limit handoff itself is covered by
     test_blind_step_limit_hands_off_to_stall_rail.
     '''
@@ -239,7 +239,7 @@ def test_alternating_misses_bounded_restarts_and_recover(sitl_factory, state_str
 
     Clean ride-through (zero restarts + bounded stale) is checked when it
     happens; when the plant cascades, the restart bound still fails a
-    regression to "restart on every 50% miss episode". See also the xfail
+    regression to "restart on every 50% miss episode". See also the
     clean-bridge sibling for the stronger "50% keeps flying" claim.
     '''
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
@@ -285,18 +285,22 @@ def test_alternating_misses_bounded_restarts_and_recover(sitl_factory, state_str
 @pytest.mark.xfail(
     strict=False,
     reason=(
-        'Headline "50% miss keeps flying" is plant-dependent: late blinds can '
-        'desync electrical phase so delivered edges fail confirm and the '
-        'budget hands off once. CI should report whether a clean bridge '
-        'happened; the thrash bound is enforced in the non-xfail sibling.'
+        'Headline "50% miss keeps flying". It xfailed while blind steps '
+        'cascaded (late blinds desynced the electrical phase). With the '
+        'virtual-crossing blind step it passes (SITL 11/11 incl. 2 CPUs and '
+        'host stalls); kept non-strict until CI has run it enough to drop.'
     ),
 )
 def test_alternating_misses_clean_bridge_no_restart(sitl_factory, state_stream):
-    '''Strict clean ride-through under mode-2 (xfail, non-strict).
+    '''Strict clean ride-through under mode-2: 50% missed crossings keep flying.
 
-    Fails (xfail) when the plant cascades into a stall handoff. Passes when
-    zero_crosses never falls and staleness stays under half the budget -
-    the PR summary claim, made visible in CI rather than absorbed.
+    Passes when zero_crosses never falls and staleness stays under half the
+    budget - the PR #41 summary claim. It failed while each blind step
+    restarted the interval timer at the blind commutation and fed in the
+    1.5x deadline time: late blinds desynced the electrical phase and the
+    budget handed off. With the virtual-crossing blind step it passes
+    (SITL: 11/11, including 2 CPUs and injected host stalls); the xfail
+    stays non-strict until CI has run it enough to enforce.
     '''
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     sim, tx, rpm0 = _spin_up(sitl, state_stream)

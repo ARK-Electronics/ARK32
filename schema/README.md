@@ -2,7 +2,8 @@
 
 `eeprom.json` is the living layout and metadata source for ARK32. Releases
 attach this exact document as `eeprom.json`. The schema language is 1.1.0;
-EEPROM layout 3 and firmware 32.0 are independent version numbers.
+EEPROM layout 4 and firmware 32.0 are independent version numbers. Layout 4
+has the same bytes as layout 3; it marks that the ramp is an exact duty rate.
 
 Install the build dependency in your Python environment:
 
@@ -51,8 +52,10 @@ The product factory JSON uses display units and accepts `disabledValue.raw`
 sentinels, including temperature 255. Two explicit legacy exceptions remain:
 temperature 141 and current 102 preserve the historical raw defaults. Its
 encoder accepts those exact sentinels and otherwise requires an exact
-display-to-raw round trip. The resulting 1 KiB production page is unchanged.
-Factory test SHA256 is pinned to the pre-schema encoder.
+display-to-raw round trip. The factory test pins the page's SHA256: the
+pre-schema encoder's page with only the ramp byte changed (max_ramp 20 -> 10,
+1.0 %/ms), plus a check that the shipped layout-4 page differs from it only in
+the version byte.
 
 Run language/history/factory checks with:
 
