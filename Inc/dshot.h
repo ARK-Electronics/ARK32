@@ -102,6 +102,9 @@ extern volatile uint8_t dshot_direction_pending;
 /* Call only after the zero-throttle stop/brake path has finished. */
 void dshotApplyPendingDirection(void);
 
+/* Total transaction budget, decremented even while valid frames arrive. */
+extern volatile uint16_t dshot_programming_ticks;
+
 extern void playInputTune(void);
 extern void playInputTune2(void);
 extern void playBeaconTune3(void);

@@ -137,3 +137,29 @@ def test_invalid_address_is_consumed_and_rejected_at_commit(programmer, address,
         send(word, telem)
     after, _ = ee.fetch()
     assert after is not None and after[30] == 7, sitl.log_tail()
+
+
+@pytest.mark.parametrize('words', [(), (30,), (30, 7)])
+def test_interrupted_programming_expires_despite_stop_traffic(programmer, words):
+    send, enter, ee, sitl, watch = programmer
+    before, _ = ee.fetch()
+    assert before is not None, sitl.log_tail()
+    enter(False)
+    for word in words:
+        send(word, False)
+    # Keep the ordinary signal-loss watchdog alive. Without a separate
+    # transaction deadline this stream leaves WAIT_COMMIT stuck forever.
+    tx = Sender('127.0.0.1', sitl.input_port, sd.TYPE_DSHOT600)
+    try:
+        watch.until(lambda: watch.values.get(4) == 0, timeout=1.0)
+        assert watch.values.get(0) == 1, sitl.log_tail()
+        assert not any(i in (2, 3) and v for _, i, v in watch.events)
+        after, _ = ee.fetch()
+        assert after == before, 'expired transaction wrote EEPROM'
+    finally:
+        tx.stop()
+    enter(False)
+    for word in (30, 7, 37):
+        send(word, False)
+    after, _ = ee.fetch()
+    assert after is not None and after[30] == 7, sitl.log_tail()

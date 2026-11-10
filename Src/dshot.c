@@ -66,6 +66,7 @@ uint16_t halfpulsetime = 0;
 uint8_t programming_mode;
 uint16_t position;
 uint8_t new_byte;
+volatile uint16_t dshot_programming_ticks;
 
 uint8_t dshot_direction_reversed;
 volatile uint8_t dshot_direction_pending;
@@ -139,6 +140,12 @@ void computeDshotDMA()
 				send_telemetry = 1;
 			}
 			if (programming_mode > DSHOT_PROG_IDLE) {
+				if (!dshot_programming_ticks) {
+					/* Discard the first late word: an address/value must not
+					 * become throttle merely because the transaction expired. */
+					programming_mode = DSHOT_PROG_IDLE;
+					return;
+				}
 				if (programming_mode == DSHOT_PROG_WAIT_ADDRESS) {
 					position = tocheck; /* eepromBuffer index */
 					programming_mode = DSHOT_PROG_WAIT_VALUE;
@@ -260,6 +267,7 @@ void computeDshotDMA()
 							dshot_direction_pending = dshotcommand;
 							break;
 						case DSHOT_CMD_ENTER_PROGRAMMING_MODE:
+							dshot_programming_ticks = LOOP_FREQUENCY_HZ / 4; /* 250 ms total */
 							programming_mode = DSHOT_PROG_WAIT_ADDRESS;
 							break;
 					}
