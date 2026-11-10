@@ -54,6 +54,10 @@
         tracking snapshot (magic 0x5356, versioned fields)
       cmd 0x82 GOV_FORCE: u16 slope_q10, u16 conf — force governor
         state for un-latch engagement tests
+      cmd 0x83 CURRENT_INJECT: pad bit0 arms a one-shot replacement of
+        the next current ADC sample, int16 offset_ca (0.01 A, applied
+        to every sample), uint16 spike_raw (12-bit counts used when
+        bit0 is set). For the median current-filter test.
   SITL -> client:
     u16 magic 0x5354, u8 version=2 or 3, u8 count, count * sample
         v3 appends: float bemf[3], filtered_phase[3], filtered_neutral;
@@ -133,6 +137,7 @@
 #define STATE_CMD_ZC_FAULT 0x80
 #define STATE_CMD_ZC_STATS 0x81
 #define STATE_CMD_GOV_FORCE 0x82
+#define STATE_CMD_CURRENT_INJECT 0x83
 
 struct __attribute__((packed)) state_sample {
 	uint64_t t_ns;
@@ -883,6 +888,13 @@ void sitl_state_poll(void)
 		memcpy(&slope, pkt + 4, 2);
 		memcpy(&conf, pkt + 6, 2);
 		runtimeGovForceForTest(slope, conf);
+	} else if (cmd == STATE_CMD_CURRENT_INJECT && ret >= 8) {
+		// CURRENT_INJECT: pad bit0 = arm one-shot spike, int16 offset_ca, uint16 spike_raw
+		int16_t offset_ca;
+		uint16_t spike_raw;
+		memcpy(&offset_ca, pkt + 4, 2);
+		memcpy(&spike_raw, pkt + 6, 2);
+		sitl_current_inject(offset_ca, spike_raw, (pkt[3] & 1) != 0);
 	}
 }
 

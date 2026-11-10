@@ -173,7 +173,12 @@ def test_slew_desync_leaves_ramp_fixed(sitl_factory, state_stream):
             ci_us = max(s0['commutation_interval'] // 2, 100)
             bucket0 = int(s0['desync_episode_bucket'])
             d0 = int(s0['desync_happened'])
-            _zc_fault(ctl, mode=1, duration_us=60 * ci_us)
+            # Blank past BEMF_STALL_TICKS (22.5 ms) so the blind budget runs
+            # out and the stall rail charges the bucket. 60 windows is only
+            # ~7 ms at this speed, which the virtual-crossing blind step
+            # (#137) can bridge, so the charge became a coin toss. Same
+            # 80 ms floor as test_steady_duty_desync_leaves_ramp_fixed below.
+            _zc_fault(ctl, mode=1, duration_us=max(60 * ci_us, 80_000))
             # Toggle every 50 ms so the limiter is binding on a RISING
             # setpoint across the whole window the charge can land in.
             hi = True
