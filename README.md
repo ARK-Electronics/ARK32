@@ -48,9 +48,8 @@ Source: [`Src/bemf_zc.c`](Src/bemf_zc.c) (deadline, blind step, stall handoff, d
 
 ### Throttle and protection
 
-**Ramp.** The ramp setting can only lower the built-in ceilings of 2, 6 and 16 %/ms (startup, low rpm, high rpm). The factory 2 %/ms therefore runs at 2 %/ms in every regime. The setting is referenced to a 4S pack at 14.8 V. The ESC scales the duty slew by 14.8 V / pack voltage, clamped to 0.5×–1.5×, and carries the fractional part from step to step. The same setting then gives about the same volts per millisecond on any pack. Upstream AM32 applies the setting as duty per step with no scaling. For the same setting ARK32 slews 0.59–0.67× as fast on 6S (25.2 V full to 22.2 V nominal) and about 1.33× as fast on a nominal 3S.
+The ramp you set is the ramp that runs, on every pack: 1 %/ms means 0→100 % takes 100 ms on 3S or 12S alike. Once the motor is running, throttle never moves duty faster than the setting (the control tick is 51 µs, so it runs about 2 % under it). The start kick to the startup power level, protective cuts and braking are not throttle ramps. EEPROM layout 4 marks this. Under layout 3 the firmware scaled the ramp by 14.8 V / pack voltage (0.5x-1.5x) and rounded it down, so above 14.8 V it flew slower than set (the factory 2.0 %/ms flew 1.0, and settings under 1.0 flew as little as a third), while on 2S-3S some settings flew faster. The ARK32 configurator migrates a layout-3 ramp when it updates the firmware. The firmware does **not** secretly slow the ramp after a desync (that made one motor lag the others).
 
-Nothing lowers the ramp after a desync. A learned back-off that did so was removed because it made one motor lag the others.
 
 **Speed-based duty ceiling.** After about 0.3 s of steady closed-loop running above 12.5% duty, the ESC learns how much rpm each unit of duty buys. It then caps duty at what the measured rpm needs plus about 3 V of headroom, which bounds slip current while a heavy prop spools. The ceiling starts from scratch whenever the motor coasts, drops to poll or desyncs. Until it has re-learned, a snap is not limited, including the first snap after every start. If the cap holds rpm flat for 1 s, it releases gradually.
 
@@ -142,7 +141,7 @@ make factory-image
 make factory-image-check   # same + layout/defaults gate (CI)
 ```
 
-Firmware objects land under `obj/`. This fork’s product targets are **`ARK_4IN1_F051`** (ship firmware) and **`AM32_SITL_CAN`** (host sim). See [`Inc/targets.h`](Inc/targets.h). MCU HAL trees for other AM32 families are still in `Mcu/`, but they are not buildable products here.
+Firmware objects land under `obj/`. This fork’s product targets are **`ARK_4IN1_F051`** (ship firmware) and **`AM32_SITL_CAN`** (host sim). An additional NXP MCXA133 reference target **`MR_ESC_ARK32_A133`** (NXP MR-ESC-ARK32 reference design, built by `a133makefile.mk`) is provided for evaluation; its analog scale factors are inherited from upstream AM32's `FRDM_A133` and must be verified against the MR-ESC-ARK32 schematic. See [`Inc/targets.h`](Inc/targets.h). Other MCU HAL trees are still in `Mcu/`, but they are not buildable products here.
 
 ### Production release image (ARK 4IN1)
 
@@ -160,7 +159,7 @@ That links the release app, then runs [`scripts/build_factory_image.py`](scripts
 | Application @ `0x08001000` | `make ARK_4IN1_F051` |
 | EEPROM @ `0x08007C00` | [`factory/ARK_4IN1_F051_eeprom_defaults.json`](factory/ARK_4IN1_F051_eeprom_defaults.json) |
 
-Ship/program `obj/ARK32_ARK_4IN1_F051_*.factory.bin` (or `.factory.hex`). Defaults (variable PWM, 1020 kV, 2 %/ms ramp, 15° fixed advance, PWM min/max 1020/1980 µs) are documented in [`factory/README.md`](factory/README.md).
+Ship/program `obj/ARK32_ARK_4IN1_F051_*.factory.bin` (or `.factory.hex`). Defaults (variable PWM, 1020 kV, 1 %/ms ramp, 15° fixed advance, PWM min/max 1020/1980 µs) are documented in [`factory/README.md`](factory/README.md).
 
 Optional static analysis / size / format helpers:
 

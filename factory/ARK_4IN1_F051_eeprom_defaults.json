@@ -1,13 +1,13 @@
 {
   "_comment": "ARK 4IN1 F051 production EEPROM defaults in schema display units. Historical temperature 141 and current 102 are raw disabled sentinels preserved verbatim; all other values must round-trip exactly through schema/eeprom.json.",
   "product": "ARK_4IN1_F051",
-  "eeprom_version": 3,
+  "eeprom_version": 4,
   "firmware_version": {
     "major": "from_version_h",
     "minor": "from_version_h"
   },
   "settings": {
-    "max_ramp_percent_per_ms": 2.0,
+    "max_ramp_percent_per_ms": 1.0,
     "motor_kv": 1020,
     "motor_poles": 14,
     "variable_pwm": 1,
