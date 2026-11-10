@@ -37,4 +37,14 @@ CFLAGS_$(MCU) += \
 	-DUSE_FULL_LL_DRIVER \
 	-DPREFETCH_ENABLE=1
 
+# Drop the C runtime start files (crt0/crti/crtbegin/crtend/crtn). The reset
+# handler in Startup/ is the entry point and does the .data/.bss setup itself.
+# All the start files added was __libc_init_array walking an init array whose
+# only entry was crtbegin's frame_dummy (a no-op without exception tables), the
+# empty _init/_fini, and a __do_global_dtors_aux that nothing ever calls.
+# A C++ object or an __attribute__((constructor)) would need this and the call
+# in the reset handler back; scripts/check-codegen-ark.sh fails the build if
+# .init_array is ever non-empty.
+LDFLAGS_$(MCU) := -nostartfiles
+
 SRC_$(MCU) := $(foreach dir,$(SRC_DIR_$(MCU)),$(wildcard $(dir)/*.[cs]))
