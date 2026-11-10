@@ -299,6 +299,19 @@ factory-image-check: factory-image
 	$(QUIET)BL_IMAGE_F051=$(BL_IMAGE_F051) FACTORY_DEFAULTS=$(FACTORY_DEFAULTS) \
 		bash scripts/check-factory-image-ark.sh
 
+# Release manifest and SHA256SUMS (CI publish). Provenance comes from the same
+# variables the build used, so a bootloader or toolchain bump cannot leave the
+# manifest describing the old one.
+.PHONY : release-manifest
+release-manifest: factory-image
+	$(QUIET)python3 scripts/release_manifest.py \
+		--compiler $(CC) \
+		--version $(FIRMWARE_VERSION) \
+		--target $(FACTORY_PRODUCT) \
+		--bootloader $(BL_IMAGE_F051) \
+		--defaults $(FACTORY_DEFAULTS) \
+		--schema schema/eeprom.json
+
 # Code formatting (clang-format ≈ PX4 astyle/Linux look; see .clang-format).
 # Same target names as PX4. Requires clang-format 22.1.5 (CI pin);
 # scripts/format.sh bootstraps tools/clang-format-venv if PATH is a
