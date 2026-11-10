@@ -12,6 +12,10 @@
 #include "sounds.h"
 #include "targets.h"
 #include "hwci_perf.h"
+#include "comparator.h"
+#include "peripherals.h"
+#include "motor_runtime.h"
+#include "esc_state.h"
 #include <stddef.h>
 #if DRONECAN_SUPPORT
 #	include "DroneCAN/DroneCAN.h"
@@ -64,6 +68,29 @@ uint16_t halfpulsetime = 0;
 uint8_t programming_mode;
 uint16_t position;
 uint8_t new_byte;
+volatile uint16_t dshot_programming_ticks;
+
+uint8_t dshot_direction_reversed;
+volatile uint8_t dshot_direction_pending;
+
+void dshotApplyPendingDirection(void)
+{
+	/* The sine caller has already stopped stepping and applied its static
+	 * stop/brake output. Its cached six-step duty need not reach zero:
+	 * the six-step slew is paused, so waiting for it can latch input off. */
+	if (dshot_direction_pending && !running && (!duty_cycle || escInSineStart())) {
+		/* Retire any outstanding commutation before changing its direction.
+		 * Keep input held at zero until all direction state is published. */
+		__disable_irq();
+		DISABLE_COM_TIMER_INT();
+		maskPhaseInterrupts();
+		dshot_direction_reversed = dshot_direction_pending - DSHOT_CMD_SPIN_DIRECTION_NORMAL;
+		forward = 1 - (eepromBuffer.direction_reversed ^ dshot_direction_reversed);
+		brushed_direction_set = 0;
+		dshot_direction_pending = 0;
+		__enable_irq();
+	}
+}
 
 void computeDshotDMA()
 {
@@ -118,6 +145,12 @@ void computeDshotDMA()
 				send_telemetry = 1;
 			}
 			if (programming_mode > DSHOT_PROG_IDLE) {
+				if (!dshot_programming_ticks) {
+					/* Discard the first late word: an address/value must not
+					 * become throttle merely because the transaction expired. */
+					programming_mode = DSHOT_PROG_IDLE;
+					return;
+				}
 				if (programming_mode == DSHOT_PROG_WAIT_ADDRESS) {
 					position = tocheck; /* eepromBuffer index */
 					programming_mode = DSHOT_PROG_WAIT_VALUE;
@@ -169,7 +202,9 @@ void computeDshotDMA()
 				command_count = 0;
 			}
 
-			if ((dshotcommand > DSHOT_CMD_MOTOR_STOP) && (running == 0) && armed) {
+			if ((dshotcommand > DSHOT_CMD_MOTOR_STOP) && armed &&
+			    ((!running) || (!input && (dshotcommand == DSHOT_CMD_SPIN_DIRECTION_NORMAL ||
+						       dshotcommand == DSHOT_CMD_SPIN_DIRECTION_REVERSED)))) {
 				if (dshotcommand != last_command) {
 					last_command = dshotcommand;
 					command_count = 0;
@@ -235,12 +270,11 @@ void computeDshotDMA()
 #endif
 							break;
 						case DSHOT_CMD_SPIN_DIRECTION_NORMAL:
-							forward = 1 - eepromBuffer.direction_reversed;
-							break;
 						case DSHOT_CMD_SPIN_DIRECTION_REVERSED:
-							forward = eepromBuffer.direction_reversed;
+							dshot_direction_pending = dshotcommand;
 							break;
 						case DSHOT_CMD_ENTER_PROGRAMMING_MODE:
+							dshot_programming_ticks = LOOP_FREQUENCY_HZ / 4; /* 250 ms total */
 							programming_mode = DSHOT_PROG_WAIT_ADDRESS;
 							break;
 					}

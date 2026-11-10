@@ -872,6 +872,7 @@ void runtimeMotorModeTick(void)
 				allOff();
 			}
 			e_rpm = 0;
+			dshotApplyPendingDirection();
 		}
 
 #endif // gimbal mode

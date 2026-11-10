@@ -216,6 +216,8 @@ Only for **servo PWM** input when stick calibration is not disabled. Sequence in
 
 DShot commands run only when **armed**, **motor not running**, and the command is repeated enough times (`Src/dshot.c`). Beacons 1–5 set `play_tone_flag`; actual audio plays on the next idle/low-throttle slot in `setInput` (`Src/control_loop.c`).
 
+Temporary direction commands **20/21** are also accepted at zero throttle while `running` is still set. They hold input at zero until the existing stop/brake path finishes, then change the direction for the next start. Six-step operation also waits for duty to reach zero. Sine mode applies the request in the same stop pass, after stepping has stopped and the stop/brake output is set; its cached six-step duty does not delay the request. They leave the stored motor direction unchanged and also reverse the direction reference used by 3D throttle mapping.
+
 | DShot cmd | `play_tone_flag` | Sound | Typical use |
 |-----------|------------------|-------|-------------|
 | **1** | 1 | `playDefaultTone` — 2 notes rising | Beacon 1 |

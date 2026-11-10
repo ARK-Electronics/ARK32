@@ -102,3 +102,67 @@ def test_active_brake_power_is_bounded_on_load(stopped, raw, expected):
     image, _ = ee.fetch()
     assert image is not None, sitl.log_tail()
     assert image[offset('ACTIVE_BRAKE_POWER')] == expected, sitl.log_tail()
+
+
+@pytest.mark.parametrize('bidirectional', [0, 1])
+@pytest.mark.parametrize('command', [20, 21])
+def test_direction_command_during_zero_throttle_coast(sitl_factory, state_stream,
+                                                      bidirectional, command):
+    """Latch 20/21 during coast; an early throttle pulse must wait for stop."""
+    sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
+    tx = Sender('127.0.0.1', sitl.input_port, sd.TYPE_DSHOT600)
+    sim = state_stream(sitl)
+    ee = EepromClient(port=sitl.state_port)
+    variables = [(1, 'armed'), (1, 'sitl_tone_active'), (2, 'input'),
+                 (1, 'running'), (1, 'forward'), (1, 'last_dshot_command'),
+                 (2, 'duty_cycle'), (1, 'old_routine')]
+    try:
+        with control_socket(sitl) as sock:
+            watch = Watch(sock, variables)
+            watch.until(lambda: watch.values.get(0) == 1 and watch.values.get(1) == 0)
+            time.sleep(0.2)  # wait out the arming tune's silent gaps
+            for name, value in [('BI_DIRECTIONAL', bidirectional),
+                                ('BRAKE_ON_STOP', 1), ('DRAG_BRAKE_STRENGTH', 10)]:
+                ok, message = ee.set(offset(name), [value])
+                assert ok, message
+            # Start reversed for command 20, so both cases must physically
+            # reverse from their initial run. The
+            # temporary DShot direction must not rewrite the stored setting.
+            if command == 20:
+                tx.cmds = [21] * 20
+                watch.until(lambda: watch.values.get(5) == 21)
+            initial_forward = 0 if command == 20 else 1
+            throttle = 1400 if bidirectional else 700
+            tx.value = throttle
+            watch.until(lambda: watch.values.get(3) == 1 and watch.values.get(7) == 0
+                        and watch.values.get(4) == initial_forward
+                        and sim.samples and abs(sim.samples[-1][1]) > 200)
+            before, _ = ee.fetch()
+            assert before is not None, sitl.log_tail()
+
+            tx.value = 0
+            watch.until(lambda: watch.values.get(2) == 0)
+            assert watch.values.get(3) == 1, ('missed the coast window', watch.values)
+            assert abs(sim.samples[-1][1]) > 100, 'rotor already stopped'
+            first = len(watch.events)
+            tx.cmds = [command] * 12
+            watch.until(lambda: watch.values.get(5) == command, timeout=1)
+            assert watch.values.get(3) == 1, ('command was not latched during coast', watch.values)
+            assert watch.values.get(4) == initial_forward, 'reversed commutation during coast'
+
+            # Ask to start before the stop completes; pending direction must
+            # keep the stop path at zero until it can safely take effect.
+            tx.value = throttle
+            watch.until(lambda: watch.values.get(4) == 1 - initial_forward
+                        and watch.values.get(3) == 1 and watch.values.get(2, 0) > 47)
+            events = watch.events[first:]
+            stop_time = next(t for t, i, v in events if i == 3 and v == 0)
+            turn_time = next(t for t, i, v in events if i == 4 and v == 1 - initial_forward)
+            assert stop_time <= turn_time, events
+            # Check actual plant rotation, not just the commutation flag.
+            want_sign = 1 if command == 20 else -1
+            watch.until(lambda: sim.samples and sim.samples[-1][1] * want_sign > 200)
+            after, _ = ee.fetch()
+            assert after == before, 'temporary direction changed EEPROM'
+    finally:
+        tx.stop()
