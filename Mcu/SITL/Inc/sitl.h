@@ -185,6 +185,12 @@ typedef struct {
 void sitl_sensors_read(sitl_sensors_t *out);
 void sitl_sensors_write(const sitl_sensors_t *in); // sim thread only
 
+/* Test hook (state cmd 0x83). offset_ca is added to every current
+ * conversion, in the same 0.01 A units as actual_current. When arm_spike
+ * is set, the next conversion is replaced by spike_raw (12-bit ADC counts)
+ * and the arm is cleared. Sim thread writes; firmware thread consumes. */
+void sitl_current_inject(int16_t offset_ca, uint16_t spike_raw, bool arm_spike);
+
 // lifecycle
 void sitl_start_sim_thread(void);
 extern char **sitl_saved_argv;

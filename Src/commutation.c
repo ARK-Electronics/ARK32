@@ -4,6 +4,7 @@
 
 #include "commutation.h"
 #include "motor_runtime.h"
+#include "sine_table.h"
 #include "bemf_zc.h"
 #include "main.h"
 #include "common.h"

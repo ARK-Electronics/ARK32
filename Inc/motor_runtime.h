@@ -141,15 +141,6 @@ extern uint16_t desired_angle;
 extern int16_t phase_A_position;
 extern int16_t phase_B_position;
 extern int16_t phase_C_position;
-/* Half-period sine table + reconstructing lookup. The original 360-entry
- * table satisfies pwmSin[i] + pwmSin[i+180] == 360 exactly, so the lookup
- * returns bit-identical values for the full [0,360) range while the flash
- * table halves to 360 bytes. */
-extern const int16_t pwmSinHalf[180];
-static inline int16_t pwmSinLookup(int16_t a)
-{
-	return (a < 180) ? pwmSinHalf[a] : (int16_t)(360 - pwmSinHalf[a - 180]);
-}
 extern uint16_t step_delay;
 extern uint16_t gate_drive_offset;
 extern uint16_t motor_kv;
@@ -170,10 +161,12 @@ extern uint16_t ADC_raw_ntc;
 extern uint16_t ADC_smoothed_input;
 extern int16_t converted_degrees;
 extern uint8_t temperature_offset;
-/* Boxcar average of the raw current ADC (getSmoothedCurrent(), control_loop.c).
- * The window is a macro, not a `const uint8_t`: Cortex-M0 has no hardware
- * divide, and a runtime divisor pulls in the __aeabi_uidiv helper on every ADC
- * conversion. As a compile-time constant the divide folds to a multiply-shift. */
+/* Boxcar average of the median-of-3 current ADC (getSmoothedCurrent(),
+ * control_loop.c). The median drops a single-sample shunt spike before it
+ * can leak into this average at 1/N. The window is a macro, not a
+ * `const uint8_t`: Cortex-M0 has no hardware divide, and a runtime divisor
+ * pulls in the __aeabi_uidiv helper on every ADC conversion. As a compile-time
+ * constant the divide folds to a multiply-shift. */
 #define NUM_CURRENT_READINGS 50
 extern uint8_t current_read_index;
 extern uint32_t current_total;
