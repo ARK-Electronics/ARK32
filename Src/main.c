@@ -328,10 +328,9 @@ int main(void)
 	}
 
 	if (eepromBuffer.rc_car_reversing) { // overrides a whole lot of things!
-		throttle_max_at_low_rpm = 1000;
+		// low-RPM limiter overrides are applied in loadEEpromSettings()
 		eepromBuffer.bidirectional_mode = 1;
 		eepromBuffer.sine_startup = 0;
-		low_rpm_throttle_limit = 1;
 		eepromBuffer.variable_pwm_freq = 0;
 		// eepromBuffer.stall_protection = 1;
 		eepromBuffer.complementary_pwm = 0;

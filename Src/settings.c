@@ -21,6 +21,9 @@
 void loadEEpromSettings(void)
 {
 	read_flash_bin(eepromBuffer.buffer, eeprom_address, sizeof(eepromBuffer.buffer));
+	/* All consumers, including sine startup and RPM control, need nonzero
+	 * poles and pole pairs. Do not merely guard the derived schedules. */
+	eepromBuffer.motor_poles = sanitizeMotorPoles(eepromBuffer.motor_poles);
 	if (eepromBuffer.eeprom_version < 3) {			       // layout 3 added these fields; layout 4 changed none
 		eepromBuffer.max_ramp_speed = TARGET_DEFAULT_MAX_RAMP; // 0.1% per ms steps (see targets.h)
 		eepromBuffer.min_duty_cycle = 1;		       // 0.2% to 51 percent
@@ -35,6 +38,17 @@ void loadEEpromSettings(void)
 		eepromBuffer.reserved0[0] = 0; // 15-16
 		eepromBuffer.reserved0[1] = 0;
 	}
+	/* Start from the power-on values of everything below that is only set
+	 * conditionally or adjusted in place, so a reload (DroneCAN erase, SITL
+	 * EEPROM editor) gives the same result as a boot with that EEPROM. The
+	 * timer dead time is the exception: setPwmDeadTime() only ORs bits into
+	 * the register, so a running-brake change needs a restart to reach it. */
+	dead_time_override = DEAD_TIME;
+	use_current_limit = 0;
+	low_rpm_throttle_limit = 1;
+	low_rpm_level = LOW_RPM_LEVEL_DEFAULT;
+	high_rpm_level = HIGH_RPM_LEVEL_DEFAULT;
+	throttle_max_at_low_rpm = THROTTLE_MAX_AT_LOW_RPM_DEFAULT;
 	// eepromBuffer.timing_advance can either be set to 0-3 with config tools less than 1.90 or 10-42 with 1.90 or above
 	if (eepromBuffer.timing_advance > 42 || (eepromBuffer.timing_advance < 10 && eepromBuffer.timing_advance > 3)) {
 		temp_advance = 16;
@@ -147,7 +161,11 @@ void loadEEpromSettings(void)
 			EDT_ARMED = 1;
 		}
 
-		if (motor_kv < 300) {
+		/* Raw zero, the 20 kV setting, opts out of the low-RPM duty ceiling
+		 * (upstream AM32 7ebdc129). Test the stored byte rather than the
+		 * target-scaled motor_kv so kV scaling cannot turn other settings
+		 * into opt-outs. DroneCAN stores zero only for an explicit 20 kV. */
+		if (eepromBuffer.motor_kv == 0) {
 			low_rpm_throttle_limit = 0;
 		}
 		/* Throttle-restriction envelope in kerpm, scaled from kv and pole
@@ -165,20 +183,24 @@ void loadEEpromSettings(void)
 		 * (am32-firmware/AM32#405 - the community workaround of entering
 		 * 50-60% of the real kv cancels exactly this factor).
 		 *
-		 * Out-of-range pole counts (an erased eeprom reads 0 or 0xff)
-		 * leave the envelope at zero, which map() treats as "always at
-		 * the high-rpm limit" - i.e. unrestricted, as before.
-		 * MOTOR_POLES_MIN..MOTOR_POLES_MAX is the range the DroneCAN
-		 * MOTOR_POLES parameter accepts (see eeprom.h). Worst case
-		 * 10220 kv * 128 poles / 544 = 2405 kerpm, well inside the
-		 * uint16 the levels are stored in. */
-		if (eepromBuffer.motor_poles >= MOTOR_POLES_MIN && eepromBuffer.motor_poles <= MOTOR_POLES_MAX) {
-			low_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (100U * 32U);
-			high_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (17U * 32U);
-		} else {
-			low_rpm_level = 0;
-			high_rpm_level = 0;
-		}
+		 * motor_poles is already within MOTOR_POLES_MIN..MOTOR_POLES_MAX
+		 * (sanitized at load). Worst case 10220 kv * 128 poles / 544 =
+		 * 2405 kerpm, well inside the uint16 the levels are stored in. */
+		low_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (100U * 32U);
+		high_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (17U * 32U);
+	}
+	/* RC-car mode always limits, with a higher low-speed ceiling that
+	 * replaces the running-brake compensation. It lives here rather than
+	 * with main.c's other RC-car overrides so a reload keeps it. */
+	if (eepromBuffer.rc_car_reversing) {
+		throttle_max_at_low_rpm = 1000;
+		low_rpm_throttle_limit = 1;
+	}
+	/* setInput() applies duty_cycle_maximum after the startup floor, so a
+	 * low-speed ceiling under min_startup_duty would silently override the
+	 * configured minimum duty and startup power. Raise it to that floor. */
+	if (throttle_max_at_low_rpm < min_startup_duty) {
+		throttle_max_at_low_rpm = min_startup_duty;
 	}
 	// Exact ramp, never faster than configured. max_ramp_speed R is in
 	// 0.1 %/ms of full duty, i.e. R/10 duty counts per 20 kHz control tick
@@ -221,10 +243,9 @@ void loadEEpromSettings(void)
 	 * high end is a realistic free-run ceiling; map() still clamps anything
 	 * above it to 23, so a motor that truly hits ideal stays at the top.
 	 * Computed after motor_kv has taken its final value (the cell-count
-	 * reductions above). Left at 0 - meaning "use the duty proxy" - for a kV
-	 * below the range the throttle limiter already treats as unusable, or a
-	 * pole count outside the MOTOR_POLES_MIN..MOTOR_POLES_MAX the DroneCAN
-	 * MOTOR_POLES parameter accepts (an erased eeprom reads 0 or 0xff).
+	 * reductions above). Keep the duty proxy below 300 kV: extending this
+	 * timing schedule to low-kV motors needs separate validation from the
+	 * throttle limiter.
 	 *
 	 * The reduced 256/12500 form above is the one evaluated below rather than
 	 * the equivalent 4096/200000: both are the same rational number (divided
@@ -236,7 +257,7 @@ void loadEEpromSettings(void)
 	 * path's (scale * centivolts) >> 12 on a 12S pack.
 	 */
 	advance_erpm_scale_q12 = 0;
-	if (motor_kv >= 300 && eepromBuffer.motor_poles >= MOTOR_POLES_MIN && eepromBuffer.motor_poles <= MOTOR_POLES_MAX) {
+	if (motor_kv >= 300) {
 		uint16_t scale = (uint16_t)(((uint32_t)motor_kv * eepromBuffer.motor_poles * 256u) / 12500u);
 		advance_erpm_scale_q12 = (uint16_t)(scale - (scale >> 4)); /* * 15/16 */
 	}
@@ -251,6 +272,7 @@ void loadEEpromSettings(void)
 
 void saveEEpromSettings(void)
 {
+	eepromBuffer.motor_poles = sanitizeMotorPoles(eepromBuffer.motor_poles);
 	save_flash_nolib(eepromBuffer.buffer, sizeof(eepromBuffer.buffer), eeprom_address);
 }
 

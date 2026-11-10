@@ -16,6 +16,7 @@
 #include "peripherals.h"
 #include "motor_runtime.h"
 #include "esc_state.h"
+#include <stddef.h>
 #if DRONECAN_SUPPORT
 #	include "DroneCAN/DroneCAN.h"
 #endif
@@ -164,7 +165,9 @@ void computeDshotDMA()
 					/* RAM only; DSHOT_CMD_SAVE_SETTINGS makes it permanent. */
 					if (tocheck == DSHOT_CMD_EXIT_PROGRAMMING_MODE) {
 						if (position < sizeof(eepromBuffer.buffer)) {
-							eepromBuffer.buffer[position] = new_byte;
+							eepromBuffer.buffer[position] = position == offsetof(EEprom_t, motor_poles)
+												? sanitizeMotorPoles(new_byte)
+												: new_byte;
 						}
 						programming_mode = DSHOT_PROG_IDLE;
 					}
