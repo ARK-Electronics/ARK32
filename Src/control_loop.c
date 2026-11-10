@@ -620,7 +620,14 @@ RAM_FUNC void tenKhzRoutine()
 	tenkhzcounter++;
 	ledcounter++;
 	one_khz_loop_counter++;
-	if (!escIsArmed()) {
+	/* A latched low-voltage cutoff clears `armed` but must never re-arm.
+	 * With the absolute cutoff cell_count stays 0, so without this check the
+	 * block below runs again: its one-second timer has already expired and
+	 * the cutoff path (runtime_loop.c) zeroed zero_input_count, so it takes
+	 * the "arming failed" branch and clears inputSet. Frames then stop being decoded, the
+	 * signal-loss watchdog resets the MCU after 2 s, and the reset wipes the
+	 * latch, so the ESC re-armed and was drivable for ~10 s every ~13 s. */
+	if (!escIsArmed() && !LOW_VOLTAGE_CUTOFF) {
 		if (cell_count == 0) {
 			if (inputSet) {
 				if (adjusted_input == 0) {
