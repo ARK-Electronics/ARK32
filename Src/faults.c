@@ -219,6 +219,34 @@ static void gd_note_retry(uint16_t now)
  */
 static uint8_t drv_nfault_latched;
 static fault_id_t drv_nfault_cause;
+/* Consecutive trusted low samples of PB5 before the software latch. One
+ * sample is not a fault: PB5 sits beside the DShot input (PB4) and is only
+ * qualified 8 polls after wake. 4 main-loop polls is ~100 us; a real DRV8328
+ * fault has already disabled the gates in hardware, so this only decides
+ * when the firmware stops commanding the bridge. */
+#	define DRV8328_NFAULT_POLLS 4u
+static uint8_t drv_nfault_low_polls;
+
+/* Same order as gd_hold_cut() (G431): publish the stop flags before touching
+ * GPIO so a pending commutation cannot re-enable the bridge after allOff(),
+ * and drop prop_brake_active so gateDriverPoll() can sleep the driver, which
+ * is the DRV8328 fault reset. */
+static void drv_nfault_cut(void)
+{
+	running = 0;
+	stepper_sine = 0;
+	prop_brake_active = 0;
+	DISABLE_COM_TIMER_INT();
+	maskPhaseInterrupts();
+	allOff();
+	SET_DUTY_CYCLE_ALL(0);
+	input = 0;
+	duty_cycle_setpoint = 0;
+	duty_cycle = 0;
+	last_duty_cycle = 0;
+	zero_crosses = 0;
+	bemfZcResetTrend();
+}
 #endif
 
 const char *faultGateDriverCauseName(fault_id_t cause)
@@ -417,6 +445,9 @@ void faultPollGateDriver(void)
 
 #elif defined(USE_DRV8328_NFAULT)
 	if (!gateDriverIsAwake()) {
+		/* Asleep is the DRV8328 fault reset: gateDriverPoll() sleeps the
+		 * driver while latched, so a pilot zero clears the latch here. */
+		drv_nfault_low_polls = 0;
 		if (drv_nfault_latched && adjusted_input == 0) {
 			drv_nfault_latched = 0;
 			drv_nfault_cause = FAULT_NONE;
@@ -426,25 +457,28 @@ void faultPollGateDriver(void)
 
 	gateDriverNfaultGraceTick();
 	if (!gateDriverNfaultPinTrusted()) {
+		drv_nfault_low_polls = 0;
 		return;
 	}
 
 	if ((NFAULT_PORT->IDR & NFAULT_PIN) == 0u) {
 		if (!drv_nfault_latched) {
+			if (++drv_nfault_low_polls < DRV8328_NFAULT_POLLS) {
+				return;
+			}
 			drv_nfault_cause = (battery_voltage > 0u && battery_voltage < 800u) ? FAULT_GD_UVLO : FAULT_GD_UNKNOWN;
 			drv_nfault_latched = 1;
 		}
-		allOff();
-		maskPhaseInterrupts();
-		SET_DUTY_CYCLE_ALL(0);
-		running = 0;
-		stepper_sine = 0;
+		drv_nfault_cut();
 		if (escGetState() != ESC_FAULT_STUCK) {
 			escToFaultStuck();
 		}
-	} else if (drv_nfault_latched && adjusted_input == 0) {
-		drv_nfault_latched = 0;
-		drv_nfault_cause = FAULT_NONE;
+	} else {
+		drv_nfault_low_polls = 0;
+		if (drv_nfault_latched && adjusted_input == 0) {
+			drv_nfault_latched = 0;
+			drv_nfault_cause = FAULT_NONE;
+		}
 	}
 #endif
 }

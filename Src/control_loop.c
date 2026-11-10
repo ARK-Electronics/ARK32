@@ -291,7 +291,7 @@ void setInput()
 	} else {
 		adjusted_input = newinput;
 	}
-#if defined(USE_DRV_NFAULT)
+#if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
 	/* Preserve pilot demand above, but do not let stale input, sine entry,
 	 * or idle braking bypass the gate-driver restart inhibit. */
 	if (faultGateDriverFaultActive()) {
@@ -761,7 +761,7 @@ RAM_FUNC void tenKhzRoutine()
 		}
 	}
 
-#if defined(USE_DRV_NFAULT)
+#if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
 	/* In particular, brake_on_stop=2 must not re-enable a faulted bridge.
 	 * Keep the ADC/zero-throttle clock and signal watchdog running. */
 	if (faultGateDriverFaultActive()) {

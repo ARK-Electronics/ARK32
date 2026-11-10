@@ -58,7 +58,7 @@ void gateDriverInit(void)
 
 void gateDriverWakeBlocking(void)
 {
-#	if defined(USE_DRV_NFAULT)
+#	if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
 	if (faultGateDriverFaultActive()) {
 		return;
 	}
@@ -113,7 +113,7 @@ void gateDriverSleep(void)
 
 void gateDriverPoll(void)
 {
-#	if defined(USE_DRV_NFAULT)
+#	if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
 	if (faultGateDriverFaultActive()) {
 		gateDriverSleep();
 		return;
