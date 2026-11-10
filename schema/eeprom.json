@@ -351,17 +351,41 @@
         "key": "active_brake_power"
       }
     },
-    "reserved0": {
+    "brakeOnZeroThrottle": {
       "offset": 13,
-      "size": 4,
+      "size": 1,
       "type": "reserved",
-      "name": "Reserved",
-      "description": "Reserved bytes for future use",
+      "name": "Upstream Brake On Zero Throttle",
+      "description": "Upstream AM32 2.21+ brake_on_zero_throttle (0-9; upstream firmware treats anything above 9 as 0). ARK32 does not use it. Named so ARK32 never reuses the byte and an upstream value survives a round trip.",
       "hidden": true,
       "default": {
         "raw": [
-          48,
-          53,
+          0
+        ]
+      }
+    },
+    "demagComp": {
+      "offset": 14,
+      "size": 1,
+      "type": "reserved",
+      "name": "Upstream Demag Compensation",
+      "description": "Upstream AM32 2.22 demag_comp (0 off, 1 coast only, 2-4 = 1/32, 1/16, 1/8 power cut; upstream firmware treats anything above 4 as 0). ARK32 does not use it. Named so ARK32 never reuses the byte and an upstream value survives a round trip.",
+      "hidden": true,
+      "default": {
+        "raw": [
+          0
+        ]
+      }
+    },
+    "reserved0": {
+      "offset": 15,
+      "size": 2,
+      "type": "reserved",
+      "name": "Reserved",
+      "description": "Reserved bytes for future use (upstream reserved_eeprom_3). The default matches upstream's default page.",
+      "hidden": true,
+      "default": {
+        "raw": [
           49,
           32
         ]

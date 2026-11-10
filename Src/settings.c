@@ -30,10 +30,10 @@ void loadEEpromSettings(void)
 		eepromBuffer.current_pid_i = 0;			       // 0-255
 		eepromBuffer.current_pid_d = 100;		       // 0-255
 		eepromBuffer.active_brake_power = 0;		       // 1-5 percent duty cycle
-		eepromBuffer.reserved0[0] = 0;			       //14-16  for crsf input
+		eepromBuffer.brake_on_zero_throttle = 0;	       // 13-14: upstream AM32 fields, unused here
+		eepromBuffer.demag_comp = 0;
+		eepromBuffer.reserved0[0] = 0; // 15-16
 		eepromBuffer.reserved0[1] = 0;
-		eepromBuffer.reserved0[2] = 0;
-		eepromBuffer.reserved0[3] = 0;
 	}
 	// eepromBuffer.timing_advance can either be set to 0-3 with config tools less than 1.90 or 10-42 with 1.90 or above
 	if (eepromBuffer.timing_advance > 42 || (eepromBuffer.timing_advance < 10 && eepromBuffer.timing_advance > 3)) {
