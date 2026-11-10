@@ -645,7 +645,8 @@ def build_live_sources(rig: RigConfig, profile: Profile, *,
                 f"no ELF for target {rig.target} in {rig.resolved_obj_dir()}; "
                 "build with HWCI_PERF=1 first")
         dbg = OpenOcdDebugger(rig.openocd_configs, openocd_bin=rig.openocd_bin,
-                              search_dirs=rig.openocd_search_dirs).open()
+                              search_dirs=rig.openocd_search_dirs,
+                              elf_path=str(elf)).open()
         perf_reader = PerfReader(dbg, str(elf))
         perf_source = perf_reader.read
         closers.append(dbg.close)

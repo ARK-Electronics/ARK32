@@ -169,7 +169,7 @@ Tools in `Mcu/SITL/`:
   off); `--log FILE` records every UI action with timestamps and
   `--replay FILE` plays a recording back, so a failing interactive
   session can be reproduced exactly. Install the
-  dependencies (PySide6, pyqtgraph, dronecan; Linux/Windows/macOS) into
+  dependencies (PySide6, pyqtgraph, dronecan; Linux/macOS) into
   a self-contained environment with
 
 ```
@@ -181,7 +181,7 @@ python3 Mcu/SITL/make_gui_env.py
   `Mcu/SITL/requirements.txt` installed works too.
   `python3 Mcu/SITL/build_sitl_gui.py` packages the GUI into a single
   executable with the SITL bundled (so it runs the simulator out of the
-  box); CI builds one for Linux and Windows. The UI backends
+  box); CI builds one for Linux. The UI backends
   live in `sitl_gui_backend.py`, UI-independent for headless tests
 - `dshot_test.py` — headless scripted test (arming, throttle, EDT,
   bad-CRC injection), e.g.:
@@ -211,22 +211,11 @@ without configuration.
 
 ## Windows
 
-The SITL builds under Cygwin (packages: gcc-core, make) with the same
-`make AM32_SITL_CAN`, producing a native console executable, and the
-POSIX signal based scheduler runs correctly under the Cygwin runtime.
-The GUI uses a normal Windows python: `py Mcu/SITL/make_gui_env.py`
-creates the environment and prints the interpreter to use; after that
-`sitl_gui.bat` in the repository root launches the GUI (double click or
-from cmd, extra arguments are passed through). Notes:
-
-- to run the binary from outside a Cygwin shell (cmd, double click),
-  copy `C:\cygwin64\bin\cygwin1.dll` next to it - its only Cygwin
-  dependency (the CI artifact ships it bundled).
-- Windows Firewall must allow inbound UDP for the SITL binary (or ports
-  57732-57734) for CAN and the input/state ports to receive.
-- a socket never receives its own multicast on Windows, so the CAN TX
-  self test is skipped there; on a machine with several interfaces pass
-  an explicit one as `--can-uri mcast:0:<ip>`.
+Not supported. ARK does not build, package or test the SITL on Windows.
+The sources keep upstream's Windows code (a Cygwin build, and a MinGW
+cross-build with `make AM32_SITL_CAN SITL_CROSS=win`) so upstream SITL
+merges stay clean, but nothing checks that it still works. Use Linux,
+macOS or WSL.
 
 ## Headless / CI use
 
