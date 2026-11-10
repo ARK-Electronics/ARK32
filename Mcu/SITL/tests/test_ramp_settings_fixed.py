@@ -28,9 +28,10 @@ Three assertions, each a mutation check against restoring it:
      refuse takeoff on) or via established-run episodes, whichever this
      model produces - and never touches the ramp.
 
-Ramp fields asserted: the three configured regime steps plus ramp_divider.
-Deliberately NOT max_ramp_startup_vcomp - that is the voltage-compensated
-working copy and moves legitimately with pack sag.
+Ramp fields asserted: the three configured regime steps plus the low-rpm
+remainder in tenths (the protocol byte that was ramp_divider).
+max_ramp_startup_vcomp is a copy of max_ramp_startup since the ramp is no
+longer voltage-scaled.
 
 CI is the authority for this file: the local SITL harness in the dev
 container does not spin the motor at all (test_dshot fails with rpm=0), so
@@ -62,12 +63,12 @@ STATS_FIELDS = ('zero_crosses', 'commutation_interval', 'dropped_edges',
                 'gov_conf', 'gov_slope_q10', 'gov_duty_ceiling',
                 'gov_stuck_ms', 'gov_release_ceil', 'gov_unlatch_count',
                 'max_ramp_startup', 'max_ramp_low', 'max_ramp_high',
-                'ramp_divider', 'max_ramp_startup_vcomp', 'acq_resist',
+                'ramp_rem_low', 'max_ramp_startup_vcomp', 'acq_resist',
                 'desync_episode_bucket')
 STATS_FMT = '<HBBIIIIBBBBBBBBHBBHiIHHHHHHHHBBBBBBB'
 
 RAMP_FIELDS = ('max_ramp_startup', 'max_ramp_low', 'max_ramp_high',
-               'ramp_divider')
+               'ramp_rem_low')
 
 
 def _ramp(s):

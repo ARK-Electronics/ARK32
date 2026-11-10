@@ -480,7 +480,7 @@ def cmd_settings(args) -> int:
             return 2
         make = lambda: OpenOcdDebugger(  # noqa: E731
             rig.openocd_configs, openocd_bin=rig.openocd_bin,
-            search_dirs=rig.openocd_search_dirs)
+            search_dirs=rig.openocd_search_dirs, elf_path=str(elf))
         dbg = make().open()
         closer = dbg.close
         addr = st.resolve_eeprom_address(dbg, str(elf))

@@ -11,5 +11,8 @@ def generate(document):
         minimum, maximum = raw_range(field)
         value = field['disabledValue']['raw'] if field['onLoad'] == 'disable' else field['onLoadFallbackRaw']
         member = 'settings->' + snake_case(key)
-        lines += [f'    if ({member} < {minimum} || {member} > {maximum}) {{', f'        {member} = {value};', '    }']
+        # Fields are unsigned bytes: a zero minimum needs no lower test (and
+        # `< 0` fails the build under -Werror=type-limits).
+        test = f'{member} > {maximum}' if minimum == 0 else f'{member} < {minimum} || {member} > {maximum}'
+        lines += [f'    if ({test}) {{', f'        {member} = {value};', '    }']
     return '\n'.join(lines + ['}', ''])
