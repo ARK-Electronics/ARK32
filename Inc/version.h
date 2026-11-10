@@ -20,7 +20,9 @@
  * carries this number in its .file_name block ("e4", motor_runtime.c) so the
  * configurator can tell a layout-4 hex from a layout-3 one.
  *
- * Upstream AM32 2.21 also uses layout 4 (bytes 13-14: brake_on_zero_throttle,
- * demag_comp). Those bytes stay reserved here, so the byte layout matches
- * upstream's 4 and its configurator reads this page correctly. */
+ * Upstream AM32 2.21/2.22 also uses layout 4, adding byte 13
+ * brake_on_zero_throttle (0-9) and byte 14 demag_comp (0-4). ARK32 names
+ * those bytes but does not use them, and defaults them to 0 like upstream's
+ * default page; every other byte has the same offset and meaning, so either
+ * firmware and either configurator can read the other's page. */
 #define EEPROM_VERSION 4
