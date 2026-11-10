@@ -12,6 +12,9 @@
 #include "sounds.h"
 #include "targets.h"
 #include "hwci_perf.h"
+#include "comparator.h"
+#include "peripherals.h"
+#include "motor_runtime.h"
 #if DRONECAN_SUPPORT
 #	include "DroneCAN/DroneCAN.h"
 #endif
@@ -63,6 +66,25 @@ uint16_t halfpulsetime = 0;
 uint8_t programming_mode;
 uint16_t position;
 uint8_t new_byte;
+
+uint8_t dshot_direction_reversed;
+volatile uint8_t dshot_direction_pending;
+
+void dshotApplyPendingDirection(void)
+{
+	if (dshot_direction_pending && !running && !duty_cycle) {
+		/* Retire any outstanding commutation before changing its direction.
+		 * Keep input held at zero until all direction state is published. */
+		__disable_irq();
+		DISABLE_COM_TIMER_INT();
+		maskPhaseInterrupts();
+		dshot_direction_reversed = dshot_direction_pending - DSHOT_CMD_SPIN_DIRECTION_NORMAL;
+		forward = 1 - (eepromBuffer.direction_reversed ^ dshot_direction_reversed);
+		brushed_direction_set = 0;
+		dshot_direction_pending = 0;
+		__enable_irq();
+	}
+}
 
 void computeDshotDMA()
 {
@@ -166,7 +188,9 @@ void computeDshotDMA()
 				command_count = 0;
 			}
 
-			if ((dshotcommand > DSHOT_CMD_MOTOR_STOP) && (running == 0) && armed) {
+			if ((dshotcommand > DSHOT_CMD_MOTOR_STOP) && armed &&
+			    ((!running) || (!input && (dshotcommand == DSHOT_CMD_SPIN_DIRECTION_NORMAL ||
+						       dshotcommand == DSHOT_CMD_SPIN_DIRECTION_REVERSED)))) {
 				if (dshotcommand != last_command) {
 					last_command = dshotcommand;
 					command_count = 0;
@@ -232,10 +256,8 @@ void computeDshotDMA()
 #endif
 							break;
 						case DSHOT_CMD_SPIN_DIRECTION_NORMAL:
-							forward = 1 - eepromBuffer.direction_reversed;
-							break;
 						case DSHOT_CMD_SPIN_DIRECTION_REVERSED:
-							forward = eepromBuffer.direction_reversed;
+							dshot_direction_pending = dshotcommand;
 							break;
 						case DSHOT_CMD_ENTER_PROGRAMMING_MODE:
 							programming_mode = DSHOT_PROG_WAIT_ADDRESS;

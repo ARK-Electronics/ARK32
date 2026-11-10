@@ -82,16 +82,22 @@ uint16_t getSmoothedCurrent()
 
 void setInput()
 {
-	if (eepromBuffer.bidirectional_mode) {
+	const uint8_t direction_reversed = eepromBuffer.direction_reversed ^ dshot_direction_reversed;
+	/* A direction request must finish the existing stop/brake path even if
+	 * the sender resumes throttle before the rotor has coasted down. */
+	if (dshot_direction_pending) {
+		newinput = 0;
+		adjusted_input = 0;
+	} else if (eepromBuffer.bidirectional_mode) {
 		if (dshot == 0) {
 			if (eepromBuffer.rc_car_reversing) {
 				if (newinput > (1000 + (servo_dead_band << 1))) {
-					if (forward == eepromBuffer.direction_reversed) {
+					if (forward == direction_reversed) {
 						adjusted_input = 0;
 						//               if (running) {
 						prop_brake_active = 1;
 						if (return_to_center) {
-							forward = 1 - eepromBuffer.direction_reversed;
+							forward = 1 - direction_reversed;
 							prop_brake_active = 0;
 							return_to_center = 0;
 						}
@@ -103,11 +109,11 @@ void setInput()
 					}
 				}
 				if (newinput < (1000 - (servo_dead_band << 1))) {
-					if (forward == (1 - eepromBuffer.direction_reversed)) {
+					if (forward == (1 - direction_reversed)) {
 						adjusted_input = 0;
 						prop_brake_active = 1;
 						if (return_to_center) {
-							forward = eepromBuffer.direction_reversed;
+							forward = direction_reversed;
 							prop_brake_active = 0;
 							return_to_center = 0;
 						}
@@ -127,10 +133,10 @@ void setInput()
 				}
 			} else {
 				if (newinput > (1000 + (servo_dead_band << 1))) {
-					if (forward == eepromBuffer.direction_reversed) {
+					if (forward == direction_reversed) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
-							forward = 1 - eepromBuffer.direction_reversed;
+							forward = 1 - direction_reversed;
 							zero_crosses = 0;
 							bemfZcResetTrend();
 							old_routine = 1;
@@ -144,13 +150,13 @@ void setInput()
 						map(newinput, 1000 + (servo_dead_band << 1), 2000, DSHOT_CMD_MAX, DSHOT_MAX_THROTTLE);
 				}
 				if (newinput < (1000 - (servo_dead_band << 1))) {
-					if (forward == (1 - eepromBuffer.direction_reversed)) {
+					if (forward == (1 - direction_reversed)) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
 							zero_crosses = 0;
 							bemfZcResetTrend();
 							old_routine = 1;
-							forward = eepromBuffer.direction_reversed;
+							forward = direction_reversed;
 							maskPhaseInterrupts();
 							brushed_direction_set = 0;
 						} else {
@@ -169,11 +175,11 @@ void setInput()
 		if (dshot) {
 			if (eepromBuffer.rc_car_reversing) {
 				if (newinput > DSHOT_3D_REVERSE_MAX) {
-					if (forward == eepromBuffer.direction_reversed) {
+					if (forward == direction_reversed) {
 						adjusted_input = 0;
 						prop_brake_active = 1;
 						if (return_to_center) {
-							forward = 1 - eepromBuffer.direction_reversed;
+							forward = 1 - direction_reversed;
 							prop_brake_active = 0;
 							return_to_center = 0;
 						}
@@ -185,11 +191,11 @@ void setInput()
 					}
 				}
 				if (newinput <= DSHOT_3D_REVERSE_MAX && newinput > DSHOT_CMD_MAX) {
-					if (forward == (1 - eepromBuffer.direction_reversed)) {
+					if (forward == (1 - direction_reversed)) {
 						adjusted_input = 0;
 						prop_brake_active = 1;
 						if (return_to_center) {
-							forward = eepromBuffer.direction_reversed;
+							forward = direction_reversed;
 							prop_brake_active = 0;
 							return_to_center = 0;
 						}
@@ -209,10 +215,10 @@ void setInput()
 				}
 			} else {
 				if (newinput > DSHOT_3D_REVERSE_MAX) {
-					if (forward == eepromBuffer.direction_reversed) {
+					if (forward == direction_reversed) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
-							forward = 1 - eepromBuffer.direction_reversed;
+							forward = 1 - direction_reversed;
 							zero_crosses = 0;
 							bemfZcResetTrend();
 							old_routine = 1;
@@ -226,13 +232,13 @@ void setInput()
 						((newinput - DSHOT_3D_FORWARD_MIN_THROTTLE) * 2 + DSHOT_CMD_MAX) - reversing_dead_band;
 				}
 				if (newinput <= DSHOT_3D_REVERSE_MAX && newinput > DSHOT_CMD_MAX) {
-					if (forward == (1 - eepromBuffer.direction_reversed)) {
+					if (forward == (1 - direction_reversed)) {
 						if (((commutation_interval > reverse_speed_threshold) && (duty_cycle < 200)) ||
 						    escInSineStart()) {
 							zero_crosses = 0;
 							bemfZcResetTrend();
 							old_routine = 1;
-							forward = eepromBuffer.direction_reversed;
+							forward = direction_reversed;
 							maskPhaseInterrupts();
 							brushed_direction_set = 0;
 						} else {
@@ -306,6 +312,9 @@ void setInput()
 	}
 #endif
 #ifndef BRUSHED_MODE
+	if (dshot_direction_pending) {
+		input = 0; /* RPM/duty overrides must also finish the stop. */
+	}
 	if (escMaySixStepThrottle()) {
 		if (input >= DSHOT_CMD_MAX + (80 * eepromBuffer.sine_startup)) {
 			// Re-entry into six-step happens HERE, at input-frame rate -
@@ -559,6 +568,9 @@ void setInput()
 		}
 	}
 #endif
+	if (!escInSineStart()) {
+		dshotApplyPendingDirection();
+	}
 }
 
 RAM_FUNC void tenKhzRoutine()

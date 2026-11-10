@@ -96,6 +96,12 @@ enum {
 void computeDshotDMA(void);
 void make_dshot_package(uint16_t com_time);
 
+/* Temporary 20/21 direction, independent of the stored motor direction. */
+extern uint8_t dshot_direction_reversed;
+extern volatile uint8_t dshot_direction_pending;
+/* Call only after the zero-throttle stop/brake path has finished. */
+void dshotApplyPendingDirection(void);
+
 extern void playInputTune(void);
 extern void playInputTune2(void);
 extern void playBeaconTune3(void);
