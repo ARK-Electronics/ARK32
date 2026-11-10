@@ -21,6 +21,9 @@
 void loadEEpromSettings(void)
 {
 	read_flash_bin(eepromBuffer.buffer, eeprom_address, sizeof(eepromBuffer.buffer));
+	/* All consumers, including sine startup and RPM control, need nonzero
+	 * poles and pole pairs. Do not merely guard the derived schedules. */
+	eepromBuffer.motor_poles = sanitizeMotorPoles(eepromBuffer.motor_poles);
 	if (eepromBuffer.eeprom_version < 3) {			       // layout 3 added these fields; layout 4 changed none
 		eepromBuffer.max_ramp_speed = TARGET_DEFAULT_MAX_RAMP; // 0.1% per ms steps (see targets.h)
 		eepromBuffer.min_duty_cycle = 1;		       // 0.2% to 51 percent
@@ -180,20 +183,11 @@ void loadEEpromSettings(void)
 		 * (am32-firmware/AM32#405 - the community workaround of entering
 		 * 50-60% of the real kv cancels exactly this factor).
 		 *
-		 * Out-of-range pole counts (an erased eeprom reads 0 or 0xff)
-		 * leave the envelope at zero, which map() treats as "always at
-		 * the high-rpm limit" - i.e. unrestricted, as before.
-		 * MOTOR_POLES_MIN..MOTOR_POLES_MAX is the range the DroneCAN
-		 * MOTOR_POLES parameter accepts (see eeprom.h). Worst case
-		 * 10220 kv * 128 poles / 544 = 2405 kerpm, well inside the
-		 * uint16 the levels are stored in. */
-		if (eepromBuffer.motor_poles >= MOTOR_POLES_MIN && eepromBuffer.motor_poles <= MOTOR_POLES_MAX) {
-			low_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (100U * 32U);
-			high_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (17U * 32U);
-		} else {
-			low_rpm_level = 0;
-			high_rpm_level = 0;
-		}
+		 * motor_poles is already within MOTOR_POLES_MIN..MOTOR_POLES_MAX
+		 * (sanitized at load). Worst case 10220 kv * 128 poles / 544 =
+		 * 2405 kerpm, well inside the uint16 the levels are stored in. */
+		low_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (100U * 32U);
+		high_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (17U * 32U);
 	}
 	/* RC-car mode always limits, with a higher low-speed ceiling that
 	 * replaces the running-brake compensation. It lives here rather than
@@ -251,8 +245,7 @@ void loadEEpromSettings(void)
 	 * Computed after motor_kv has taken its final value (the cell-count
 	 * reductions above). Keep the duty proxy below 300 kV: extending this
 	 * timing schedule to low-kV motors needs separate validation from the
-	 * throttle limiter. Also leave the scale at 0 for a pole count outside
-	 * MOTOR_POLES_MIN..MOTOR_POLES_MAX (an erased eeprom reads 0 or 0xff).
+	 * throttle limiter.
 	 *
 	 * The reduced 256/12500 form above is the one evaluated below rather than
 	 * the equivalent 4096/200000: both are the same rational number (divided
@@ -264,7 +257,7 @@ void loadEEpromSettings(void)
 	 * path's (scale * centivolts) >> 12 on a 12S pack.
 	 */
 	advance_erpm_scale_q12 = 0;
-	if (motor_kv >= 300 && eepromBuffer.motor_poles >= MOTOR_POLES_MIN && eepromBuffer.motor_poles <= MOTOR_POLES_MAX) {
+	if (motor_kv >= 300) {
 		uint16_t scale = (uint16_t)(((uint32_t)motor_kv * eepromBuffer.motor_poles * 256u) / 12500u);
 		advance_erpm_scale_q12 = (uint16_t)(scale - (scale >> 4)); /* * 15/16 */
 	}
@@ -279,6 +272,7 @@ void loadEEpromSettings(void)
 
 void saveEEpromSettings(void)
 {
+	eepromBuffer.motor_poles = sanitizeMotorPoles(eepromBuffer.motor_poles);
 	save_flash_nolib(eepromBuffer.buffer, sizeof(eepromBuffer.buffer), eeprom_address);
 }
 
