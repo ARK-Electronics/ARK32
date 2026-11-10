@@ -161,10 +161,12 @@ extern uint16_t ADC_raw_ntc;
 extern uint16_t ADC_smoothed_input;
 extern int16_t converted_degrees;
 extern uint8_t temperature_offset;
-/* Boxcar average of the raw current ADC (getSmoothedCurrent(), control_loop.c).
- * The window is a macro, not a `const uint8_t`: Cortex-M0 has no hardware
- * divide, and a runtime divisor pulls in the __aeabi_uidiv helper on every ADC
- * conversion. As a compile-time constant the divide folds to a multiply-shift. */
+/* Boxcar average of the median-of-3 current ADC (getSmoothedCurrent(),
+ * control_loop.c). The median drops a single-sample shunt spike before it
+ * can leak into this average at 1/N. The window is a macro, not a
+ * `const uint8_t`: Cortex-M0 has no hardware divide, and a runtime divisor
+ * pulls in the __aeabi_uidiv helper on every ADC conversion. As a compile-time
+ * constant the divide folds to a multiply-shift. */
 #define NUM_CURRENT_READINGS 50
 extern uint8_t current_read_index;
 extern uint32_t current_total;
