@@ -60,6 +60,13 @@ static uint16_t acq_grace_ms;
 
 #if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
 #	define FAULT_HAS_DRV_NFAULT 1
+/* Both drivers: a latch clears on the first pilot zero once the driver has
+ * slept this many 1 kHz ticks (at least 1 ms), its fault reset. The sleep
+ * starts at the latch, while throttle is still up, so this never holds the
+ * pilot's zero; it only stops a zero in the same instant from clearing on a
+ * reset pulse too short to count. */
+#	define GD_LATCH_SLEEP_MS 2u
+static volatile uint8_t gd_latch_sleep_ms;
 #else
 #	define FAULT_HAS_DRV_NFAULT 0
 #endif
@@ -73,7 +80,7 @@ static uint16_t acq_grace_ms;
  *
  * Remember warnings so the existing BEMF stall / hard-desync decisions can
  * latch a failed run BEFORE they restart it. Pin release does not authorize
- * another start: only a sustained zero-throttle command clears that latch.
+ * another start: only pilot zero, once the driver has slept, clears that latch.
  */
 #	define GD_CLASSIFY_MS 12u
 #	define GD_UVLO_CV 800u
@@ -82,7 +89,6 @@ static uint16_t acq_grace_ms;
 #	define GD_FAULT_RECENT_MS 100u
 #	define GD_RETRY_LOG_MS 200u
 #	define GD_WARN_LOG_MS 200u
-#	define GD_REARM_ZERO_MS 100u
 
 enum {
 	GD_NF_IDLE = 0,
@@ -101,7 +107,6 @@ static uint8_t gd_warn_logged;
 static uint8_t gd_fault_seen;
 /* Saturate the age so a fault from 65 seconds ago cannot become recent. */
 static volatile uint16_t gd_fault_age_ms;
-static volatile uint16_t gd_zero_ms;
 static uint8_t gd_log_level;
 static fault_id_t gd_log_cause;
 static volatile uint16_t gd_ms;
@@ -169,7 +174,6 @@ static void gd_hold_cut(void)
 static void gd_enter_latch(fault_id_t cause)
 {
 	gd_state = GD_NF_LATCH;
-	gd_zero_ms = 0;
 	gd_hold_cut();
 	gd_cause = cause;
 	gd_queue_log(FAULT_GD_LOG_ERROR, cause);
@@ -338,18 +342,21 @@ uint8_t faultGateDriverWarningActive(void)
 
 void faultGateDriverTick1kHz(void)
 {
+#if FAULT_HAS_DRV_NFAULT
+	/* Time this latch has kept the driver asleep. The latch blocks every wake,
+	 * so the count only runs once the driver is down. */
+	if (faultGateDriverFaultActive() && !gateDriverIsAwake()) {
+		if (gd_latch_sleep_ms < GD_LATCH_SLEEP_MS) {
+			gd_latch_sleep_ms++;
+		}
+	} else {
+		gd_latch_sleep_ms = 0;
+	}
+#endif
 #if defined(USE_DRV_NFAULT)
 	gd_ms++;
 	if (gd_fault_age_ms <= GD_FAULT_RECENT_MS) {
 		gd_fault_age_ms++;
-	}
-	/* input is forced to zero by the latch; adjusted_input is pilot demand. */
-	if (gd_state == GD_NF_LATCH && adjusted_input == 0) {
-		if (gd_zero_ms < GD_REARM_ZERO_MS) {
-			gd_zero_ms++;
-		}
-	} else {
-		gd_zero_ms = 0;
 	}
 #elif defined(USE_DRV8328_NFAULT)
 	if (drv_nfault_age_ms <= DRV8328_FAULT_RECENT_MS) {
@@ -416,13 +423,19 @@ void faultPollGateDriver(void)
 #if defined(USE_DRV_NFAULT)
 	if (gd_state == GD_NF_LATCH) {
 		gd_hold_cut();
-		/* Sleep resets the hardware latch, but does not clear the software
-		 * restart inhibit until the pilot holds zero for a full interval. */
+		/* Sleep is the DRV8350 fault reset. Pilot zero, once the driver has
+		 * slept, clears the latch, with no hold on the zero (as on the 4IN1).
+		 * Pin release alone never restarts a run. */
 		gateDriverSleep();
-		if (adjusted_input == 0 && gd_zero_ms >= GD_REARM_ZERO_MS) {
+		if (adjusted_input == 0 && gd_latch_sleep_ms >= GD_LATCH_SLEEP_MS) {
+			/* As on the 4IN1: wake a stop brake's driver here, in main-loop
+			 * context and BEFORE the clear, while the latch still holds the
+			 * 20 kHz brake inert, so the ISR never meets a half-woken driver. */
+			if (armed && eepromBuffer.brake_on_stop) {
+				gateDriverWakeForLatchClear();
+			}
 			gd_cause = FAULT_NONE;
 			gd_fault_seen = 0;
-			gd_zero_ms = 0;
 			gd_state = GD_NF_IDLE;
 		}
 		return;
@@ -473,10 +486,10 @@ void faultPollGateDriver(void)
 #elif defined(USE_DRV8328_NFAULT)
 	if (drv_nfault_latched) {
 		/* Hold the bridge off; gateDriverPoll() sleeps the driver, which is
-		 * the DRV8328 fault reset. Pilot zero, once asleep, clears the latch.
-		 * Pin release alone never restarts a run. */
+		 * the DRV8328 fault reset. Pilot zero, once the driver has slept,
+		 * clears the latch. Pin release alone never restarts a run. */
 		drv_nfault_cut();
-		if (!gateDriverIsAwake() && adjusted_input == 0) {
+		if (adjusted_input == 0 && gd_latch_sleep_ms >= GD_LATCH_SLEEP_MS) {
 			/* A stop brake wants the driver awake again (#130). Wake it here,
 			 * in main-loop context and BEFORE the clear: while latched the
 			 * 20 kHz brake is inert, so it can never meet a half-woken driver

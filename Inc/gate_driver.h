@@ -20,7 +20,7 @@ extern volatile uint8_t gate_driver_awake;
 
 void gateDriverInit(void);
 void gateDriverWakeBlocking(void);
-#	if defined(USE_DRV8328_NFAULT)
+#	if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
 void gateDriverWakeForLatchClear(void);
 #	endif
 void gateDriverSleep(void);

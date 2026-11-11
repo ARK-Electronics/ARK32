@@ -39,7 +39,7 @@ def test_defines_parsed_from_firmware():
     assert parse_gd_defines_from_c() == GD
     assert GD["GD_CLASSIFY_MS"] == 12
     assert GD["GD_FAULT_RECENT_MS"] == 100
-    assert GD["GD_REARM_ZERO_MS"] == 100
+    assert GD["GD_LATCH_SLEEP_MS"] == 2
 
 
 @pytest.mark.parametrize("current", [0, 20, 49, 50, 80, 2000, 32767])
@@ -182,52 +182,68 @@ def test_pin_release_never_resumes_a_latched_motor_at_throttle():
     assert not m.awake
 
 
-def test_one_zero_frame_does_not_clear_latch():
-    m = _spinning(pin_low=1)
-    assert m.drive_loss()
-    m.pin_low = 0
-    m.adjusted_input = 0
-    m.run_ms(1)
-    m.adjusted_input = 500
-    m.run_ms(1000)
-    assert m.state == GD_NF_LATCH
-    assert m.zero_ms == 0
-
-
-@pytest.mark.parametrize("pin_low,awake", [(1, 1), (0, 1), (1, 0), (0, 0)])
-def test_continuous_zero_rearms_even_when_driver_asleep_or_pin_held(pin_low, awake):
+@pytest.mark.parametrize("pin_low", [0, 1])
+def test_first_zero_after_sleep_clears_latch(pin_low):
+    """No hold on the pilot's zero (as on the 4IN1): one zero frame clears."""
     m = _spinning(pin_low=1)
     assert m.drive_loss()
     m.pin_low = pin_low
-    m.awake = awake
-    m.adjusted_input = 0
-    m.run_ms(GD["GD_REARM_ZERO_MS"] - 1)
+    m.run_ms(1000)
     assert m.state == GD_NF_LATCH
-    m.run_ms(1)
+    assert not m.awake
+    m.adjusted_input = 0
+    m.step()
     assert m.state == GD_NF_IDLE
     assert not m.fault_seen
     assert not m.awake
-    assert m.sleep_calls > 0
+    assert m.running == 0
+    assert m.latch_clear_wakes == 0
 
 
-def test_throttle_up_between_rearm_tick_and_poll_keeps_latch():
+def test_zero_in_the_same_instant_waits_for_the_reset_sleep():
     m = _spinning(pin_low=1)
     assert m.drive_loss()
     m.adjusted_input = 0
-    m.tick_ms(GD["GD_REARM_ZERO_MS"])
+    m.step()
+    assert m.state == GD_NF_LATCH
+    assert not m.awake
+    m.run_ms(GD["GD_LATCH_SLEEP_MS"] - 1)
+    assert m.state == GD_NF_LATCH
+    m.run_ms(1)
+    assert m.state == GD_NF_IDLE
+
+
+def test_throttle_up_between_tick_and_poll_keeps_latch():
+    m = _spinning(pin_low=1)
+    assert m.drive_loss()
+    m.run_ms(1000)
+    m.adjusted_input = 0
+    m.tick_ms(1)
     m.adjusted_input = 500
     m.step()
     assert m.state == GD_NF_LATCH
     assert m.running == 0
 
 
-def test_sleep_does_not_bypass_zero_throttle_rearm():
+def test_sleep_alone_never_clears_at_throttle():
     m = _spinning(pin_low=1)
     assert m.drive_loss()
     m.awake = 0
     m.run_ms(1000)
     assert m.state == GD_NF_LATCH
-    assert m.zero_ms == 0
+    assert m.latch_sleep_ms == GD["GD_LATCH_SLEEP_MS"]
+
+
+def test_stop_brake_wakes_the_driver_at_the_clear():
+    m = _spinning(pin_low=1, armed=1, brake_on_stop=2)
+    assert m.drive_loss()
+    m.run_ms(1000)
+    assert not m.awake
+    m.adjusted_input = 0
+    m.step()
+    assert m.state == GD_NF_IDLE
+    assert m.awake
+    assert m.latch_clear_wakes == 1
 
 
 def test_sleep_clears_nonlatched_warning_and_history():

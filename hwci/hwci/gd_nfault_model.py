@@ -36,7 +36,7 @@ _DEFINE_NAMES = (
     "GD_FAULT_RECENT_MS",
     "GD_RETRY_LOG_MS",
     "GD_WARN_LOG_MS",
-    "GD_REARM_ZERO_MS",
+    "GD_LATCH_SLEEP_MS",
 )
 
 
@@ -79,7 +79,8 @@ class GdNfaultMachine:
     warn_logged: int = 0
     fault_seen: int = 0
     fault_age_ms: int = 0
-    zero_ms: int = 0
+    latch_sleep_ms: int = 0
+    latch_clear_wakes: int = 0
     log_level: int = LOG_NONE
     log_cause: int = FAULT_NONE
     ms: int = 0
@@ -95,6 +96,8 @@ class GdNfaultMachine:
     degrees_celsius: int = 40
     awake: int = 1
     pin_trusted: int = 1
+    armed: int = 0
+    brake_on_stop: int = 0
 
     def queue_log(self, level: int, cause: int) -> None:
         if level > self.log_level:
@@ -125,7 +128,6 @@ class GdNfaultMachine:
         self.state = GD_NF_IDLE
         self.cause = FAULT_NONE
         self.fault_seen = 0
-        self.zero_ms = 0
 
     def drive_loss(self) -> bool:
         """Return whether the real commutation failure must remain latched."""
@@ -138,7 +140,6 @@ class GdNfaultMachine:
         if not self.fault_seen or self.fault_age_ms > GD["GD_FAULT_RECENT_MS"]:
             return False
         self.hold_cut()
-        self.zero_ms = 0
         self.state = GD_NF_LATCH
         if 0 < self.battery_voltage < GD["GD_UVLO_CV"]:
             self.cause = FAULT_GD_UVLO
@@ -159,17 +160,20 @@ class GdNfaultMachine:
         for _ in range(n):
             self.ms = _u16(self.ms + 1)
             self.fault_age_ms = min(self.fault_age_ms + 1, GD["GD_FAULT_RECENT_MS"] + 1)
-            if self.state == GD_NF_LATCH and self.adjusted_input == 0:
-                self.zero_ms = min(self.zero_ms + 1, GD["GD_REARM_ZERO_MS"])
+            if self.state == GD_NF_LATCH and not self.awake:
+                self.latch_sleep_ms = min(self.latch_sleep_ms + 1, GD["GD_LATCH_SLEEP_MS"])
             else:
-                self.zero_ms = 0
+                self.latch_sleep_ms = 0
 
     def step(self) -> None:
         if self.state == GD_NF_LATCH:
             self.hold_cut()
             self.sleep_calls += 1
             self.awake = 0
-            if self.adjusted_input == 0 and self.zero_ms >= GD["GD_REARM_ZERO_MS"]:
+            if self.adjusted_input == 0 and self.latch_sleep_ms >= GD["GD_LATCH_SLEEP_MS"]:
+                if self.armed and self.brake_on_stop:
+                    self.awake = 1
+                    self.latch_clear_wakes += 1
                 self.clear()
             return
         if not self.awake:

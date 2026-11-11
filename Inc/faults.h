@@ -219,8 +219,9 @@ void faultErrorCountReset(void);
  * not prove loss of drive, so they must not cut a synchronized motor.
  *
  * The existing hard BEMF recovery paths call faultGateDriverLatchOnDriveLoss
- * before restarting. A coincident/recent nFAULT latches PWM off until pilot
- * demand has remained zero for 100 ms. Pin release never restarts a run.
+ * before restarting. A coincident/recent nFAULT latches PWM off and sleeps
+ * the driver (its fault reset). The first pilot zero after that sleep clears
+ * the latch, with no hold time. Pin release never restarts a run.
  *
  * DRV8328 (ARK 4IN1): the same policy. A short supply sag recovers in the
  * DRV8328 and rides through; a latched DRV8328 fault kills the bridge, so the
@@ -234,7 +235,7 @@ void faultPollGateDriver(void);
  * A warning alone must never call this hook or end a run. */
 uint8_t faultGateDriverLatchOnDriveLoss(void);
 
-/* 1 kHz correlation and deliberate-zero timebase; also runs in sine mode. */
+/* 1 kHz correlation and latch-sleep timebase; also runs in sine mode. */
 void faultGateDriverTick1kHz(void);
 
 /* 1 while PWM must stay off for a latched gate-driver trip. */

@@ -89,8 +89,8 @@ void gateDriverWakeBlocking(void)
 	gd_raise_and_settle();
 }
 
-#	if defined(USE_DRV8328_NFAULT)
-/* F051 latch clear only: wake while the latch still holds tenKhzRoutine
+#	if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
+/* nFAULT latch clear only: wake while the latch still holds tenKhzRoutine
  * and setInput inert, so the brake's gateDriverEnsure() in the 20 kHz ISR
  * can never find the driver mid-wake and nest a second blocking wake. */
 void gateDriverWakeForLatchClear(void)

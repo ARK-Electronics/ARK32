@@ -110,7 +110,6 @@ void gateDriverFaultResetPulse(void)
 {
 	reset_calls++;
 }
-#ifdef HOST_DRV8328
 static uint8_t armed;
 static struct {
 	uint8_t brake_on_stop;
@@ -123,7 +122,6 @@ static void gateDriverWakeForLatchClear(void)
 	latch_clear_wake_while_latched += faultGateDriverFaultActive();
 	awake = 1;
 }
-#endif
 void faultDesyncEpisodeCharge(desync_episode_kind_t kind)
 {
 	(void)kind;
@@ -271,6 +269,8 @@ int main(int argc, char **argv)
 		poll_ms(1000);
 		assert_latched();
 		gateDriverSleep();
+		poll_ms(GD_LATCH_SLEEP_MS - 1);
+		assert_latched();
 		poll_ms(1);
 		assert(!faultGateDriverFaultActive());
 		assert(!running && !stepper_sine);
@@ -281,7 +281,7 @@ int main(int argc, char **argv)
 		latch_fault();
 		adjusted_input = 0;
 		gateDriverSleep();
-		poll_ms(1);
+		poll_ms(GD_LATCH_SLEEP_MS);
 		assert(!faultGateDriverFaultActive());
 		assert(latch_clear_wakes == 1 && latch_clear_wake_while_latched == 1);
 		assert(awake);
@@ -355,28 +355,45 @@ int main(int argc, char **argv)
 		assert(!faultGateDriverFaultActive());
 		assert(restart_calls == 1);
 	} else if (!strcmp(scenario, "manual_zero_clear")) {
+		/* No hold on the pilot's zero (as on the 4IN1): the first zero after
+		 * the driver has slept clears the latch, and nothing restarts. */
+		latch_fault();
+		poll_ms(1000);
+		assert_latched();
+		assert(!awake);
+		adjusted_input = 0;
+		faultPollGateDriver();
+		assert(!faultGateDriverFaultActive());
+		assert(!running && !stepper_sine && !awake);
+		assert(restart_calls == 0 && wake_calls == 0 && reset_calls == 0);
+		assert(latch_clear_wakes == 0);
+	} else if (!strcmp(scenario, "zero_waits_for_reset_sleep")) {
+		/* A zero in the same instant as the latch waits out the reset sleep. */
 		latch_fault();
 		adjusted_input = 0;
-		gateDriverSleep();
 		faultPollGateDriver();
-		poll_ms(99);
+		assert_latched();
+		assert(!awake);
+		poll_ms(GD_LATCH_SLEEP_MS - 1);
 		assert_latched();
 		poll_ms(1);
 		assert(!faultGateDriverFaultActive());
-		assert(!running && !stepper_sine);
-		assert(restart_calls == 0 && wake_calls == 0 && reset_calls == 0);
-	} else if (!strcmp(scenario, "zero_blip_retains_latch")) {
+		assert(restart_calls == 0 && wake_calls == 0);
+	} else if (!strcmp(scenario, "brake_wakes_before_clear")) {
+		armed = 1;
+		eepromBuffer.brake_on_stop = 2;
 		latch_fault();
-		adjusted_input = 0;
-		gateDriverSleep();
-		faultPollGateDriver();
-		poll_ms(60);
-		adjusted_input = 500;
-		poll_ms(1);
+		poll_ms(1000);
+		assert(!awake);
 		adjusted_input = 0;
 		faultPollGateDriver();
-		poll_ms(60);
-		assert_latched();
+		assert(!faultGateDriverFaultActive());
+		assert(latch_clear_wakes == 1 && latch_clear_wake_while_latched == 1);
+		assert(awake && wake_calls == 0);
+		/* A fault that persists after the reset is a warning, not a cut. */
+		poll_ms(1000);
+		assert(!faultGateDriverFaultActive());
+		assert(faultGateDriverWarningActive());
 	} else if (!strcmp(scenario, "release_does_not_restart")) {
 		latch_fault();
 		nfault_port.IDR = 1;
