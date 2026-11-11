@@ -52,6 +52,9 @@ extern volatile uint32_t zero_crosses;
 extern volatile uint32_t polling_mode_changeover;
 /* Missed-ZC blind-step fallback (bemf_zc.c) */
 extern volatile uint8_t zc_deadline_armed;
+/* ms left before a DShot 20/21 may apply after an active-brake stop (setInput). */
+extern volatile uint8_t active_brake_dir_hold_ms;
+#define ACTIVE_BRAKE_DIR_HOLD_MS 100u
 extern volatile uint8_t zc_blind_steps;
 extern volatile uint8_t zc_pre_seen;
 extern volatile uint8_t zc_demag_run;
