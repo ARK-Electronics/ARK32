@@ -103,3 +103,59 @@ def test_dronecan_requires_arming(sitl_can_factory, state_stream, mcast_uri):
             node.broadcast(dronecan.uavcan.equipment.esc.RawCommand(cmd=[0]))
             node.spin(0.02)
         node.close()
+
+
+def test_active_brake_at_input_47_ends_the_run(sitl_can_factory, state_stream, mcast_uri):
+    """RawCommand 1-4 maps to input 47, which tenKhzRoutine treats as a brake.
+
+    With brake_on_stop 2 and no sine start, input 47 used to fall between the
+    stop branch (input < 47) and the start branch (input >= 47), so six-step
+    kept running - or restarted - underneath the active brake.
+    """
+    from sitl_gui_backend import EepromClient
+    from sitl_params import PARAMS_BY_NAME
+    from test_state_protocol import Watch, control_socket
+
+    sitl = sitl_can_factory(extra_args=['--node-id', '10'], can_uri=mcast_uri, wait_s=1.0)
+    sim = state_stream(sitl)
+    _multicast_usable(sitl, sim)
+    ee = EepromClient(port=sitl.state_port)
+    ok, message = ee.set(PARAMS_BY_NAME['BRAKE_ON_STOP'][0], [2])
+    assert ok, message
+    node = dronecan.make_node(mcast_uri, node_id=100, bitrate=1000000)
+    try:
+        with control_socket(sitl) as sock:
+            watch = Watch(sock, [(2, 'input'), (1, 'running')])
+
+            def send_for(seconds, raw, until=None):
+                end = time.monotonic() + seconds
+                nxt = 0.0
+                while time.monotonic() < end:
+                    node.spin(0)
+                    now = time.monotonic()
+                    if now >= nxt:
+                        nxt = now + 0.02
+                        node.broadcast(dronecan.uavcan.equipment.safety.ArmingStatus(status=255))
+                        node.broadcast(dronecan.uavcan.equipment.esc.RawCommand(cmd=[raw]))
+                    watch.poll()
+                    if until is not None and until():
+                        return True
+                return until is None
+
+            send_for(2.5, 0)  # arm at zero throttle, as test_dronecan_throttle_and_esc_status does
+            assert send_for(5.0, int(8191 * 0.35), until=lambda: watch.values.get(1) == 1), 'never started'
+            send_for(1.0, int(8191 * 0.35))
+            assert watch.values.get(1) == 1, ('run did not hold', watch.values)
+            assert send_for(1.0, 2, until=lambda: watch.values.get(0) == 47), ('input 47 not reached', watch.values)
+            t0 = time.monotonic()
+            assert send_for(0.15, 2, until=lambda: watch.values.get(1) == 0), (
+                'running=1 %.2f s into input 47 under the active brake' % (time.monotonic() - t0))
+            first = len(watch.events)
+            send_for(0.5, 2)
+            restarted = [e for e in watch.events[first:] if e[1] == 1 and e[2] != 0]
+            assert not restarted, 'six-step restarted under the active brake at input 47'
+    finally:
+        for _ in range(10):
+            node.broadcast(dronecan.uavcan.equipment.esc.RawCommand(cmd=[0]))
+            node.spin(0.02)
+        node.close()

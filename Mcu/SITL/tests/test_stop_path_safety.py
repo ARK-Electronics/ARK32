@@ -212,3 +212,44 @@ def test_active_brake_stop_ends_the_run(sitl_factory, state_stream):
             assert peak - zc0 < 50, '%d zero-crosses accepted after zero throttle' % (peak - zc0)
     finally:
         tx.stop()
+
+
+def test_held_reversal_is_not_an_active_brake_stop(sitl_factory, state_stream):
+    """A reversal the speed guard holds back must keep that guard.
+
+    In bidirectional DShot (rc_car_reversing off) a reverse request while the
+    rotor is fast becomes zero throttle until commutation_interval says it is
+    slow. Ending the run there would reset commutation_interval to "stopped"
+    and let the next reverse frame flip direction into a fast rotor, so the
+    active-brake stop must leave this path alone.
+    """
+    sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
+    tx = Sender('127.0.0.1', sitl.input_port, sd.TYPE_DSHOT600)
+    sim = state_stream(sitl)
+    ee = EepromClient(port=sitl.state_port)
+    variables = [(1, 'armed'), (1, 'sitl_tone_active'), (2, 'input'), (1, 'running'), (1, 'forward')]
+    try:
+        with control_socket(sitl) as sock:
+            watch = Watch(sock, variables)
+            watch.until(lambda: watch.values.get(0) == 1 and watch.values.get(1) == 0)
+            time.sleep(0.2)  # wait out the arming tune's silent gaps
+            for name, value in (('BI_DIRECTIONAL', 1), ('BRAKE_ON_STOP', 2)):
+                ok, message = ee.set(offset(name), [value])
+                assert ok, message
+            tx.value = 1400  # forward
+            watch.until(lambda: watch.values.get(3) == 1 and sim.samples and abs(sim.samples[-1][1]) > 200)
+            end = time.monotonic() + 1.0
+            while time.monotonic() < end:
+                watch.poll()
+            forward = watch.values.get(4)
+            assert watch.values.get(3) == 1, ('run did not hold', watch.values, sitl.log_tail())
+            tx.value = 600  # reverse, held back by the speed guard
+            first = len(watch.events)
+            end = time.monotonic() + 0.1
+            while time.monotonic() < end:
+                watch.poll()
+            changed = [e for e in watch.events[first:] if e[1] in (3, 4)]
+            assert not changed, ('held reversal ended the run or flipped direction', changed, abs(sim.samples[-1][1]))
+            assert watch.values.get(4) == forward
+    finally:
+        tx.stop()

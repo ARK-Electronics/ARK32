@@ -117,6 +117,9 @@ uint16_t getSmoothedCurrent()
 void setInput()
 {
 	const uint8_t direction_reversed = eepromBuffer.direction_reversed ^ dshot_direction_reversed;
+	/* Set when the bidirectional speed guard holds back a reversal and
+	 * this frame's zero throttle is that hold, not a commanded stop. */
+	uint8_t reverse_held = 0;
 	/* A direction request must finish the existing stop/brake path even if
 	 * the sender resumes throttle before the rotor has coasted down. */
 	if (dshot_direction_pending) {
@@ -178,6 +181,7 @@ void setInput()
 							brushed_direction_set = 0;
 						} else {
 							newinput = 1000;
+							reverse_held = 1;
 						}
 					}
 					adjusted_input =
@@ -195,6 +199,7 @@ void setInput()
 							brushed_direction_set = 0;
 						} else {
 							newinput = 1000;
+							reverse_held = 1;
 						}
 					}
 					adjusted_input = map(newinput, 0, 1000 - (servo_dead_band << 1), DSHOT_MAX_THROTTLE, DSHOT_CMD_MAX);
@@ -260,6 +265,7 @@ void setInput()
 							brushed_direction_set = 0;
 						} else {
 							newinput = 0;
+							reverse_held = 1;
 						}
 					}
 					adjusted_input =
@@ -277,6 +283,7 @@ void setInput()
 							brushed_direction_set = 0;
 						} else {
 							newinput = 0;
+							reverse_held = 1;
 						}
 					}
 					adjusted_input = ((newinput - DSHOT_MIN_THROTTLE) * 2 + DSHOT_CMD_MAX) - reversing_dead_band;
@@ -350,7 +357,38 @@ void setInput()
 		input = 0; /* RPM/duty overrides must also finish the stop. */
 	}
 	if (escMaySixStepThrottle()) {
-		if (input >= DSHOT_CMD_MAX + (80 * eepromBuffer.sine_startup)) {
+		/* brake_on_stop 2: tenKhzRoutine applies the active brake
+		 * (comStep(2) at active_brake_power) on every tick with input
+		 * <= DSHOT_CMD_MAX, whether or not the run has ended. Left running,
+		 * six-step keeps commutating underneath it: blind-step deadlines
+		 * call commutate() between brake ticks, and the brake waveform on
+		 * the floating phase passes the comparator often enough to keep
+		 * resetting the dead-reckoning budget, so the INTERVAL_TIMER stall
+		 * rail that ends every other stop never fires. On the ARK 4IN1
+		 * bench that held running=1 for 1.6 to 7.6 s after zero throttle at
+		 * ~6000 steps/s, an audible grind. The brake is already on, so end
+		 * the run here, the way the stall rail ends a commanded stop, and
+		 * do not start six-step under it.
+		 *
+		 * Same threshold as tenKhzRoutine (input <= DSHOT_CMD_MAX), not the
+		 * stop branch's (input < DSHOT_CMD_MAX without sine start): input
+		 * 47 brakes too, and is reachable (DroneCAN RawCommand 1-4).
+		 *
+		 * Not for a reversal the speed guard is holding back: its
+		 * readiness test is commutation_interval, which
+		 * escNoteStallOrDesync(1) resets to "stopped", so ending the run
+		 * would let the next reverse frame through while the rotor is
+		 * still fast. That path keeps main's behaviour. */
+		const uint8_t active_brake_stop = eepromBuffer.brake_on_stop == 2 && input <= DSHOT_CMD_MAX && escIsArmed();
+		if (active_brake_stop && !reverse_held && running && !stepper_sine) {
+			DISABLE_COM_TIMER_INT();
+			zc_deadline_armed = 0;
+			maskPhaseInterrupts();
+			zero_crosses = 0;
+			bemfZcResetTrend();
+			escNoteStallOrDesync(1); /* running = 0, old_routine = 1, ARMED_IDLE */
+		}
+		if (input >= DSHOT_CMD_MAX + (80 * eepromBuffer.sine_startup) && !active_brake_stop) {
 			// Re-entry into six-step happens HERE, at input-frame rate -
 			// not in runtimeMotorModeTick. The episode-rail coast (holdoff
 			// or latched fault) must gate this branch or the mode tick's
@@ -393,26 +431,6 @@ void setInput()
 		}
 
 		if (input < DSHOT_CMD_MAX + (80 * eepromBuffer.sine_startup)) {
-			/* brake_on_stop 2: tenKhzRoutine applies the active brake
-			 * (comStep(2) at active_brake_power) on every tick with input
-			 * <= DSHOT_CMD_MAX, whether or not the run has ended. Left
-			 * running, six-step keeps commutating underneath it: blind-step
-			 * deadlines call commutate() between brake ticks, and the brake
-			 * waveform on the floating phase passes the comparator often
-			 * enough to keep resetting the dead-reckoning budget, so the
-			 * INTERVAL_TIMER stall rail that ends every other stop never
-			 * fires. On the ARK 4IN1 bench that held running=1 for 1.6 to
-			 * 7.6 s after zero throttle at ~6000 steps/s, an audible grind.
-			 * The brake is already on, so end the run here, the way the
-			 * stall rail ends a commanded stop. */
-			if (eepromBuffer.brake_on_stop == 2 && input <= DSHOT_CMD_MAX && running && !stepper_sine && escIsArmed()) {
-				DISABLE_COM_TIMER_INT();
-				zc_deadline_armed = 0;
-				maskPhaseInterrupts();
-				zero_crosses = 0;
-				bemfZcResetTrend();
-				escNoteStallOrDesync(1); /* running = 0, old_routine = 1, ARMED_IDLE */
-			}
 			if (play_tone_flag != 0) {
 				switch (play_tone_flag) {
 					case 1:
