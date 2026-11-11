@@ -541,7 +541,11 @@ void setInput()
 					phase_C_position -= 360;
 				}
 
-				if (eepromBuffer.sine_startup == 1) {
+				/* Sine idle is not a fault state: re-entering it every
+				 * frame would overwrite a latched FAULT_STUCK (an illegal
+				 * edge) and blind every escIsFault() check until the next
+				 * reconcile. */
+				if (eepromBuffer.sine_startup == 1 && !escIsFault()) {
 					escToSineStart();
 				}
 				duty_cycle_setpoint = 0;

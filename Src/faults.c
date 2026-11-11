@@ -118,11 +118,29 @@ void faultPollSignalTimeout(void)
 	}
 }
 
+/*
+ * bemf_timeout_happened is the BEMF stall count and, at ESC_STUCK_LATCH, the
+ * stuck-rotor latch. A healthy run or a low sine throttle forgives the count
+ * but never the latch: a motor that a fault stopped must not restart on its
+ * own, so only pilot zero (or a power cycle) clears it. The stall path and
+ * the latch write this byte from interrupts, so test and clear with IRQs off.
+ */
+static void faultForgiveStallCount(void)
+{
+	__disable_irq();
+	if (bemf_timeout_happened != ESC_STUCK_LATCH) {
+		bemf_timeout_happened = 0;
+	}
+	__enable_irq();
+}
+
 void faultUpdateBemfTimeoutPolicy(void)
 {
 #ifndef BRUSHED_MODE
-	if ((zero_crosses > 1000) || (adjusted_input == 0)) {
+	if (adjusted_input == 0) {
 		bemf_timeout_happened = 0;
+	} else if (zero_crosses > 1000) {
+		faultForgiveStallCount();
 	}
 	if (adjusted_input == 0) {
 		// Zero throttle is pilot intervention: clear the episode rail the
@@ -140,10 +158,10 @@ void faultUpdateBemfTimeoutPolicy(void)
 		acq_fail_desyncs = 0;
 	}
 	if (zero_crosses > 100 && adjusted_input < 200) {
-		bemf_timeout_happened = 0;
+		faultForgiveStallCount();
 	}
 	if (eepromBuffer.sine_startup && adjusted_input < 160) {
-		bemf_timeout_happened = 0;
+		faultForgiveStallCount();
 	}
 
 	if (adjusted_input < 150) { // startup duty cycle should be low enough to not burn motor
