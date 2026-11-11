@@ -128,11 +128,14 @@ def _post_skeleton_defaults():
     if body:
         for member, suffix in re.findall(
                 r'e->(\w+)\s*=\s*TARGET_DEFAULT_(\w+)\s*;', body.group(1)):
-            for text in (block, targets):
-                m = re.search(r'#\s*define\s+TARGET_DEFAULT_%s\s+(\d+)' % suffix, text)
-                if m:
-                    out[member] = int(m.group(1))
-                    break
+            # The SITL block, else the generic #ifndef default - never the
+            # first #define in targets.h, which is some other product's
+            # (G431's MAX_RAMP 5 seeded SITL at 0.5 %/ms).
+            m = (re.search(r'#\s*define\s+TARGET_DEFAULT_%s\s+(\d+)' % suffix, block)
+                 or re.search(r'#ifndef\s+TARGET_DEFAULT_%s\s*\n#\s*define\s+TARGET_DEFAULT_%s\s+(\d+)'
+                              % (suffix, suffix), targets))
+            if m:
+                out[member] = int(m.group(1))
     return out
 
 
