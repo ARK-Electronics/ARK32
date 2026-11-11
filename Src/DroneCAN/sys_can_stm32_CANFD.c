@@ -279,7 +279,15 @@ static void handleRxInterrupt(uint8_t fifo_index)
 
 	*fifo_ack_reg = get_index;
 
+#	ifndef BOOTLOADER
+	/* Only a BRS frame proves the data-phase timing: an FD frame without
+	 * BRS runs its data phase at the nominal rate and matches any hunt index.
+	 * App only: the embedded bootloader binary is vendored and keeps its own
+	 * behaviour until it is rebuilt and validated on its own. */
+	if (is_fd && (dlc_word & FDCAN_ELMT_BRS)) {
+#	else
 	if (is_fd) {
+#	endif
 		fd_err_streak = 0;
 		fd_locked = 1;
 	}

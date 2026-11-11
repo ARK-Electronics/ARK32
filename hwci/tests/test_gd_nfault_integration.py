@@ -37,11 +37,18 @@ def _compile_and_run(tmp_path, source, defines=()):
 def test_adc_schedule_in_sine_and_six_step(tmp_path, gate_driver):
     source = (REPO_ROOT / "Src" / "control_loop.c").read_text()
     start = source.index("RAM_FUNC void tenKhzRoutine()")
-    end = source.index("\tif (!escIsArmed())", start)
+    end = source.index("\tif (!escIsArmed()", start)
     clock_block = source[start:end]
-    start = source.index("\t\tif (one_khz_loop_counter > PID_LOOP_DIVIDER)", end)
+    # Anchor on the PID block itself: the F051 nFAULT-latched branch above
+    # has its own one_khz_loop_counter clock.
+    start = source.index("\t\tif (one_khz_loop_counter > PID_LOOP_DIVIDER) { // 1khz PID loop", end)
     end = source.index("\t\t\tfaultDesyncEpisodeTick1kHz();", start)
     pid_clock_block = source[start:end]
+    # The production sine-mode branch that follows the six-step body. It used
+    # to be omitted here, which hid a second ADC clock on USE_DRV_NFAULT.
+    start = source.index("\t} else if (one_khz_loop_counter > PID_LOOP_DIVIDER) {", end)
+    end = source.index("#endif // ndef brushed_mode", start)
+    sine_branch = source[start + 1:end]  # from the "}" that closes the six-step body
 
     harness = r"""
 #include <assert.h>
@@ -50,7 +57,7 @@ def test_adc_schedule_in_sine_and_six_step(tmp_path, gate_driver):
 #define HWCI_PERF_CTRL_ENTER() ((void)0)
 #define PID_LOOP_DIVIDER 20
 static unsigned duty_cycle, duty_cycle_setpoint, tenkhzcounter, ledcounter;
-static unsigned ramp_count, one_khz_loop_counter, PROCESS_ADC_FLAG;
+static unsigned one_khz_loop_counter, PROCESS_ADC_FLAG;
 static unsigned gd_ticks, pid_ticks;
 static int sine;
 #ifdef USE_DRV_NFAULT
@@ -61,9 +68,9 @@ static void faultGateDriverTick1kHz(void) { gd_ticks++; }
     # six-step-only branch as production. Unrelated control work is omitted.
     harness += clock_block
     harness += "\tif (!sine) {\n" + pid_clock_block
-    harness += "\t\t\tpid_ticks++;\n\t\t}\n\t}\n}\n"
+    harness += "\t\t\tpid_ticks++;\n\t\t}\n\t" + sine_branch + "}\n"
     harness += r"""
-static void exercise(int sine_mode, unsigned expected_pid_ticks) {
+static void exercise(int sine_mode, unsigned expected_pid_ticks, unsigned expected_adc) {
     sine = sine_mode;
     gd_ticks = pid_ticks = PROCESS_ADC_FLAG = 0;
     unsigned adc_samples = 0;
@@ -73,18 +80,21 @@ static void exercise(int sine_mode, unsigned expected_pid_ticks) {
         PROCESS_ADC_FLAG = 0;
     }
 #ifdef USE_DRV_NFAULT
+    (void)expected_adc;
     assert(adc_samples == 1000 && gd_ticks == 1000);
 #else
-    assert(adc_samples == expected_pid_ticks && gd_ticks == 0);
+    assert(adc_samples == expected_adc && gd_ticks == 0);
 #endif
     assert(pid_ticks == expected_pid_ticks);
 }
 int main(void) {
-    exercise(0, 952);
-    exercise(1, 0);
-    /* The legacy PID counter accumulates during sine mode, so it fires
-     * immediately on six-step re-entry. The ADC clock remains at 1 kHz. */
-    exercise(0, 953);
+    exercise(0, 952, 952);
+    /* Sine: no PID. One ADC clock - the gate-driver one on USE_DRV_NFAULT,
+     * the sine branch's otherwise - never both. */
+    exercise(1, 0, 952);
+    /* Six-step resumes mid-way through the shared 21-tick counter's
+     * period, so it fires once more in the same 20000 ticks. */
+    exercise(0, 953, 953);
 }
 """
     _compile_and_run(tmp_path, harness, ("-DUSE_DRV_NFAULT",) if gate_driver else ())

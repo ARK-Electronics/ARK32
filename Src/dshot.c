@@ -345,7 +345,10 @@ void computeDshotDMA()
 			hwci_perf.dshot_rx_bad++;
 #endif
 			programming_mode = DSHOT_PROG_IDLE;
+			dshot_idle_exit_holdoff = 0; /* "consecutive" means consecutive valid frames */
 		}
+	} else {
+		dshot_idle_exit_holdoff = 0; /* frame timing rejected */
 	}
 }
 

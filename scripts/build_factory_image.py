@@ -261,11 +261,14 @@ def main(argv: list[str] | None = None) -> int:
     ver_maj, ver_min, eeprom_ver_h = _read_version_h(args.version_h)
     eeprom_ver = int(defaults.get("eeprom_version", eeprom_ver_h))
     if eeprom_ver != eeprom_ver_h:
+        # A stale layout makes the firmware re-stamp the page at boot and the
+        # configurator migrate values that are already in the new units.
         print(
-            f"warning: defaults eeprom_version={eeprom_ver} != "
+            f"error: defaults eeprom_version={eeprom_ver} != "
             f"version.h EEPROM_VERSION={eeprom_ver_h}",
             file=sys.stderr,
         )
+        return 1
 
     fmap = resolve_flash_map(defaults)
     eeprom_page = build_eeprom_page(defaults, ver_maj, ver_min, eeprom_ver,

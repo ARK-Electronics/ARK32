@@ -176,16 +176,16 @@
 #	define MILLIVOLT_PER_AMP 10
 /* No CURRENT_OFFSET: idle sense is ~0 V (uses global default 0). */
 #	define TARGET_VOLTAGE_DIVIDER 310
-/* Match ARK_4IN1_F051 vehicle policy (voltage-comp ramp + eeprom max_ramp
- * can only lower these ceilings). Was 1/1 (SLO-style) before the F051
- * ramp/governor work was ported to this target. */
+/* Regime ceilings: they only ever lower the stored max_ramp (EEPROM layout
+ * 4 runs it exactly, with no pack-voltage scaling). Was 1/1 (SLO-style)
+ * before the F051 ramp/governor work was ported to this target. */
 #	define RAMP_SPEED_LOW_RPM 3
 #	define RAMP_SPEED_HIGH_RPM 8
-/* Unconfigured-eeprom max_ramp default; matches the factory JSON. 5 = fine
-	 * mode, 0.5 %/ms, full scale in 200 ms - what larger 12S ESCs ship
-	 * (APD/Hargrave default 50 % per 100 ms) rather than the 4IN1's 2.0 %/ms.
-	 * Fine mode (<10) applies to every regime including startup, so spool-up
-	 * slews at this rate too; that is the part to watch on the bench. */
+/* Unconfigured-eeprom (and DroneCAN erase) max_ramp default; matches the
+	 * factory JSON. 5 = 0.5 %/ms, full scale in 200 ms - what larger 12S ESCs
+	 * ship (APD/Hargrave default 50 % per 100 ms) rather than the 4IN1's
+	 * 1.0 %/ms. Layout 4 runs it in every regime including startup, so
+	 * spool-up slews at this rate too; that is the part to watch on the bench. */
 #	define TARGET_DEFAULT_MAX_RAMP 5
 /* Protection envelope a DroneCAN "restore defaults" must land on. Same
 	 * values as factory/ARK_G431_CAN_eeprom_defaults.json, enforced by

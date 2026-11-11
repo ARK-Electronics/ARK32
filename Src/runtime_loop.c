@@ -303,12 +303,11 @@ void runtimeProcessDesyncCheck(void)
 				if ((!eepromBuffer.bidirectional_mode && (input > DSHOT_CMD_MAX)) || commutation_interval > 1000) {
 					running = 0;
 				}
-#ifndef MCU_F051
-				/* F051: skip — historical post-clear reseed was dead
-				 * (zero_crosses already 0) and LTO dropped it; restoring
-				 * live reseed overflows the 99.8% flash gate. */
-				average_interval = 5000;
-#endif
+				/* No average_interval reseed. Main's was dead (zero_crosses
+				 * already 0). A live one reached last_average_interval, so
+				 * the next check (zero_crosses > 10) compared 5000 against
+				 * the real interval and declared a second desync after
+				 * every established one. */
 			} else if (!commanded_stop) {
 				faultNoteEarlyDesync();
 			}
@@ -443,14 +442,15 @@ void runtimeSendTelemetryIfNeeded(void)
  * backstop below this. Placed correctly the floor is unreachable anyway -
  * equilibrium lands inside the band.
  *
- * Nothing here is gated on temperature_limit being in range: settings.c
+ * Nothing here is gated on temperature_limit being in range: the tick
  * resolves anything outside 70..140 to TARGET_DEFAULT_TEMPERATURE_LIMIT,
  * which is either an in-range onset (a product that arms the derate) or the
  * 255 sentinel, and 255 is a reading no die reaches, so a disabled limit
  * falls out of the arithmetic as a constant 2000. NOTE this used to coerce
  * to 255 unconditionally; do not restore that - it also defeated the
  * DroneCAN parameter layer's repair, whose window includes 255, and the ESC
- * came up with no thermal protection at all.
+ * came up with no thermal protection at all. The resolution is runtime
+ * only: firmware never rewrites the stored byte (a save would persist it).
  */
 #define THERMAL_CEIL_FLOOR 200 /* 10% of full scale; see above */
 #define THERMAL_FILT_Q 12
@@ -478,12 +478,23 @@ void runtimeThermalLimitTick(void)
 	 * is what a bench or a test compares against. */
 	degrees_celsius_filtered = (int16_t)((temp_q + (1 << (THERMAL_FILT_Q - 1))) >> THERMAL_FILT_Q);
 
-	const int32_t over_q = temp_q - ((int32_t)eepromBuffer.temperature_limit << THERMAL_FILT_Q);
+	/* Resolve the stored bytes here, every tick, and never write them back:
+	 * out of 70..140 (except the 255 "disabled" sentinel) runs the target's
+	 * shipped limit; an unset band (0xFF on every non-CAN page) runs 15 C. */
+	uint8_t limit_c = eepromBuffer.temperature_limit;
+	if (limit_c != THERMAL_LIMIT_DISABLED && (limit_c < THERMAL_LIMIT_MIN_C || limit_c > THERMAL_LIMIT_MAX_C)) {
+		limit_c = TARGET_DEFAULT_TEMPERATURE_LIMIT;
+	}
+	uint8_t band_c = eepromBuffer.can_temp_derate_band;
+	if (band_c < THERMAL_DERATE_BAND_MIN || band_c > THERMAL_DERATE_BAND_MAX) {
+		band_c = THERMAL_DERATE_BAND_DEFAULT;
+	}
+	const int32_t over_q = temp_q - ((int32_t)limit_c << THERMAL_FILT_Q);
 	if (over_q <= 0) {
 		thermal_duty_ceiling = 2000;
 		return;
 	}
-	const int32_t band_q = (int32_t)temp_derate_band_c << THERMAL_FILT_Q;
+	const int32_t band_q = (int32_t)band_c << THERMAL_FILT_Q;
 	if (over_q >= band_q) {
 		thermal_duty_ceiling = THERMAL_CEIL_FLOOR;
 		return;

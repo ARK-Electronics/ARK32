@@ -38,11 +38,10 @@ FIELDS = (
     ("TEMPERATURE_LIMIT", "temperature_limit", "temperature_limit", 1),
     ("CURRENT_LIMIT", "current_limit", "current_limit", 0.5),
     ("TEMP_DERATE_BAND", "can_temp_derate_band", "temperature_derate_band", 1),
-    # member None: the skeleton still carries upstream's 160 on purpose (see
-    # the MAX_RAMP note in DroneCAN.c) and nothing restores it, so only the
-    # macro and the product JSON are held together here.
     ("INPUT_TYPE", "input_type", "input_type", 1),
-    ("MAX_RAMP", None, "max_ramp_percent_per_ms", 10),
+    # the skeleton carries upstream's 160; apply_post_skeleton_defaults()
+    # restores the product ramp, so an erase lands on the shipped value
+    ("MAX_RAMP", "max_ramp_speed", "max_ramp_percent_per_ms", 10),
 )
 
 
@@ -143,16 +142,13 @@ def main(argv: list[str]) -> int:
             print("  - %s" % e, file=sys.stderr)
         return 1
     arr = erase_bytes()
+    restored = post_skeleton_restores().get("max_ramp_speed") == "MAX_RAMP"
     for p in products:
         m = target_macros(p)
-        print("OK %s: erase restores thermal %d C over %d C band, current %d A"
+        ramp = m["MAX_RAMP"] if restored else arr[5]
+        print("OK %s: erase restores thermal %d C over %d C band, current %d A, ramp %.1f %%/ms"
               % (p, m["TEMPERATURE_LIMIT"], m["TEMP_DERATE_BAND"],
-                 m["CURRENT_LIMIT"] * 2))
-        # Said separately because it is NOT restored: the array still carries
-        # upstream's value, so an erase changes the ramp the product ships.
-        print("   ramp: ships %.1f %%/ms, erase writes %.1f %%/ms%s"
-              % (m["MAX_RAMP"] / 10.0, arr[5] / 10.0,
-                 "" if arr[5] == m["MAX_RAMP"] else "  <-- not restored"))
+                 m["CURRENT_LIMIT"] * 2, ramp / 10.0))
     return 0
 
 

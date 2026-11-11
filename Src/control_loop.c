@@ -815,6 +815,15 @@ RAM_FUNC void tenKhzRoutine()
 	 * Keep the ADC/zero-throttle clock and signal watchdog running. */
 	if (faultGateDriverFaultActive()) {
 		faultSignalTimeoutTick();
+#	if !defined(USE_DRV_NFAULT)
+		/* The 1 kHz block below is skipped while latched. G431's clock above
+		 * already ran; on F051 keep voltage (LVC), current and temperature
+		 * sampling alive. */
+		if (one_khz_loop_counter > PID_LOOP_DIVIDER) {
+			one_khz_loop_counter = 0;
+			PROCESS_ADC_FLAG = 1;
+		}
+#	endif
 		HWCI_PERF_CTRL_EXIT();
 		return;
 	}
@@ -987,7 +996,11 @@ RAM_FUNC void tenKhzRoutine()
 	} else if (one_khz_loop_counter > PID_LOOP_DIVIDER) {
 		// Sine start runs no PID, but voltage cutoff, current and
 		// temperature still need fresh ADC samples (upstream 9696d28).
+		// USE_DRV_NFAULT targets already clock ADC at 1 kHz in every mode
+		// (gd_khz_div above); a second clock would double the rate.
+#	if !defined(USE_DRV_NFAULT)
 		PROCESS_ADC_FLAG = 1;
+#	endif
 		one_khz_loop_counter = 0;
 	}
 #endif // ndef brushed_mode

@@ -1,7 +1,7 @@
 {
-  "_comment": "ARK G431 12S CAN production EEPROM defaults. Same ARK vehicle policy as ARK_4IN1_F051 (2%/ms ramp, 1020 kV, 15° fixed, PWM-by-RPM) with input_type=AUTO_IN (detect DShot/PWM; DroneCAN prioritised while RawCommand is live). Values are in schema display units (schema/eeprom.json); scripts/build_factory_image.py encodes them into the EEPROM page.",
+  "_comment": "ARK G431 12S CAN production EEPROM defaults. Same ARK vehicle policy as ARK_4IN1_F051 (1020 kV, 15° fixed, PWM-by-RPM) except the ramp (0.5 %/ms here, 1 %/ms on the 4IN1), with input_type=AUTO_IN (detect DShot/PWM; DroneCAN prioritised while RawCommand is live). Values are in schema display units (schema/eeprom.json); scripts/build_factory_image.py encodes them into the EEPROM page.",
   "product": "ARK_G431_CAN",
-  "eeprom_version": 3,
+  "eeprom_version": 4,
   "flash_map": {
     "_comment": "STM32G431 CAN map (Mcu/g431/ldscript_CAN.ld): 16 KiB BL, app @ 0x08004000, 2 KiB EEPROM @ 0x0801F800, 128 KiB total flash",
     "flash_size": 131072,
@@ -17,7 +17,7 @@
   },
   "settings": {
     "max_ramp_percent_per_ms": 0.5,
-    "max_ramp_meaning": "Throttle slew ceiling, both directions, applied to duty by the 20 kHz ramp limiter. 0.5 %/ms = full scale in 200 ms, matching what larger 12S ESCs ship (APD/Hargrave default 50 % per 100 ms). The ARK 4IN1 stays at 2.0. Stored as percent*10, so 5 - under 10 the firmware switches to fine mode (ramp_divider 9, steps every 500 us) and applies the value to ALL THREE regimes including startup, rather than min-ing against the targets.h ceilings.",
+    "max_ramp_meaning": "Throttle slew ceiling, both directions, applied to duty by the 20 kHz ramp limiter. 0.5 %/ms = full scale in 200 ms, matching what larger 12S ESCs ship (APD/Hargrave default 50 % per 100 ms); the ARK 4IN1 ships 1.0. Stored as percent*10, so 5. EEPROM layout 4 runs it exactly in all three regimes including startup: 0.5 counts per 20 kHz tick, carried as a remainder; the targets.h regime ceilings only ever lower it.",
     "motor_kv": 1020,
     "motor_poles": 14,
     "variable_pwm": 1,

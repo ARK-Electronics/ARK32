@@ -147,7 +147,6 @@ extern volatile int16_t degrees_celsius_filtered;
 #define THERMAL_DERATE_BAND_DEFAULT 15
 #define THERMAL_DERATE_BAND_MIN 5
 #define THERMAL_DERATE_BAND_MAX 40
-extern uint8_t temp_derate_band_c;
 extern int32_t input_override;
 extern int32_t stall_protection_adjust;
 extern uint16_t stall_protect_target_interval;

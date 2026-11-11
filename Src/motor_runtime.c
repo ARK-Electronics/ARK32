@@ -145,7 +145,6 @@ volatile uint16_t thermal_duty_ceiling = 2000;
 volatile uint16_t duty_limit_ceiling = 2000;
 volatile int16_t degrees_celsius_filtered = 0;
 /* Foldback ramp width in C, sanitized from eeprom in settings.c. */
-uint8_t temp_derate_band_c = THERMAL_DERATE_BAND_DEFAULT;
 int32_t stall_protection_adjust = 0;
 uint32_t MCU_Id = 0;
 uint32_t REV_Id = 0;

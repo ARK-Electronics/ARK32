@@ -22,9 +22,6 @@
 #include "debug_uart.h"
 #include "IO.h"
 #include "sounds.h"
-/* commutation_interval for stall debug line */
-#include "motor_runtime.h"
-#include "dshot.h"
 
 #ifdef USE_RGB_LED
 extern void setIndividualRGBLed(uint8_t, uint8_t, uint8_t);
@@ -226,6 +223,11 @@ static fault_id_t drv_nfault_cause;
  * when the firmware stops commanding the bridge. */
 #	define DRV8328_NFAULT_POLLS 4u
 static uint8_t drv_nfault_low_polls;
+/* One re-arm per zero-throttle episode. Clearing wakes the driver again
+ * when armed with brake_on_stop (#130), so a fault that persists through
+ * sleep would otherwise re-latch and retry every ~1.3 ms, pulsing the brake
+ * into the faulted bridge. Cleared by any non-zero demand. */
+static uint8_t drv_nfault_zero_retry_used;
 
 /* Same order as gd_hold_cut() (G431): publish the stop flags before touching
  * GPIO so a pending commutation cannot re-enable the bridge after allOff(),
@@ -444,13 +446,20 @@ void faultPollGateDriver(void)
 	}
 
 #elif defined(USE_DRV8328_NFAULT)
+	if (adjusted_input != 0) {
+		drv_nfault_zero_retry_used = 0;
+	}
 	if (!gateDriverIsAwake()) {
 		/* Asleep is the DRV8328 fault reset: gateDriverPoll() sleeps the
 		 * driver while latched, so a pilot zero clears the latch here. */
 		drv_nfault_low_polls = 0;
-		if (drv_nfault_latched && adjusted_input == 0) {
+		if (drv_nfault_latched && adjusted_input == 0 && !drv_nfault_zero_retry_used) {
 			drv_nfault_latched = 0;
 			drv_nfault_cause = FAULT_NONE;
+			drv_nfault_zero_retry_used = 1;
+			/* Any brake wake happens here in main-loop context, not as a
+			 * blocking gateDriverEnsure() inside the 20 kHz ISR. */
+			gateDriverPoll();
 		}
 		return;
 	}
@@ -609,7 +618,11 @@ void faultUpdateBemfTimeoutPolicy(void)
 	 * lands mid-sweep. Bound the grace in time instead -- start attempts
 	 * are short and separated by zero throttle, a jam is continuous.
 	 */
-	if (zero_crosses < 100 && acq_grace_ms < ACQ_GRACE_MS_MAX && adjusted_input < ACQ_GRACE_MAX_INPUT) {
+	/* Never forgive a latch: the grace clock rearms on every established
+	 * run (zero_crosses >= 100), so an episode latch from that run would
+	 * be wiped on the next pass once zero_crosses resets. */
+	if (bemf_timeout_happened != ESC_STUCK_LATCH && zero_crosses < 100 && acq_grace_ms < ACQ_GRACE_MS_MAX &&
+	    adjusted_input < ACQ_GRACE_MAX_INPUT) {
 		bemf_timeout_happened = 0;
 	}
 #	endif

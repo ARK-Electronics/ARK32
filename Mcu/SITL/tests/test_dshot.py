@@ -198,3 +198,38 @@ def test_holdoff_delays_but_does_not_block_spool_up(sitl_factory, state_stream):
             'holdoff blocked a sustained demand: rpm=%.0f\n%s' % (rpm, sitl.log_tail()))
     finally:
         tx.stop()
+
+
+def test_invalid_frames_reset_the_idle_exit_holdoff(sitl_factory, state_stream):
+    '''"consecutive" demand frames means consecutive VALID frames.
+
+    The holdoff discards the first DSHOT_IDLE_EXIT_HOLDOFF_FRAMES drive frames
+    out of zero. If a CRC failure between them does not reset that count, a
+    marginal link that delivers isolated CRC-valid bogus frames (an all-ones
+    capture is CRC-valid 2047) amid corrupt ones accumulates them and the
+    third one drives the motor.
+    '''
+    sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
+    sim = state_stream(sitl)
+    assert wait_for_state(sim), 'state stream dead\n' + sitl.log_tail()
+    port = sd.InputPort('127.0.0.1', sitl.input_port)
+    try:
+        t0 = time.time()
+        while time.time() - t0 < 2.5:  # arm on sustained zero
+            port.send_dshot(0, ptype=sd.TYPE_DSHOT300)
+            time.sleep(1.0 / 500.0)
+        t0 = time.time()
+        while time.time() - t0 < 1.0:
+            port.send_dshot(2047, ptype=sd.TYPE_DSHOT300)
+            time.sleep(1.0 / 500.0)
+            port.send_dshot(0, ptype=sd.TYPE_DSHOT300, corrupt=True)
+            time.sleep(1.0 / 500.0)
+        t0 = time.time()
+        while time.time() - t0 < 0.3:
+            port.send_dshot(0, ptype=sd.TYPE_DSHOT300)
+            time.sleep(1.0 / 500.0)
+        rpm = rpm_from_state(sim, 0.5)
+        assert rpm < 200, ('valid frames between CRC failures passed the holdoff: rpm=%.0f\n%s'
+                           % (rpm, sitl.log_tail()))
+    finally:
+        port.close()

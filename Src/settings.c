@@ -123,53 +123,20 @@ void loadEEpromSettings(void)
 			startup_max_duty_cycle = startup_max_duty_cycle + dead_time_override;
 			setPwmDeadTime(dead_time_override);
 		}
-		/* Valid window for the thermal ceiling. Outside it resolves to the
-		 * target's shipped limit (see the fail-safe note below); only the
-		 * explicit 255 sentinel means "derate disabled".
+		/* temperature_limit and can_temp_derate_band are resolved at use, in
+		 * runtimeThermalLimitTick(), and never rewritten here: a save (the
+		 * boot version stamp, DShot or DroneCAN) would otherwise persist the
+		 * coercion - the 4IN1 factory 141 as 255 and byte 184 0xFF as 15.
+		 * Firmware does not rewrite stored settings; migrations live in the
+		 * configurator.
 		 *
-		 * The lower bound is a build-time override ONLY
-		 * so a bench can exercise the derate at a temperature the board
-		 * actually reaches: the derate starts AT limits.temperature and
-		 * hits THERMAL_CEIL_FLOOR at +temp_derate_band_c, so verifying it
-		 * against the shipped 70 C floor needs the die driven past 70,
-		 * which a propped ESC in its own slipstream may never do (a 5-inch
-		 * 6S attempt plateaued at 57 C). Do not lower this in a shipping
-		 * build - 70 C is the floor the product's protection envelope
-		 * assumes, and check-erase-defaults.py gates the shipped pair.
-		 *
-		 * THERMAL_LIMIT_MIN_C lives in targets.h because this is NOT the
-		 * only floor: the DroneCAN parameter table re-validates this same
-		 * byte at boot against TEMPERATURE_LIMIT's own min and substitutes
-		 * its default, so lowering only this one gets silently overridden
-		 * (observed: a 30 C write came back as 105). Both now share the
-		 * macro; keep it that way.
-		 */
-		if (eepromBuffer.temperature_limit != THERMAL_LIMIT_DISABLED &&
-		    (eepromBuffer.temperature_limit < THERMAL_LIMIT_MIN_C || eepromBuffer.temperature_limit > THERMAL_LIMIT_MAX_C)) {
-			/* FAIL SAFE, not fail open. This used to coerce to 255
-			 * (= derate disabled), which also defeated the DroneCAN
-			 * parameter layer's own safety net: load_settings() resets
-			 * an out-of-range value to TEMPERATURE_LIMIT's default, but
-			 * 255 is INSIDE its accepted 70..255 window, so the 255
-			 * written here always survived and the ESC came up with no
-			 * thermal protection at all. A garbled or mis-set byte now
-			 * lands on the target's shipped limit instead. 255 itself
-			 * still means "deliberately disabled" and is preserved.
-			 *
-			 * Non-DroneCAN targets are unaffected: their
-			 * TARGET_DEFAULT_TEMPERATURE_LIMIT is 255, so out-of-range
-			 * still resolves to disabled exactly as before. */
-			eepromBuffer.temperature_limit = TARGET_DEFAULT_TEMPERATURE_LIMIT;
-		}
-
-		/* Foldback ramp width. 0xFF on any page that never wrote the CAN
-		 * block (every non-DroneCAN product) lands here, so the coercion
-		 * is the normal path, not an error case. */
-		if (eepromBuffer.can_temp_derate_band < THERMAL_DERATE_BAND_MIN ||
-		    eepromBuffer.can_temp_derate_band > THERMAL_DERATE_BAND_MAX) {
-			eepromBuffer.can_temp_derate_band = THERMAL_DERATE_BAND_DEFAULT;
-		}
-		temp_derate_band_c = eepromBuffer.can_temp_derate_band;
+		 * THERMAL_LIMIT_MIN_C is a build-time override ONLY so a bench can
+		 * exercise the derate at a temperature the board reaches (a 5-inch
+		 * 6S attempt plateaued at 57 C). Do not lower it in a shipping build:
+		 * 70 C is the floor the product's protection envelope assumes, and
+		 * check-erase-defaults.py gates the shipped pair. It lives in
+		 * targets.h because the DroneCAN parameter table validates the same
+		 * byte against TEMPERATURE_LIMIT's min; keep the two shared. */
 
 		if (eepromBuffer.current_limit > 0 && eepromBuffer.current_limit <= 100) {
 			use_current_limit = 1;

@@ -73,7 +73,7 @@ protection limits differ by product:
 | Throttle ramp | **1 %/ms** (`max_ramp = 10`) | **0.5 %/ms** (`max_ramp = 5`, 200 ms full scale) |
 | Timing advance | **15° fixed** | **15° fixed** |
 | PWM input min/max | 1020 / 1980 µs | 1020 / 1980 µs |
-| Input type | DShot (`1`) | **DroneCAN** (`5`) |
+| Input type | DShot (`1`) | **AUTO** (`0`): DShot/PWM detect, DroneCAN prioritised while RawCommand is live |
 | Thermal derate | off (`141`) | **105 → 120 °C die** |
 | Derate band | — (15 °C default) | **15 °C** (byte 184) |
 | Current limit | off (`102`) | **200 A** (stored `100`, 2 A/count) |

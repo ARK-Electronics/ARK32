@@ -15,6 +15,9 @@
 #ifndef ESC_STATE_H_
 #define ESC_STATE_H_
 
+/* bemf_timeout_happened value that carries the stuck-rotor latch. */
+#define ESC_STUCK_LATCH 102
+
 #include <stdint.h>
 #include "motor_runtime.h"
 

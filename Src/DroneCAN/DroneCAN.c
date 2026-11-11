@@ -268,7 +268,11 @@ static void load_settings(void)
 				/* uint16: CURRENT_P/D advertise 510 (Kp = byte * 2). */
 				uint16_t max_value = p->max_value;
 				if (pvalue == &eepromBuffer.current_limit) {
-					max_value = max_value / 2;
+					/* Out of range is "limit off" in settings.c (only 1..100
+					 * arms it). Repairing 102, the 4IN1/upstream disabled
+					 * sentinel, to the default would arm 200 A after the next
+					 * save and reboot - a stored-setting rewrite. Leave it. */
+					break;
 				}
 				if (pvalue == &eepromBuffer.timing_advance) {
 					max_value = max_value + 10;
@@ -320,7 +324,11 @@ static struct uavcan_protocol_NodeStatus node_status;
 
 static bool safe_to_write_settings(void)
 {
-	return !running || newinput == 0;
+	/* Flash programming stalls the CPU (single-bank G431), so only with no
+	 * six-step, no sine drive and zero demand. A static stop brake is fine:
+	 * the timer holds it in hardware. Was !running || newinput == 0, which
+	 * sine drive and (since #144) a brake-2 stop both satisfy. */
+	return !running && !stepper_sine && newinput == 0;
 }
 
 /*
@@ -408,9 +416,8 @@ static uint32_t millis32(void)
  * Agreement between the macros and each product JSON is gated by
  * scripts/check-erase-defaults.py in CI.
  *
- * NOTE the skeleton is still upstream's everywhere else, so an erase also
- * reverts e.g. byte 5 max_ramp to 0xa0 (16 %/ms) rather than the ARK 2 %/ms.
- * That is a pre-existing hole in the erase path and wants its own fix.
+ * Byte 5 (max_ramp) is restored too: the skeleton's 0xa0 would run the
+ * targets.h regime ceilings instead of the shipped ramp.
  */
 #	include "eeprom_defaults.h"
 
@@ -424,6 +431,9 @@ static void apply_post_skeleton_defaults(EEprom_t *e)
 	e->temperature_limit = TARGET_DEFAULT_TEMPERATURE_LIMIT;
 	e->current_limit = TARGET_DEFAULT_CURRENT_LIMIT;
 	e->can_temp_derate_band = TARGET_DEFAULT_TEMP_DERATE_BAND;
+	/* The skeleton's 160 runs the targets.h ceilings (2/3/8 %/ms on the 12S)
+	 * instead of the shipped 0.5 %/ms. */
+	e->max_ramp_speed = TARGET_DEFAULT_MAX_RAMP;
 	/* AUTO: first available of DShot/PWM, with DroneCAN prioritised while the
 	 * RawCommand stream is live (see DroneCAN_active). Never leave a CAN-only
 	 * board on upstream's DShot default. */
@@ -600,6 +610,9 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 		const char last_bi_direction = eepromBuffer.bidirectional_mode;
 		int32_t set_log_val = 0;
 		uint8_t set_log_is_str = 0;
+		/* Only an accepted write marks the page dirty: a rejected set must not
+		 * trigger a save. */
+		uint8_t accepted = 1;
 
 		/*
 	  a parameter set command
@@ -610,8 +623,9 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				if (ptr8 == &eepromBuffer.motor_poles) {
 					/* Range-check the wire integer before narrowing: 256 would
 					 * wrap to zero. A rejected write leaves the stored value. */
-					if (req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE ||
+					if (running || req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE ||
 					    req.value.integer_value < MOTOR_POLES_MIN || req.value.integer_value > MOTOR_POLES_MAX) {
+						accepted = 0; /* identity changes only while stopped */
 						break;
 					}
 					*ptr8 = (uint8_t)req.value.integer_value;
@@ -644,8 +658,10 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 					 * tag first: value is a union, and a string's length
 					 * byte would otherwise read as the integer. */
 					const int64_t kv = req.value.integer_value;
-					if (req.value.union_tag == UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE && kv >= p->min_value &&
-					    kv <= p->max_value) {
+					accepted = 0;
+					if (!running && req.value.union_tag == UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE &&
+					    kv >= p->min_value && kv <= p->max_value) {
+						accepted = 1;
 						uint8_t raw = (uint8_t)((kv - 20) / 40);
 						if (raw == 0 && kv > 20) {
 							raw = 1;
@@ -671,8 +687,10 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 				set_log_val = req.value.boolean_value ? 1 : 0;
 				break;
 			case T_STRING:
+				accepted = 0;
 				if (req.value.union_tag == UAVCAN_PROTOCOL_PARAM_VALUE_STRING_VALUE) {
 					if (p->ptr == (void *)eepromBuffer.startup_melody) {
+						accepted = 1;
 						for (size_t i = 0; i < sizeof(eepromBuffer.startup_melody); i++) {
 							if (i < req.value.string_value.len) {
 								eepromBuffer.startup_melody[i] = req.value.string_value.data[i];
@@ -714,7 +732,9 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 		}
 
 		/* Coalesce flash writes: deferred save in DroneCAN_update (AM32#359). */
-		mark_settings_dirty();
+		if (accepted) {
+			mark_settings_dirty();
+		}
 	}
 
 	/*
@@ -906,7 +926,8 @@ extern void setInput();
  */
 static void set_input(uint16_t input)
 {
-	if (!armed && input != 0 && eepromBuffer.can_require_arming && dronecan_armed && !eepromBuffer.can_require_zero_throttle) {
+	if (!armed && input != 0 && eepromBuffer.can_require_arming && dronecan_armed && !eepromBuffer.can_require_zero_throttle &&
+	    !LOW_VOLTAGE_CUTOFF && !escIsFault()) {
 		// allow restart if unexpected ESC reboot in flight
 		faultErrorCountReset(); // armed 0->1: per-arm error_count (DSDL)
 		armed = 1;
