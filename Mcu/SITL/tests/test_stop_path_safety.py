@@ -219,37 +219,46 @@ def test_held_reversal_is_not_an_active_brake_stop(sitl_factory, state_stream):
 
     In bidirectional DShot (rc_car_reversing off) a reverse request while the
     rotor is fast becomes zero throttle until commutation_interval says it is
-    slow. Ending the run there would reset commutation_interval to "stopped"
-    and let the next reverse frame flip direction into a fast rotor, so the
-    active-brake stop must leave this path alone.
+    slow. The active-brake stop must not take that frame: escNoteStallOrDesync
+    resets commutation_interval to 5000 ("stopped"), and the next reverse
+    frame then flips direction as soon as duty falls under 200 - in SITL
+    13.9 ms after the request with the rotor at ~88% speed, every time.
+
+    Deterministic on sim time: the active-brake stop acts on the held frame
+    itself, while main's own path cannot end the run or reset the interval
+    before the stall rail's BEMF_STALL_TICKS (22.5 ms) without commutation.
     """
     sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
     tx = Sender('127.0.0.1', sitl.input_port, sd.TYPE_DSHOT600)
     sim = state_stream(sitl)
     ee = EepromClient(port=sitl.state_port)
-    variables = [(1, 'armed'), (1, 'sitl_tone_active'), (2, 'input'), (1, 'running'), (1, 'forward')]
+    variables = [(1, 'armed'), (1, 'sitl_tone_active'), (2, 'input'), (1, 'running'), (1, 'forward'),
+                 (4, 'commutation_interval')]
+    ARM, TONE, IN, RUN, FWD, CI = range(len(variables))
     try:
         with control_socket(sitl) as sock:
             watch = Watch(sock, variables)
-            watch.until(lambda: watch.values.get(0) == 1 and watch.values.get(1) == 0)
+            watch.until(lambda: watch.values.get(ARM) == 1 and watch.values.get(TONE) == 0)
             time.sleep(0.2)  # wait out the arming tune's silent gaps
             for name, value in (('BI_DIRECTIONAL', 1), ('BRAKE_ON_STOP', 2)):
                 ok, message = ee.set(offset(name), [value])
                 assert ok, message
             tx.value = 1400  # forward
-            watch.until(lambda: watch.values.get(3) == 1 and sim.samples and abs(sim.samples[-1][1]) > 200)
+            watch.until(lambda: watch.values.get(RUN) == 1 and sim.samples and abs(sim.samples[-1][1]) > 200)
             end = time.monotonic() + 1.0
             while time.monotonic() < end:
                 watch.poll()
-            forward = watch.values.get(4)
-            assert watch.values.get(3) == 1, ('run did not hold', watch.values, sitl.log_tail())
-            tx.value = 600  # reverse, held back by the speed guard
+            assert watch.values.get(RUN) == 1, ('run did not hold', watch.values, sitl.log_tail())
             first = len(watch.events)
+            tx.value = 600  # reverse while fast: the speed guard holds it as zero throttle
+            watch.until(lambda: watch.values.get(IN) == 0, timeout=2)
             end = time.monotonic() + 0.1
             while time.monotonic() < end:
                 watch.poll()
-            changed = [e for e in watch.events[first:] if e[1] in (3, 4)]
-            assert not changed, ('held reversal ended the run or flipped direction', changed, abs(sim.samples[-1][1]))
-            assert watch.values.get(4) == forward
+            events = watch.events[first:]
+            t_held = next(ts for ts, i, v in events if i == IN and v == 0)
+            early = [(round((ts - t_held) / 1e6, 2), variables[i][1], v) for ts, i, v in events
+                     if ts - t_held < 10_000_000 and ((i == RUN and v == 0) or (i == CI and v == 5000) or i == FWD)]
+            assert not early, ('held reversal took the active-brake stop (ms after the held frame, var, value)', early)
     finally:
         tx.stop()
