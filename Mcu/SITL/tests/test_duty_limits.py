@@ -362,6 +362,31 @@ def test_current_limiter_holds_the_limit_under_load(
         tx.stop()
 
 
+def test_out_of_range_limit_derates_without_rewriting_the_byte(sitl_factory, state_stream, workdir):
+    """141 (the 4IN1/upstream "off" byte) is outside 70..140 and is not the 255
+    sentinel, so the limiter runs this target's TARGET_DEFAULT_TEMPERATURE_LIMIT
+    - fail safe - while the byte in RAM, and so in any later save, stays 141."""
+    import sitl_params
+    from sitl_gui_backend import EepromClient
+
+    with open(os.path.join(workdir, 'am32_eeprom.bin'), 'wb') as f:
+        f.write(sitl_params.build_image({'TEMPERATURE_LIMIT': 141}))
+    sitl = sitl_factory(extra_args=['--input-type', '1'], can_uri='none')
+    sim = state_stream(sitl)
+    assert wait_for_state(sim), sitl.log_tail()
+    ctl = _open_ctl(sitl)
+    tx = _keepalive(sitl)
+    try:
+        st = _settle_at(sim, ctl, workdir, DEFAULT_TEMP_LIMIT_C + 5)
+        assert st['thermal_duty_ceiling'] < FULL_CEIL, (
+            'out-of-range limit did not run the target default: %s' % (st,))
+        image, _model = EepromClient(port=sitl.state_port).fetch()
+        assert image is not None, sitl.log_tail()
+        assert image[sitl_params.PARAMS_BY_NAME['TEMPERATURE_LIMIT'][0]] == 141, 'firmware rewrote the stored limit'
+    finally:
+        tx.stop()
+
+
 def test_thermal_limit_can_still_be_disabled(
         sitl_factory, state_stream, workdir):
     '''255 keeps the escape hatch: no derate however hot it gets'''

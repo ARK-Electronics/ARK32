@@ -161,13 +161,11 @@ def test_eeprom_boot_version_and_surviving_raw_values(sitl_factory, current_sche
 
 @pytest.mark.parametrize('key,raw,expected', [
     ('timingAdvance', 3, 34),
-    # Out of range fails SAFE, not open: settings.c coerces to this target's
-    # TARGET_DEFAULT_TEMPERATURE_LIMIT (105 for the ARK envelope SITL models)
-    # rather than to 255. Coercing to 255 also slipped past the DroneCAN
-    # parameter layer's own repair, whose accepted window includes 255, so the
-    # ESC booted with no thermal protection at all. 255 written deliberately
-    # still means disabled.
-    ('temperatureLimit', 69, 105), ('temperatureLimit', 141, 105),
+    # Out of range still fails SAFE (the limiter runs the target's
+    # TARGET_DEFAULT_TEMPERATURE_LIMIT, see test_duty_limits), but that is
+    # resolved at use: the byte itself is never rewritten, or a save would
+    # persist the coercion (firmware does not rewrite stored settings).
+    ('temperatureLimit', 69, 69), ('temperatureLimit', 141, 141),
     ('temperatureLimit', 255, 255),
     ('sineModeRange', 4, 5), ('sineModeRange', 26, 5),
     ('dragBrakeStrength', 0, 10), ('dragBrakeStrength', 11, 10),

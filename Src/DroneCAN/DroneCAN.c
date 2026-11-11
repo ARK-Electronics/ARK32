@@ -620,6 +620,14 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 		switch (p->vtype) {
 			case T_UINT8: {
 				uint8_t *ptr8 = (uint8_t *)p->ptr;
+				/* The table's min/max are wire units (amps, Kp, degrees). An
+				 * out-of-range set is rejected, not stored: current 300 A
+				 * would store 150 and read as "limit off". */
+				if (req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE ||
+				    req.value.integer_value < p->min_value || req.value.integer_value > p->max_value) {
+					accepted = 0;
+					break;
+				}
 				if (ptr8 == &eepromBuffer.motor_poles) {
 					/* Range-check the wire integer before narrowing: 256 would
 					 * wrap to zero. A rejected write leaves the stored value. */
@@ -673,6 +681,11 @@ static void handle_param_GetSet(CanardInstance *ins, CanardRxTransfer *transfer)
 						 * old kV - refresh them now (AM32 identity tables). */
 						applyMotorIdentitySettings();
 					}
+					break;
+				}
+				if (req.value.union_tag != UAVCAN_PROTOCOL_PARAM_VALUE_INTEGER_VALUE ||
+				    req.value.integer_value < p->min_value || req.value.integer_value > p->max_value) {
+					accepted = 0; /* e.g. a cell cutoff under 250 would wrap its stored byte */
 					break;
 				}
 				*ptr16 = req.value.integer_value;
