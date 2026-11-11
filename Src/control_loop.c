@@ -350,7 +350,53 @@ void setInput()
 		input = 0; /* RPM/duty overrides must also finish the stop. */
 	}
 	if (escMaySixStepThrottle()) {
-		if (input >= DSHOT_CMD_MAX + (80 * eepromBuffer.sine_startup)) {
+		/* brake_on_stop 2: tenKhzRoutine applies the active brake
+		 * (comStep(2) at active_brake_power) on every tick with input
+		 * <= DSHOT_CMD_MAX, whether or not the run has ended. Left running,
+		 * six-step keeps commutating underneath it: blind-step deadlines
+		 * call commutate() between brake ticks, and the brake waveform on
+		 * the floating phase passes the comparator often enough to keep
+		 * resetting the dead-reckoning budget, so the INTERVAL_TIMER stall
+		 * rail that ends every other stop never fires. On the ARK 4IN1
+		 * bench that held running=1 for 1.6 to 7.6 s after zero throttle at
+		 * ~6000 steps/s, an audible grind. The brake is already on, so end
+		 * the run here, the way the stall rail ends a commanded stop, and
+		 * do not start six-step under it.
+		 *
+		 * - Threshold: tenKhzRoutine's (input <= DSHOT_CMD_MAX), not the
+		 *   stop branch's (input < DSHOT_CMD_MAX without sine start).
+		 *   Input 47 brakes too and is reachable (DroneCAN RawCommand 1-4).
+		 * - Not with rc_car_reversing's prop brake: tenKhzRoutine applies
+		 *   that instead of comStep(2).
+		 * - Not in bidirectional mode, and not with a DShot direction
+		 *   change pending. Both decide "safe to reverse" from running and
+		 *   commutation_interval, which this stop sets to "stopped" at any
+		 *   rotor speed; under the brake nothing measures the rotor. Those
+		 *   paths keep main's behaviour until reversal readiness has its
+		 *   own criterion.
+		 * - A direction change that arrives after this stop waits
+		 *   ACTIVE_BRAKE_DIR_HOLD_MS (dshotApplyPendingDirection): parity
+		 *   with the 60-100 ms a brake 0/1 stop takes on the 4IN1 bench,
+		 *   not a claim that the rotor has stopped.
+		 * escMaySixStepThrottle() already means armed and not in sine. */
+		const uint8_t active_brake_owns_stop = eepromBuffer.brake_on_stop == 2 && !eepromBuffer.bidirectional_mode;
+		const uint8_t active_brake_stop =
+			active_brake_owns_stop && input <= DSHOT_CMD_MAX && !prop_brake_active && !dshot_direction_pending;
+		if (active_brake_stop) {
+			if (running) {
+				DISABLE_COM_TIMER_INT();
+				zc_deadline_armed = 0;
+				maskPhaseInterrupts();
+				escNoteStallOrDesync(1); /* running = 0, old_routine = 1, ARMED_IDLE */
+				active_brake_dir_hold_ms = ACTIVE_BRAKE_DIR_HOLD_MS;
+			}
+			/* The stop branch's per-frame state; input 47 skips that branch. */
+			old_routine = 1;
+			zero_crosses = 0;
+			bemfZcResetTrend();
+			duty_cycle_setpoint = 0;
+		}
+		if (input >= DSHOT_CMD_MAX + (80 * eepromBuffer.sine_startup) && !active_brake_stop) {
 			// Re-entry into six-step happens HERE, at input-frame rate -
 			// not in runtimeMotorModeTick. The episode-rail coast (holdoff
 			// or latched fault) must gate this branch or the mode tick's
@@ -420,12 +466,15 @@ void setInput()
 					old_routine = 1;
 					zero_crosses = 0;
 					bemfZcResetTrend();
-					if (eepromBuffer.brake_on_stop) {
+					/* With brake 2 outside bidirectional mode, tenKhzRoutine's
+					 * brake at active_brake_power is the brake. fullBrake()
+					 * here would short all three low sides on every input
+					 * frame between its ticks, at full speed now that the run
+					 * ends at once (and through a direction-change hold). */
+					if (eepromBuffer.brake_on_stop && !active_brake_owns_stop) {
 						fullBrake();
-					} else {
-						if (!prop_brake_active) {
-							allOff();
-						}
+					} else if (!eepromBuffer.brake_on_stop && !prop_brake_active) {
+						allOff();
 					}
 				}
 				if (eepromBuffer.rc_car_reversing && prop_brake_active) {

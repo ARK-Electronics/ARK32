@@ -153,7 +153,13 @@ void runtimeProcessDesyncCheck(void)
 				// after 2 revs instead of 4 when driving hard.
 				if (slow_avg_revs >= ((duty_cycle > 500) ? 2 : 4)) {
 					slow_avg_revs = 0;
-					escToOpenLoop();
+					/* setInput (an IRQ on F051) may have ended the run
+					 * since the check above; do not set running again. */
+					__disable_irq();
+					if (running) {
+						escToOpenLoop();
+					}
+					__enable_irq();
 				}
 			} else {
 				slow_avg_revs = 0;
@@ -560,6 +566,14 @@ void runtimeProcessAdcAndProtections(void)
 		}
 		if (adv_kerpm_hold_ms) {
 			adv_kerpm_hold_ms--;
+		}
+		if (active_brake_dir_hold_ms) {
+			/* setInput (an IRQ on F051) re-arms it: no lost update. */
+			__disable_irq();
+			if (active_brake_dir_hold_ms) {
+				active_brake_dir_hold_ms--;
+			}
+			__enable_irq();
 		}
 
 		PROCESS_ADC_FLAG = 0;
