@@ -78,7 +78,7 @@ void dshotApplyPendingDirection(void)
 	/* The sine caller has already stopped stepping and applied its static
 	 * stop/brake output. Its cached six-step duty need not reach zero:
 	 * the six-step slew is paused, so waiting for it can latch input off. */
-	if (dshot_direction_pending && !running && (!duty_cycle || escInSineStart())) {
+	if (dshot_direction_pending && !running && (!duty_cycle || escInSineStart()) && !active_brake_dir_hold_ms) {
 		/* Retire any outstanding commutation before changing its direction.
 		 * Keep input held at zero until all direction state is published. */
 		__disable_irq();

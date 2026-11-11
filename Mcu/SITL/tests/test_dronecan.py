@@ -146,13 +146,16 @@ def test_active_brake_at_input_47_ends_the_run(sitl_can_factory, state_stream, m
             assert send_for(5.0, int(8191 * 0.35), until=lambda: watch.values.get(1) == 1), 'never started'
             send_for(1.0, int(8191 * 0.35))
             assert watch.values.get(1) == 1, ('run did not hold', watch.values)
-            assert send_for(1.0, 2, until=lambda: watch.values.get(0) == 47), ('input 47 not reached', watch.values)
-            t0 = time.monotonic()
-            assert send_for(0.15, 2, until=lambda: watch.values.get(1) == 0), (
-                'running=1 %.2f s into input 47 under the active brake' % (time.monotonic() - t0))
             first = len(watch.events)
+            assert send_for(1.0, 2, until=lambda: watch.values.get(0) == 47), ('input 47 not reached', watch.values)
             send_for(0.5, 2)
-            restarted = [e for e in watch.events[first:] if e[1] == 1 and e[2] != 0]
+            events = watch.events[first:]
+            t_47 = next(ts for ts, i, v in events if i == 0 and v == 47)
+            t_stop = next((ts for ts, i, v in events if i == 1 and v == 0), None)
+            assert t_stop is not None, ('input 47 never ended the run under the active brake', watch.values)
+            # Stamps are SITL ns. The stop acts in the same setInput as the frame.
+            assert t_stop - t_47 < 5_000_000, 'running=1 %.1f ms into input 47' % ((t_stop - t_47) / 1e6)
+            restarted = [e for e in events if e[0] > t_stop and e[1] == 1 and e[2] != 0]
             assert not restarted, 'six-step restarted under the active brake at input 47'
     finally:
         for _ in range(10):

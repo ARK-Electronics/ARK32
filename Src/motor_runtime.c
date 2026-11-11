@@ -61,6 +61,7 @@ EEprom_t eepromBuffer;
 volatile uint32_t polling_mode_changeover;
 /* Missed-ZC blind-step fallback (bemf_zc.c) */
 volatile uint8_t zc_deadline_armed = 0;
+volatile uint8_t active_brake_dir_hold_ms;
 volatile uint8_t zc_blind_steps = 0;
 volatile uint32_t zc_blind_ticks = 0;
 volatile uint8_t zc_pre_seen = 0;
