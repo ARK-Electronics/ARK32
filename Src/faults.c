@@ -454,12 +454,16 @@ void faultPollGateDriver(void)
 		 * driver while latched, so a pilot zero clears the latch here. */
 		drv_nfault_low_polls = 0;
 		if (drv_nfault_latched && adjusted_input == 0 && !drv_nfault_zero_retry_used) {
+			drv_nfault_zero_retry_used = 1;
+			/* A stop brake wants the driver awake again (#130). Wake it here,
+			 * in main-loop context and BEFORE the clear: while latched the
+			 * 20 kHz brake is inert, so it can never meet a half-woken driver
+			 * and block inside the ISR on a second wake. */
+			if (armed && eepromBuffer.brake_on_stop) {
+				gateDriverWakeForLatchClear();
+			}
 			drv_nfault_latched = 0;
 			drv_nfault_cause = FAULT_NONE;
-			drv_nfault_zero_retry_used = 1;
-			/* Any brake wake happens here in main-loop context, not as a
-			 * blocking gateDriverEnsure() inside the 20 kHz ISR. */
-			gateDriverPoll();
 		}
 		return;
 	}

@@ -461,7 +461,9 @@ void runtimeThermalLimitTick(void)
 	static int32_t temp_q;
 	static uint8_t temp_seeded;
 
-	const int32_t sample_q = (int32_t)degrees_celsius << THERMAL_FILT_Q;
+	/* Multiply, not <<: the die reads below 0 C in the cold, and a left
+	 * shift of a negative value is undefined. */
+	const int32_t sample_q = (int32_t)degrees_celsius * (1 << THERMAL_FILT_Q);
 	if (!temp_seeded) {
 		/* Seed on the first sample: ramping up from 0 C would read cold
 		 * (i.e. unprotected) for the filter's settling time at boot. */

@@ -56,16 +56,8 @@ void gateDriverInit(void)
 	gd_nfault_grace = 0;
 }
 
-void gateDriverWakeBlocking(void)
+static void gd_raise_and_settle(void)
 {
-#	if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
-	if (faultGateDriverFaultActive()) {
-		return;
-	}
-#	endif
-	if (gate_driver_awake) {
-		return; /* already high; no delay */
-	}
 #	if defined(USE_DRV_ENABLE)
 	/*
 	 * DRV8350H wake sequence (required to avoid motor blip):
@@ -83,6 +75,31 @@ void gateDriverWakeBlocking(void)
 	gate_driver_awake = 1;
 	gd_nfault_grace = GD_NFAULT_GRACE_POLLS;
 }
+
+void gateDriverWakeBlocking(void)
+{
+#	if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
+	if (faultGateDriverFaultActive()) {
+		return;
+	}
+#	endif
+	if (gate_driver_awake) {
+		return; /* already high; no delay */
+	}
+	gd_raise_and_settle();
+}
+
+#	if defined(USE_DRV8328_NFAULT)
+/* F051 latch clear only: wake while the latch still holds tenKhzRoutine
+ * and setInput inert, so the brake's gateDriverEnsure() in the 20 kHz ISR
+ * can never find the driver mid-wake and nest a second blocking wake. */
+void gateDriverWakeForLatchClear(void)
+{
+	if (!gate_driver_awake) {
+		gd_raise_and_settle();
+	}
+}
+#	endif
 
 uint8_t gateDriverNfaultPinTrusted(void)
 {
