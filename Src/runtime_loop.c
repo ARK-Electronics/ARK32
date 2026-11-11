@@ -765,10 +765,6 @@ void runtimeProcessAdcAndProtections(void)
 		if (adv_kerpm_hold_ms) {
 			adv_kerpm_hold_ms--;
 		}
-#if defined(USE_DRV8328_NFAULT)
-		/* F051 nFAULT re-arm zero-hold clock (G431 runs it from tenKhzRoutine). */
-		faultGateDriverTick1kHz();
-#endif
 		if (active_brake_dir_hold_ms) {
 			/* setInput (an IRQ on F051) re-arms it: no lost update. */
 			__disable_irq();

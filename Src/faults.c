@@ -228,13 +228,6 @@ static uint8_t drv_nfault_low_polls;
  * sleep would otherwise re-latch and retry every ~1.3 ms, pulsing the brake
  * into the faulted bridge. Cleared by any non-zero demand. */
 static uint8_t drv_nfault_zero_retry_used;
-/* The pilot must hold zero this long, while latched, before the latch may
- * clear: a brief zero dip (e.g. Betaflight motor_stop at low stick) must not
- * re-arm a faulted motor. Same bar as the G431 latch (GD_REARM_ZERO_MS).
- * Counted in faultGateDriverTick1kHz() from the 1 kHz main-loop slot, which
- * keeps running while latched. */
-#	define DRV8328_REARM_ZERO_MS 100u
-static uint8_t drv_nfault_zero_ms;
 
 /* Same order as gd_hold_cut() (G431): publish the stop flags before touching
  * GPIO so a pending commutation cannot re-enable the bridge after allOff(),
@@ -358,14 +351,6 @@ void faultGateDriverTick1kHz(void)
 	} else {
 		gd_zero_ms = 0;
 	}
-#elif defined(USE_DRV8328_NFAULT)
-	if (drv_nfault_latched && adjusted_input == 0) {
-		if (drv_nfault_zero_ms < DRV8328_REARM_ZERO_MS) {
-			drv_nfault_zero_ms++;
-		}
-	} else {
-		drv_nfault_zero_ms = 0;
-	}
 #endif
 }
 
@@ -468,8 +453,7 @@ void faultPollGateDriver(void)
 		/* Asleep is the DRV8328 fault reset: gateDriverPoll() sleeps the
 		 * driver while latched, so a pilot zero clears the latch here. */
 		drv_nfault_low_polls = 0;
-		if (drv_nfault_latched && adjusted_input == 0 && drv_nfault_zero_ms >= DRV8328_REARM_ZERO_MS &&
-		    !drv_nfault_zero_retry_used) {
+		if (drv_nfault_latched && adjusted_input == 0 && !drv_nfault_zero_retry_used) {
 			drv_nfault_zero_retry_used = 1;
 			/* A stop brake wants the driver awake again (#130). Wake it here,
 			 * in main-loop context and BEFORE the clear: while latched the
@@ -504,7 +488,7 @@ void faultPollGateDriver(void)
 		}
 	} else {
 		drv_nfault_low_polls = 0;
-		if (drv_nfault_latched && adjusted_input == 0 && drv_nfault_zero_ms >= DRV8328_REARM_ZERO_MS) {
+		if (drv_nfault_latched && adjusted_input == 0) {
 			drv_nfault_latched = 0;
 			drv_nfault_cause = FAULT_NONE;
 		}
