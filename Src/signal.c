@@ -13,6 +13,7 @@
 #include "serial_telemetry.h"
 #include "sounds.h"
 #include "targets.h"
+#include "faults.h"
 int max_servo_deviation = 250;
 int servorawinput;
 uint16_t smallestnumber = 20000;
@@ -84,6 +85,12 @@ void computeServoInput()
 					servorawinput = 0;
 				}
 			}
+			/* The received pulse, not the slewed newinput: slewing through
+			 * neutral is not a pilot zero. */
+			fault_pilot_zero =
+				(uint8_t)(eepromBuffer.bidirectional_mode ? servorawinput + (servo_dead_band << 1) >= 1000 &&
+										    servorawinput <= 1000 + (servo_dead_band << 1)
+									  : servorawinput == 0);
 			signaltimeout = 0;
 		}
 	} else {

@@ -16,6 +16,7 @@
 #include "peripherals.h"
 #include "motor_runtime.h"
 #include "esc_state.h"
+#include "faults.h"
 #include <stddef.h>
 #if DRONECAN_SUPPORT
 #	include "DroneCAN/DroneCAN.h"
@@ -177,6 +178,7 @@ void computeDshotDMA()
 			if (tocheck > DSHOT_CMD_MAX) {
 				if (EDT_ARMED) {
 					newinput = tocheck;
+					fault_pilot_zero = 0;
 					dshotcommand = 0;
 					command_count = 0;
 					return;
@@ -198,6 +200,7 @@ void computeDshotDMA()
 				}
 #endif
 				newinput = 0;
+				fault_pilot_zero = 1; /* commands 1-47 leave it alone */
 				dshotcommand = 0;
 				command_count = 0;
 			}

@@ -118,20 +118,7 @@ void faultPollSignalTimeout(void)
 	}
 }
 
-#if DRONECAN_SUPPORT
-volatile uint8_t fault_input_failsafe_zero;
-#endif
-
-/* The input is zero because the pilot commanded it. The DroneCAN RawCommand
- * timeout also forces it to zero; that is not a pilot action. */
-static inline uint8_t faultPilotZero(void)
-{
-#if DRONECAN_SUPPORT
-	return (uint8_t)(adjusted_input == 0 && !fault_input_failsafe_zero);
-#else
-	return (uint8_t)(adjusted_input == 0);
-#endif
-}
+volatile uint8_t fault_pilot_zero;
 
 void faultUpdateBemfTimeoutPolicy(void)
 {
@@ -140,16 +127,17 @@ void faultUpdateBemfTimeoutPolicy(void)
 	 * bemf_timeout_happened is the BEMF stall count and, at ESC_STUCK_LATCH,
 	 * the stuck-rotor latch. Any zero input, a healthy run or a low sine
 	 * throttle forgives the count, never the latch: a motor that a fault
-	 * stopped must not restart on its own, so only pilot zero (or a power
-	 * cycle) clears it. The stall path and the latch write this byte from
-	 * interrupts (setInput runs in the DShot IRQ on F051, the CAN IRQ on
-	 * G431), so the pilot-zero test and the clear share one critical section:
-	 * a zero seen before a new latch must not erase it.
+	 * stopped must not restart on its own, so only a pilot zero (a stop the
+	 * protocol received, see fault_pilot_zero, once the processed input has
+	 * reached zero too) or a power cycle clears it. The stall path and the
+	 * latch write this byte from interrupts (setInput runs in the DShot IRQ on
+	 * F051, the CAN IRQ on G431), so the pilot-zero test and the clear share
+	 * one critical section: a zero seen before a new latch must not erase it.
 	 */
 	const uint8_t forgive = adjusted_input == 0 || zero_crosses > 1000 || (zero_crosses > 100 && adjusted_input < 200) ||
 				(eepromBuffer.sine_startup && adjusted_input < 160);
 	__disable_irq();
-	if (faultPilotZero() || (forgive && bemf_timeout_happened != ESC_STUCK_LATCH)) {
+	if ((fault_pilot_zero && adjusted_input == 0) || (forgive && bemf_timeout_happened != ESC_STUCK_LATCH)) {
 		bemf_timeout_happened = 0;
 	}
 	__enable_irq();

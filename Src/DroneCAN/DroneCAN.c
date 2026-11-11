@@ -605,10 +605,11 @@ static void set_input(uint16_t input)
 	}
 
 	const uint16_t unfiltered_input = (dronecan_armed || !eepromBuffer.can_require_arming) ? input : 0;
-	/* A zero while RawCommands are live is the pilot's (a commanded zero or
-	 * disarm). The timeout clears last_raw_command_us before its zero. */
-	if (unfiltered_input == 0 && canstats.last_raw_command_us != 0) {
-		fault_input_failsafe_zero = 0;
+	/* While RawCommands are live, a zero here is the pilot's: a commanded
+	 * zero or a disarm. The timeout clears last_raw_command_us before its
+	 * zero, so the failsafe never counts as one. */
+	if (canstats.last_raw_command_us != 0) {
+		fault_pilot_zero = (uint8_t)(unfiltered_input == 0);
 	}
 	const uint16_t filtered_input = Filter2P_apply(unfiltered_input, eepromBuffer.can_filter_hz, 1000);
 
@@ -1233,8 +1234,6 @@ void DroneCAN_update()
           loop's signal watchdog fed.
          */
 		canstats.last_raw_command_us = 0;
-		/* Not a pilot zero: a fault latch must hold through it. */
-		fault_input_failsafe_zero = 1;
 		Filter2P_reset(0);
 		set_input(0);
 	}
