@@ -162,3 +162,82 @@ def test_active_brake_at_input_47_ends_the_run(sitl_can_factory, state_stream, m
             node.broadcast(dronecan.uavcan.equipment.esc.RawCommand(cmd=[0]))
             node.spin(0.02)
         node.close()
+
+
+def test_rawcommand_timeout_does_not_clear_a_stuck_latch(sitl_can_factory, state_stream, mcast_uri):
+    """The RawCommand timeout zeroes the input; that is not a pilot zero.
+
+    After 250 ms without RawCommand the failsafe forces the input to zero.
+    That zero used to clear a stuck-rotor latch, so when the flight controller
+    resumed a nonzero command the motor restarted with no zero from the pilot.
+    The latch must hold through the gap and the resumed throttle, and clear
+    only on a received zero. ArmingStatus keeps flowing during the gap so the
+    signal watchdog stays fed and the ESC does not reset.
+    """
+    from sitl_gui_backend import EepromClient
+    from sitl_params import PARAMS_BY_NAME
+    from test_state_protocol import Watch, control_socket
+
+    esc_fault_stuck = 7  # Inc/esc_state.h
+    sitl = sitl_can_factory(extra_args=['--node-id', '10'], can_uri=mcast_uri, wait_s=1.0)
+    sim = state_stream(sitl)
+    _multicast_usable(sitl, sim)
+    ee = EepromClient(port=sitl.state_port)
+    ok, message = ee.set(PARAMS_BY_NAME['STUCK_ROTOR_PROTECTION'][0], [1])
+    assert ok, message
+    node = dronecan.make_node(mcast_uri, node_id=100, bitrate=1000000)
+    run = int(8191 * 0.35)
+    try:
+        with control_socket(sitl) as sock:
+            watch = Watch(sock, [(1, 'esc_state'), (1, 'running'), (1, 'bemf_timeout_happened'),
+                                 (2, 'adjusted_input')])
+            state = lambda: watch.values.get(0)
+
+            def send_for(seconds, raw, until=None, check=None):
+                end = time.monotonic() + seconds
+                nxt = 0.0
+                while time.monotonic() < end:
+                    node.spin(0)
+                    now = time.monotonic()
+                    if now >= nxt:
+                        nxt = now + 0.02
+                        node.broadcast(dronecan.uavcan.equipment.safety.ArmingStatus(status=255))
+                        if raw is not None:
+                            node.broadcast(dronecan.uavcan.equipment.esc.RawCommand(cmd=[raw]))
+                    watch.poll()
+                    if check is not None:
+                        check()
+                    if until is not None and until():
+                        return True
+                return until is None
+
+            def latched(what):
+                def check():
+                    v = watch.values
+                    assert v.get(0) == esc_fault_stuck and v.get(2) == 102 and v.get(1) == 0, (
+                        '%s: stuck latch lost (esc_state=%r bemf_timeout_happened=%r running=%r '
+                        'adjusted_input=%r)' % (what, v.get(0), v.get(2), v.get(1), v.get(3)))
+                return check
+
+            send_for(2.5, 0)
+            assert send_for(5.0, run, until=lambda: watch.values.get(1) == 1), 'never started'
+            send_for(1.0, run)
+            sim.set_stuck(1.0)
+            assert send_for(10.0, run, until=lambda: state() == esc_fault_stuck), (
+                'locked rotor never latched', watch.values)
+            sim.set_stuck(0.0)
+            send_for(0.5, run, check=latched('throttle after the jam'))
+            # RawCommand gap: the failsafe zeroes the input after 250 ms.
+            assert send_for(1.0, None, until=lambda: watch.values.get(3) == 0), (
+                'RawCommand timeout never zeroed the input', watch.values)
+            send_for(0.5, None, check=latched('RawCommand timeout'))
+            send_for(2.0, run, check=latched('throttle resumed after the timeout'))
+            # A received zero is the pilot's: it clears, and throttle starts again.
+            assert send_for(2.0, 0, until=lambda: state() != esc_fault_stuck), (
+                'a received zero did not clear the latch', watch.values)
+            assert send_for(5.0, run, until=lambda: watch.values.get(1) == 1), 'no start after the clear'
+    finally:
+        for _ in range(10):
+            node.broadcast(dronecan.uavcan.equipment.esc.RawCommand(cmd=[0]))
+            node.spin(0.02)
+        node.close()

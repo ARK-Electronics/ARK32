@@ -43,6 +43,12 @@ void faultPollSignalTimeout(void);
  */
 void faultUpdateBemfTimeoutPolicy(void);
 
+/* DroneCAN builds: 1 from a RawCommand timeout (the failsafe forces the
+ * input to zero) until a live RawCommand or disarm gives a zero of the
+ * pilot's own. A failsafe zero forgives stall counts but never clears a
+ * fault latch. */
+extern volatile uint8_t fault_input_failsafe_zero;
+
 /*
  * Main-loop stall: INTERVAL_TIMER_COUNT has run past the fixed stall window
  * while running. Increments bemf_timeout_happened and restarts ZC search.
