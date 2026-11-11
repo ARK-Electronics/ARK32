@@ -288,7 +288,7 @@ void runtimeProcessDesyncCheck(void)
 			// fills the bucket in a few events and latches the ESC during
 			// the recovery it should be riding out. Live regime test only.
 			if (zc_at_desync > 100) {
-#if defined(USE_DRV_NFAULT)
+#if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
 				/* This branch already ends the failed run. A gate-driver
 				 * warning plus that loss must not start another powered try. */
 				if (((!eepromBuffer.bidirectional_mode && input > DSHOT_CMD_MAX) || commutation_interval > 1000) &&
@@ -765,6 +765,10 @@ void runtimeProcessAdcAndProtections(void)
 		if (adv_kerpm_hold_ms) {
 			adv_kerpm_hold_ms--;
 		}
+#if defined(USE_DRV8328_NFAULT)
+		/* F051 nFAULT correlation clock (G431 runs it from tenKhzRoutine). */
+		faultGateDriverTick1kHz();
+#endif
 		if (active_brake_dir_hold_ms) {
 			/* setInput (an IRQ on F051) re-arms it: no lost update. */
 			__disable_irq();

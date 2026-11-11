@@ -6,8 +6,13 @@
 
 #include "faults.h"
 
-#define USE_DRV_NFAULT
-#define USE_DRV_ENABLE
+#ifdef HOST_DRV8328
+/* ARK 4IN1 (F051) branch: same policy, DRV8328 specifics. */
+#	define USE_DRV8328_NFAULT
+#else
+#	define USE_DRV_NFAULT
+#	define USE_DRV_ENABLE
+#endif
 #define BEMF_STALL_TICKS 45000u
 #define DSHOT_CMD_MAX 47u
 #define DSHOT_MIN_THROTTLE 48u
@@ -25,7 +30,8 @@ static uint8_t running = 1, stepper_sine, prop_brake_active;
 static uint16_t input = 500, adjusted_input = 500;
 static uint16_t duty_cycle_setpoint = 700, duty_cycle = 700, last_duty_cycle = 700;
 static uint16_t battery_voltage = 3200;
-static int16_t actual_current = 2000, degrees_celsius = 40;
+static int16_t actual_current = 2000;
+__attribute__((unused)) static int16_t degrees_celsius = 40; /* DRV8350 label only */
 static uint32_t zero_crosses = 200;
 static uint32_t desync_happened;
 static uint8_t acq_fail_desyncs;
@@ -104,6 +110,20 @@ void gateDriverFaultResetPulse(void)
 {
 	reset_calls++;
 }
+#ifdef HOST_DRV8328
+static uint8_t armed;
+static struct {
+	uint8_t brake_on_stop;
+} eepromBuffer;
+static unsigned latch_clear_wakes, latch_clear_wake_while_latched;
+static void gateDriverWakeForLatchClear(void)
+{
+	/* Must run while the latch still holds the 20 kHz loop inert. */
+	latch_clear_wakes++;
+	latch_clear_wake_while_latched += faultGateDriverFaultActive();
+	awake = 1;
+}
+#endif
 void faultDesyncEpisodeCharge(desync_episode_kind_t kind)
 {
 	(void)kind;
@@ -169,6 +189,117 @@ static void latch_fault(void)
 	assert_latched();
 }
 
+#ifdef HOST_DRV8328
+int main(int argc, char **argv)
+{
+	assert(argc >= 2);
+	const char *scenario = argv[1];
+	if (!strcmp(scenario, "held_pin_rides_through")) {
+		/* A sag the DRV8328 recovers from by itself must not stop the motor. */
+		nfault_port.IDR = 0;
+		poll_ms(10000);
+		assert_no_cut();
+		nfault_port.IDR = 1;
+		poll_ms(10000);
+		assert_no_cut();
+	} else if (!strcmp(scenario, "fault_stall")) {
+		assert(argc == 3);
+		actual_current = (int16_t)atoi(argv[2]);
+		latch_fault();
+		assert(esc_state == ESC_FAULT_STUCK);
+	} else if (!strcmp(scenario, "recent_fault_stall")) {
+		nfault_port.IDR = 0;
+		poll_ms(8);
+		nfault_port.IDR = 1;
+		poll_ms(25);
+		stall();
+		assert_latched();
+	} else if (!strcmp(scenario, "expired_fault_stall") || !strcmp(scenario, "age_saturation")) {
+		nfault_port.IDR = 0;
+		poll_ms(8);
+		nfault_port.IDR = 1;
+		poll_ms(!strcmp(scenario, "age_saturation") ? 65550 : 1000);
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 1);
+	} else if (!strcmp(scenario, "ordinary_stall_restarts")) {
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 1);
+	} else if (!strcmp(scenario, "commanded_stop_does_not_latch")) {
+		input = 0;
+		adjusted_input = 0;
+		nfault_port.IDR = 0;
+		faultPollGateDriver();
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 0);
+	} else if (!strcmp(scenario, "untrusted_pin_ignored")) {
+		pin_trusted = 0;
+		nfault_port.IDR = 0;
+		poll_ms(1000);
+		assert_no_cut();
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 1);
+	} else if (!strcmp(scenario, "sleep_voids_old_evidence")) {
+		/* Sleep resets the DRV8328: a fault seen before it is not evidence after. */
+		nfault_port.IDR = 0;
+		poll_ms(8);
+		nfault_port.IDR = 1;
+		gateDriverSleep();
+		poll_ms(1);
+		awake = 1;
+		poll_ms(5);
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 1);
+	} else if (!strcmp(scenario, "release_does_not_restart")) {
+		latch_fault();
+		nfault_port.IDR = 1;
+		poll_ms(10000);
+		assert_latched();
+	} else if (!strcmp(scenario, "sleep_does_not_clear_at_throttle")) {
+		latch_fault();
+		gateDriverSleep();
+		poll_ms(10000);
+		assert_latched();
+	} else if (!strcmp(scenario, "zero_needs_sleep")) {
+		/* Pilot zero clears only once the driver has slept (the DRV8328 reset). */
+		latch_fault();
+		adjusted_input = 0;
+		poll_ms(1000);
+		assert_latched();
+		gateDriverSleep();
+		poll_ms(1);
+		assert(!faultGateDriverFaultActive());
+		assert(!running && !stepper_sine);
+		assert(restart_calls == 0 && wake_calls == 0 && latch_clear_wakes == 0);
+	} else if (!strcmp(scenario, "brake_wakes_before_clear")) {
+		armed = 1;
+		eepromBuffer.brake_on_stop = 2;
+		latch_fault();
+		adjusted_input = 0;
+		gateDriverSleep();
+		poll_ms(1);
+		assert(!faultGateDriverFaultActive());
+		assert(latch_clear_wakes == 1 && latch_clear_wake_while_latched == 1);
+		assert(awake);
+		/* A fault that persists after the reset is evidence again, not a cut. */
+		nfault_port.IDR = 0;
+		poll_ms(1000);
+		assert(!faultGateDriverFaultActive());
+	} else if (!strcmp(scenario, "prop_brake_cannot_keep_latch_awake")) {
+		prop_brake_active = 1;
+		latch_fault();
+		faultPollGateDriver();
+		assert_latched();
+	} else {
+		assert(!"unknown scenario");
+	}
+	return 0;
+}
+#else
 int main(int argc, char **argv)
 {
 	assert(argc >= 2);
@@ -301,3 +432,4 @@ int main(int argc, char **argv)
 	}
 	return 0;
 }
+#endif

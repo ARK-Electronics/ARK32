@@ -222,14 +222,15 @@ void faultErrorCountReset(void);
  * before restarting. A coincident/recent nFAULT latches PWM off until pilot
  * demand has remained zero for 100 ms. Pin release never restarts a run.
  *
- * DRV8328: every nFAULT already disables its bridge. Cut and latch until
- * zero throttle; nSLEEP sleep resets the hardware fault.
+ * DRV8328 (ARK 4IN1): the same policy. A short supply sag recovers in the
+ * DRV8328 and rides through; a latched DRV8328 fault kills the bridge, so the
+ * drive-loss hook latches until pilot zero, and sleep resets the driver.
  * Call from the main loop. No-op without the pin.
  */
 void faultPollGateDriver(void);
 
 /* Called ONLY when an existing BEMF failure path has decided to stop or
- * forcibly commutate. Returns 1 if a DRV8350 fault inhibits that restart.
+ * forcibly commutate. Returns 1 if a gate-driver fault inhibits that restart.
  * A warning alone must never call this hook or end a run. */
 uint8_t faultGateDriverLatchOnDriveLoss(void);
 

@@ -209,25 +209,25 @@ static void gd_note_retry(uint16_t now)
 
 #elif defined(USE_DRV8328_NFAULT)
 /*
- * DRV8328 (ARK 4IN1). Every nFAULT disables the gate drivers (no OTW-only
- * report, no 8 ms VDS retry). VDS / OTSD / GDF stay latched until nSLEEP
- * is pulled low — sleep-on-idle already does that. Firmware: cut PWM, latch
- * stuck until zero throttle. Ignore the pin while asleep (nSLEEP UVLO).
+ * DRV8328 (ARK 4IN1): the same policy as the DRV8350 above. nFAULT is
+ * evidence, never a cut on its own. A supply (VM) undervoltage recovers by
+ * itself, so a short sag rides through as it does on main. The faults that
+ * stay latched in the DRV8328 (thermal shutdown, and per the DRV8329 table
+ * the bootstrap and GVDD undervoltages) leave the bridge dead until an nSLEEP
+ * reset pulse; the motor controller then loses the motor, and its stall /
+ * hard-desync paths ask faultGateDriverLatchOnDriveLoss() before restarting.
+ * A fault seen within DRV8328_FAULT_RECENT_MS turns that restart into a
+ * latch: PWM off, driver asleep (the reset), until pilot zero. A fault that
+ * stopped the motor never restarts it on its own. The pin is ignored while
+ * asleep (nSLEEP UVLO) and for 8 polls after wake.
  */
 static uint8_t drv_nfault_latched;
 static fault_id_t drv_nfault_cause;
-/* Consecutive trusted low samples of PB5 before the software latch. One
- * sample is not a fault: PB5 sits beside the DShot input (PB4) and is only
- * qualified 8 polls after wake. 4 main-loop polls is ~100 us; a real DRV8328
- * fault has already disabled the gates in hardware, so this only decides
- * when the firmware stops commanding the bridge. */
-#	define DRV8328_NFAULT_POLLS 4u
-static uint8_t drv_nfault_low_polls;
-/* One re-arm per zero-throttle episode. Clearing wakes the driver again
- * when armed with brake_on_stop (#130), so a fault that persists through
- * sleep would otherwise re-latch and retry every ~1.3 ms, pulsing the brake
- * into the faulted bridge. Cleared by any non-zero demand. */
-static uint8_t drv_nfault_zero_retry_used;
+/* Correlation window only, as GD_FAULT_RECENT_MS: never cuts by itself. */
+#	define DRV8328_FAULT_RECENT_MS 100u
+static uint8_t drv_nfault_seen;
+/* Saturates just past the window, so an old fault cannot become recent. */
+static uint8_t drv_nfault_age_ms;
 
 /* Same order as gd_hold_cut() (G431): publish the stop flags before touching
  * GPIO so a pending commutation cannot re-enable the bridge after allOff(),
@@ -351,6 +351,10 @@ void faultGateDriverTick1kHz(void)
 	} else {
 		gd_zero_ms = 0;
 	}
+#elif defined(USE_DRV8328_NFAULT)
+	if (drv_nfault_age_ms <= DRV8328_FAULT_RECENT_MS) {
+		drv_nfault_age_ms++;
+	}
 #endif
 }
 
@@ -380,6 +384,27 @@ uint8_t faultGateDriverLatchOnDriveLoss(void)
 		cause = FAULT_GD_OTSD;
 	}
 	gd_enter_latch(cause);
+	return 1;
+#elif defined(USE_DRV8328_NFAULT)
+	if (drv_nfault_latched) {
+		return 1;
+	}
+	/* Same gate as the DRV8350: a commanded coast is normal. */
+	if (adjusted_input == 0 || input < DSHOT_MIN_THROTTLE) {
+		return 0;
+	}
+	if (gateDriverNfaultPinTrusted() && (NFAULT_PORT->IDR & NFAULT_PIN) == 0u) {
+		drv_nfault_seen = 1;
+		drv_nfault_age_ms = 0;
+	}
+	if (!drv_nfault_seen || drv_nfault_age_ms > DRV8328_FAULT_RECENT_MS) {
+		return 0;
+	}
+	/* Voltage selects a label, never the action. */
+	drv_nfault_cause = (battery_voltage > 0u && battery_voltage < 800u) ? FAULT_GD_UVLO : FAULT_GD_UNKNOWN;
+	drv_nfault_latched = 1;
+	drv_nfault_cut();
+	escToFaultStuck();
 	return 1;
 #else
 	return 0;
@@ -446,15 +471,12 @@ void faultPollGateDriver(void)
 	}
 
 #elif defined(USE_DRV8328_NFAULT)
-	if (adjusted_input != 0) {
-		drv_nfault_zero_retry_used = 0;
-	}
-	if (!gateDriverIsAwake()) {
-		/* Asleep is the DRV8328 fault reset: gateDriverPoll() sleeps the
-		 * driver while latched, so a pilot zero clears the latch here. */
-		drv_nfault_low_polls = 0;
-		if (drv_nfault_latched && adjusted_input == 0 && !drv_nfault_zero_retry_used) {
-			drv_nfault_zero_retry_used = 1;
+	if (drv_nfault_latched) {
+		/* Hold the bridge off; gateDriverPoll() sleeps the driver, which is
+		 * the DRV8328 fault reset. Pilot zero, once asleep, clears the latch.
+		 * Pin release alone never restarts a run. */
+		drv_nfault_cut();
+		if (!gateDriverIsAwake() && adjusted_input == 0) {
 			/* A stop brake wants the driver awake again (#130). Wake it here,
 			 * in main-loop context and BEFORE the clear: while latched the
 			 * 20 kHz brake is inert, so it can never meet a half-woken driver
@@ -462,36 +484,21 @@ void faultPollGateDriver(void)
 			if (armed && eepromBuffer.brake_on_stop) {
 				gateDriverWakeForLatchClear();
 			}
-			drv_nfault_latched = 0;
+			drv_nfault_seen = 0;
 			drv_nfault_cause = FAULT_NONE;
+			drv_nfault_latched = 0;
 		}
 		return;
 	}
-
+	if (!gateDriverIsAwake()) {
+		/* Sleep resets the DRV8328: evidence from before it is void. */
+		drv_nfault_seen = 0;
+		return;
+	}
 	gateDriverNfaultGraceTick();
-	if (!gateDriverNfaultPinTrusted()) {
-		drv_nfault_low_polls = 0;
-		return;
-	}
-
-	if ((NFAULT_PORT->IDR & NFAULT_PIN) == 0u) {
-		if (!drv_nfault_latched) {
-			if (++drv_nfault_low_polls < DRV8328_NFAULT_POLLS) {
-				return;
-			}
-			drv_nfault_cause = (battery_voltage > 0u && battery_voltage < 800u) ? FAULT_GD_UVLO : FAULT_GD_UNKNOWN;
-			drv_nfault_latched = 1;
-		}
-		drv_nfault_cut();
-		if (escGetState() != ESC_FAULT_STUCK) {
-			escToFaultStuck();
-		}
-	} else {
-		drv_nfault_low_polls = 0;
-		if (drv_nfault_latched && adjusted_input == 0) {
-			drv_nfault_latched = 0;
-			drv_nfault_cause = FAULT_NONE;
-		}
+	if (gateDriverNfaultPinTrusted() && (NFAULT_PORT->IDR & NFAULT_PIN) == 0u) {
+		drv_nfault_seen = 1;
+		drv_nfault_age_ms = 0;
 	}
 #endif
 }
@@ -877,7 +884,7 @@ void faultHandleBemfIntervalStall(void)
 		 * zero, running still set while BEMF dies — INTERVAL_TIMER expiry
 		 * is expected, not a stall. Skip trip count / log / episode charge. */
 		const uint8_t commanded_stop = (input < 48);
-#if defined(USE_DRV_NFAULT)
+#if defined(USE_DRV_NFAULT) || defined(USE_DRV8328_NFAULT)
 		if (!commanded_stop && faultGateDriverLatchOnDriveLoss()) {
 			return;
 		}
