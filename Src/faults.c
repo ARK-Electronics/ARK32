@@ -136,11 +136,15 @@ void faultUpdateBemfTimeoutPolicy(void)
 	 */
 	const uint8_t forgive = adjusted_input == 0 || zero_crosses > 1000 || (zero_crosses > 100 && adjusted_input < 200) ||
 				(eepromBuffer.sine_startup && adjusted_input < 160);
-	__disable_irq();
-	if ((fault_pilot_zero && adjusted_input == 0) || (forgive && bemf_timeout_happened != ESC_STUCK_LATCH)) {
-		bemf_timeout_happened = 0;
+	/* Mask IRQs only when there is something to clear (re-tested inside), so
+	 * a healthy start and run never pay for it. */
+	if (bemf_timeout_happened != 0 && (forgive || fault_pilot_zero)) {
+		__disable_irq();
+		if ((fault_pilot_zero && adjusted_input == 0) || (forgive && bemf_timeout_happened != ESC_STUCK_LATCH)) {
+			bemf_timeout_happened = 0;
+		}
+		__enable_irq();
 	}
-	__enable_irq();
 	if (adjusted_input == 0) {
 		// Zero throttle is pilot intervention: clear the episode rail the
 		// same way the legacy latch clears. Deliberately NOT on
