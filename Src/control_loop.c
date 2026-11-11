@@ -393,6 +393,26 @@ void setInput()
 		}
 
 		if (input < DSHOT_CMD_MAX + (80 * eepromBuffer.sine_startup)) {
+			/* brake_on_stop 2: tenKhzRoutine applies the active brake
+			 * (comStep(2) at active_brake_power) on every tick with input
+			 * <= DSHOT_CMD_MAX, whether or not the run has ended. Left
+			 * running, six-step keeps commutating underneath it: blind-step
+			 * deadlines call commutate() between brake ticks, and the brake
+			 * waveform on the floating phase passes the comparator often
+			 * enough to keep resetting the dead-reckoning budget, so the
+			 * INTERVAL_TIMER stall rail that ends every other stop never
+			 * fires. On the ARK 4IN1 bench that held running=1 for 1.6 to
+			 * 7.6 s after zero throttle at ~6000 steps/s, an audible grind.
+			 * The brake is already on, so end the run here, the way the
+			 * stall rail ends a commanded stop. */
+			if (eepromBuffer.brake_on_stop == 2 && input <= DSHOT_CMD_MAX && running && !stepper_sine && escIsArmed()) {
+				DISABLE_COM_TIMER_INT();
+				zc_deadline_armed = 0;
+				maskPhaseInterrupts();
+				zero_crosses = 0;
+				bemfZcResetTrend();
+				escNoteStallOrDesync(1); /* running = 0, old_routine = 1, ARMED_IDLE */
+			}
 			if (play_tone_flag != 0) {
 				switch (play_tone_flag) {
 					case 1:
