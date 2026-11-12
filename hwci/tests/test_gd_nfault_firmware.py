@@ -63,6 +63,7 @@ def drv8328_firmware_executable(tmp_path_factory):
     "expired_fault_stall",
     "age_saturation",
     "manual_zero_clear",
+    "synthetic_zero_does_not_clear",
     "zero_waits_for_reset_sleep",
     "brake_wakes_before_clear",
     "release_does_not_restart",
@@ -102,6 +103,7 @@ def test_actual_stall_latches_independently_of_current(gd_firmware_executable, c
     "release_does_not_restart",
     "sleep_does_not_clear_at_throttle",
     "zero_needs_sleep",
+    "synthetic_zero_does_not_clear",
     "brake_wakes_before_clear",
     "prop_brake_cannot_keep_latch_awake",
 ])

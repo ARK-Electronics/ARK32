@@ -794,6 +794,7 @@ void runtimeProcessAdcAndProtections(void)
 	if (newinput > 2000) {
 		newinput = 2000;
 	}
+	fault_pilot_zero = (uint8_t)(newinput == 0);
 #endif
 }
 

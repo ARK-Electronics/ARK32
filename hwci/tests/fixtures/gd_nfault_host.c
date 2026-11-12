@@ -41,6 +41,15 @@ static uint32_t interval_timer_count;
 volatile uint32_t fault_stall_trips;
 volatile uint8_t fault_run_established = 1;
 volatile uint8_t fault_acq_resist_events;
+volatile uint8_t fault_pilot_zero;
+
+/* A stop the input protocol received (see Inc/faults.h), as opposed to a zero
+ * the firmware makes itself. */
+static void pilot_zero(void)
+{
+	adjusted_input = 0;
+	fault_pilot_zero = 1;
+}
 
 static uint8_t awake = 1, pin_trusted = 1, esc_state;
 static unsigned off_calls, mask_calls, reset_calls, restart_calls, wake_calls;
@@ -265,7 +274,7 @@ int main(int argc, char **argv)
 	} else if (!strcmp(scenario, "zero_needs_sleep")) {
 		/* Pilot zero clears only once the driver has slept (the DRV8328 reset). */
 		latch_fault();
-		adjusted_input = 0;
+		pilot_zero();
 		poll_ms(1000);
 		assert_latched();
 		gateDriverSleep();
@@ -275,11 +284,23 @@ int main(int argc, char **argv)
 		assert(!faultGateDriverFaultActive());
 		assert(!running && !stepper_sine);
 		assert(restart_calls == 0 && wake_calls == 0 && latch_clear_wakes == 0);
+	} else if (!strcmp(scenario, "synthetic_zero_does_not_clear")) {
+		/* A zero the firmware makes itself (CAN timeout, DShot command frame,
+		 * direction hold) is not a pilot zero, even after the reset sleep. */
+		latch_fault();
+		adjusted_input = 0;
+		gateDriverSleep();
+		poll_ms(1000);
+		assert_latched();
+		fault_pilot_zero = 1;
+		poll_ms(1);
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 0);
 	} else if (!strcmp(scenario, "brake_wakes_before_clear")) {
 		armed = 1;
 		eepromBuffer.brake_on_stop = 2;
 		latch_fault();
-		adjusted_input = 0;
+		pilot_zero();
 		gateDriverSleep();
 		poll_ms(GD_LATCH_SLEEP_MS);
 		assert(!faultGateDriverFaultActive());
@@ -361,16 +382,28 @@ int main(int argc, char **argv)
 		poll_ms(1000);
 		assert_latched();
 		assert(!awake);
-		adjusted_input = 0;
+		pilot_zero();
 		faultPollGateDriver();
 		assert(!faultGateDriverFaultActive());
 		assert(!running && !stepper_sine && !awake);
 		assert(restart_calls == 0 && wake_calls == 0 && reset_calls == 0);
 		assert(latch_clear_wakes == 0);
+	} else if (!strcmp(scenario, "synthetic_zero_does_not_clear")) {
+		/* A zero the firmware makes itself (CAN RawCommand timeout, DShot
+		 * command frame, direction hold) is not a pilot zero. */
+		latch_fault();
+		poll_ms(1000);
+		adjusted_input = 0;
+		poll_ms(1000);
+		assert_latched();
+		fault_pilot_zero = 1;
+		faultPollGateDriver();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 0 && wake_calls == 0);
 	} else if (!strcmp(scenario, "zero_waits_for_reset_sleep")) {
 		/* A zero in the same instant as the latch waits out the reset sleep. */
 		latch_fault();
-		adjusted_input = 0;
+		pilot_zero();
 		faultPollGateDriver();
 		assert_latched();
 		assert(!awake);
@@ -385,7 +418,7 @@ int main(int argc, char **argv)
 		latch_fault();
 		poll_ms(1000);
 		assert(!awake);
-		adjusted_input = 0;
+		pilot_zero();
 		faultPollGateDriver();
 		assert(!faultGateDriverFaultActive());
 		assert(latch_clear_wakes == 1 && latch_clear_wake_while_latched == 1);

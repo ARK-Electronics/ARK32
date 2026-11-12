@@ -71,6 +71,17 @@ void faultPollSignalTimeout(void);
 void faultUpdateBemfTimeoutPolicy(void);
 
 /*
+ * 1 while the last command the input protocol received is a stop: DShot
+ * MOTOR_STOP, a DroneCAN RawCommand of 0 or a flight-controller disarm, a
+ * servo pulse at the low end (or in the 3D neutral band), an ADC input of 0.
+ * Throttle commands set it to 0. Zeros the firmware makes itself do not
+ * touch it: the DroneCAN RawCommand timeout, DShot command frames (1-47), a
+ * pending direction change, the 3D reversal interlock, servo slew or input
+ * filters. Only a pilot zero may clear a fault latch.
+ */
+extern volatile uint8_t fault_pilot_zero;
+
+/*
  * Main-loop stall: INTERVAL_TIMER_COUNT has run past the fixed stall window
  * while running. Increments bemf_timeout_happened and restarts ZC search.
  */

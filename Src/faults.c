@@ -427,7 +427,7 @@ void faultPollGateDriver(void)
 		 * slept, clears the latch, with no hold on the zero (as on the 4IN1).
 		 * Pin release alone never restarts a run. */
 		gateDriverSleep();
-		if (adjusted_input == 0 && gd_latch_sleep_ms >= GD_LATCH_SLEEP_MS) {
+		if (fault_pilot_zero && adjusted_input == 0 && gd_latch_sleep_ms >= GD_LATCH_SLEEP_MS) {
 			/* As on the 4IN1: wake a stop brake's driver here, in main-loop
 			 * context and BEFORE the clear, while the latch still holds the
 			 * 20 kHz brake inert, so the ISR never meets a half-woken driver. */
@@ -489,7 +489,7 @@ void faultPollGateDriver(void)
 		 * the DRV8328 fault reset. Pilot zero, once the driver has slept,
 		 * clears the latch. Pin release alone never restarts a run. */
 		drv_nfault_cut();
-		if (adjusted_input == 0 && gd_latch_sleep_ms >= GD_LATCH_SLEEP_MS) {
+		if (fault_pilot_zero && adjusted_input == 0 && gd_latch_sleep_ms >= GD_LATCH_SLEEP_MS) {
 			/* A stop brake wants the driver awake again (#130). Wake it here,
 			 * in main-loop context and BEFORE the clear: while latched the
 			 * 20 kHz brake is inert, so it can never meet a half-woken driver
@@ -599,11 +599,57 @@ void faultPollSignalTimeout(void)
 	}
 }
 
+volatile uint8_t fault_pilot_zero;
+
 void faultUpdateBemfTimeoutPolicy(void)
 {
 #ifndef BRUSHED_MODE
-	if ((zero_crosses > 1000) || (adjusted_input == 0)) {
-		bemf_timeout_happened = 0;
+	/*
+	 * bemf_timeout_happened is the BEMF stall count and, at ESC_STUCK_LATCH,
+	 * the stuck-rotor latch. Any zero input, a healthy run or a low sine
+	 * throttle forgives the count, never the latch: a motor that a fault
+	 * stopped must not restart on its own, so only a pilot zero (a stop the
+	 * protocol received, see fault_pilot_zero, once the processed input has
+	 * reached zero too) or a power cycle clears it. The stall path and the
+	 * latch write this byte from interrupts (setInput runs in the DShot IRQ on
+	 * F051, the CAN IRQ on G431), so the pilot-zero test and the clear share
+	 * one critical section: a zero seen before a new latch must not erase it.
+	 */
+#	if defined(MCU_G431)
+	/*
+	 * ARK 12S CAN free-run restarts thrash in the acquisition window
+	 * (zero_crosses reset each stall) while still commanded throttle.
+	 * Accumulating bemf_timeout_happened across those kicks latched
+	 * stuck_rotor after a few start* cycles on the stand. F051 4IN1 does
+	 * not show this with the same shared rails. Forgive acquisition-only
+	 * stalls; keep the counter once the loop is established (zc > 100).
+	 *
+	 * Time-bounded on purpose. A truly locked rotor never reaches
+	 * zc >= 100, so an unbounded forgive disables stuck_rotor entirely
+	 * during acquisition: a jammed 12S prop would re-kick forever.
+	 *
+	 * A plain throttle gate does not work either: it has to sit above the
+	 * highest tier being characterized, and the startup matrix reaches
+	 * input 447 at its 20% tier, so any threshold low enough to be useful
+	 * lands mid-sweep. Bound the grace in time instead -- start attempts
+	 * are short and separated by zero throttle, a jam is continuous.
+	 *
+	 * Like every forgive below, it never clears a latch.
+	 */
+	const uint8_t acq_grace = zero_crosses < 100 && acq_grace_ms < ACQ_GRACE_MS_MAX && adjusted_input < ACQ_GRACE_MAX_INPUT;
+#	else
+	const uint8_t acq_grace = 0;
+#	endif
+	const uint8_t forgive = adjusted_input == 0 || zero_crosses > 1000 || (zero_crosses > 100 && adjusted_input < 200) ||
+				(eepromBuffer.sine_startup && adjusted_input < 160) || acq_grace;
+	/* Mask IRQs only when there is something to clear (re-tested inside), so
+	 * a healthy start and run never pay for it. */
+	if (bemf_timeout_happened != 0 && (forgive || fault_pilot_zero)) {
+		__disable_irq();
+		if ((fault_pilot_zero && adjusted_input == 0) || (forgive && bemf_timeout_happened != ESC_STUCK_LATCH)) {
+			bemf_timeout_happened = 0;
+		}
+		__enable_irq();
 	}
 	if (adjusted_input == 0) {
 		// Zero throttle is pilot intervention: clear the episode rail the
@@ -619,42 +665,6 @@ void faultUpdateBemfTimeoutPolicy(void)
 		desync_episode_bucket = 0;
 		desync_restart_holdoff_ms = 0;
 		acq_fail_desyncs = 0;
-	}
-#	if defined(MCU_G431)
-	/*
-	 * ARK 12S CAN free-run restarts thrash in the acquisition window
-	 * (zero_crosses reset each stall) while still commanded throttle.
-	 * Accumulating bemf_timeout_happened across those kicks latched
-	 * stuck_rotor after a few start* cycles on the stand. F051 4IN1 does
-	 * not show this with the same shared rails. Forgive acquisition-only
-	 * stalls; keep the counter once the loop is established (zc > 100).
-	 *
-	 * Time-bounded on purpose. A truly locked rotor never reaches
-	 * zc >= 100, so an unbounded clear disables stuck_rotor entirely
-	 * during acquisition -- and, because ESC_STUCK_LATCH is itself carried
-	 * in bemf_timeout_happened, silently wipes an already-latched stuck
-	 * fault too (bench 2026-08: 16 FAULT_STUCK entries that all recovered
-	 * within one tick). A jammed 12S prop would re-kick forever.
-	 *
-	 * A plain throttle gate does not work either: it has to sit above the
-	 * highest tier being characterized, and the startup matrix reaches
-	 * input 447 at its 20% tier, so any threshold low enough to be useful
-	 * lands mid-sweep. Bound the grace in time instead -- start attempts
-	 * are short and separated by zero throttle, a jam is continuous.
-	 */
-	/* Never forgive a latch: the grace clock rearms on every established
-	 * run (zero_crosses >= 100), so an episode latch from that run would
-	 * be wiped on the next pass once zero_crosses resets. */
-	if (bemf_timeout_happened != ESC_STUCK_LATCH && zero_crosses < 100 && acq_grace_ms < ACQ_GRACE_MS_MAX &&
-	    adjusted_input < ACQ_GRACE_MAX_INPUT) {
-		bemf_timeout_happened = 0;
-	}
-#	endif
-	if (zero_crosses > 100 && adjusted_input < 200) {
-		bemf_timeout_happened = 0;
-	}
-	if (eepromBuffer.sine_startup && adjusted_input < 160) {
-		bemf_timeout_happened = 0;
 	}
 
 #	if defined(MCU_G431)

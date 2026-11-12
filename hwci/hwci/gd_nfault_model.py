@@ -88,6 +88,7 @@ class GdNfaultMachine:
 
     pin_low: int = 0
     adjusted_input: int = 0
+    pilot_zero: int = 0  # fault_pilot_zero: a stop the protocol received
     input: int = 0
     running: int = 0
     stepper_sine: int = 0
@@ -170,7 +171,7 @@ class GdNfaultMachine:
             self.hold_cut()
             self.sleep_calls += 1
             self.awake = 0
-            if self.adjusted_input == 0 and self.latch_sleep_ms >= GD["GD_LATCH_SLEEP_MS"]:
+            if self.pilot_zero and self.adjusted_input == 0 and self.latch_sleep_ms >= GD["GD_LATCH_SLEEP_MS"]:
                 if self.armed and self.brake_on_stop:
                     self.awake = 1
                     self.latch_clear_wakes += 1

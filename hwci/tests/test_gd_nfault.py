@@ -191,7 +191,7 @@ def test_first_zero_after_sleep_clears_latch(pin_low):
     m.run_ms(1000)
     assert m.state == GD_NF_LATCH
     assert not m.awake
-    m.adjusted_input = 0
+    m.adjusted_input, m.pilot_zero = 0, 1
     m.step()
     assert m.state == GD_NF_IDLE
     assert not m.fault_seen
@@ -203,7 +203,7 @@ def test_first_zero_after_sleep_clears_latch(pin_low):
 def test_zero_in_the_same_instant_waits_for_the_reset_sleep():
     m = _spinning(pin_low=1)
     assert m.drive_loss()
-    m.adjusted_input = 0
+    m.adjusted_input, m.pilot_zero = 0, 1
     m.step()
     assert m.state == GD_NF_LATCH
     assert not m.awake
@@ -217,9 +217,9 @@ def test_throttle_up_between_tick_and_poll_keeps_latch():
     m = _spinning(pin_low=1)
     assert m.drive_loss()
     m.run_ms(1000)
-    m.adjusted_input = 0
+    m.adjusted_input, m.pilot_zero = 0, 1
     m.tick_ms(1)
-    m.adjusted_input = 500
+    m.adjusted_input, m.pilot_zero = 500, 0
     m.step()
     assert m.state == GD_NF_LATCH
     assert m.running == 0
@@ -239,11 +239,25 @@ def test_stop_brake_wakes_the_driver_at_the_clear():
     assert m.drive_loss()
     m.run_ms(1000)
     assert not m.awake
-    m.adjusted_input = 0
+    m.adjusted_input, m.pilot_zero = 0, 1
     m.step()
     assert m.state == GD_NF_IDLE
     assert m.awake
     assert m.latch_clear_wakes == 1
+
+
+def test_a_zero_the_firmware_makes_does_not_clear_the_latch():
+    """CAN RawCommand timeout, DShot command frames and direction hold zero
+    the input without a stop from the pilot."""
+    m = _spinning(pin_low=1)
+    assert m.drive_loss()
+    m.run_ms(1000)
+    m.adjusted_input = 0
+    m.run_ms(1000)
+    assert m.state == GD_NF_LATCH
+    m.pilot_zero = 1
+    m.step()
+    assert m.state == GD_NF_IDLE
 
 
 def test_sleep_clears_nonlatched_warning_and_history():
