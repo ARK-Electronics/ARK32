@@ -118,11 +118,32 @@ void faultPollSignalTimeout(void)
 	}
 }
 
+volatile uint8_t fault_pilot_zero;
+
 void faultUpdateBemfTimeoutPolicy(void)
 {
 #ifndef BRUSHED_MODE
-	if ((zero_crosses > 1000) || (adjusted_input == 0)) {
-		bemf_timeout_happened = 0;
+	/*
+	 * bemf_timeout_happened is the BEMF stall count and, at ESC_STUCK_LATCH,
+	 * the stuck-rotor latch. Any zero input, a healthy run or a low sine
+	 * throttle forgives the count, never the latch: a motor that a fault
+	 * stopped must not restart on its own, so only a pilot zero (a stop the
+	 * protocol received, see fault_pilot_zero, once the processed input has
+	 * reached zero too) or a power cycle clears it. The stall path and the
+	 * latch write this byte from interrupts (setInput runs in the DShot IRQ on
+	 * F051, the CAN IRQ on G431), so the pilot-zero test and the clear share
+	 * one critical section: a zero seen before a new latch must not erase it.
+	 */
+	const uint8_t forgive = adjusted_input == 0 || zero_crosses > 1000 || (zero_crosses > 100 && adjusted_input < 200) ||
+				(eepromBuffer.sine_startup && adjusted_input < 160);
+	/* Mask IRQs only when there is something to clear (re-tested inside), so
+	 * a healthy start and run never pay for it. */
+	if (bemf_timeout_happened != 0 && (forgive || fault_pilot_zero)) {
+		__disable_irq();
+		if ((fault_pilot_zero && adjusted_input == 0) || (forgive && bemf_timeout_happened != ESC_STUCK_LATCH)) {
+			bemf_timeout_happened = 0;
+		}
+		__enable_irq();
 	}
 	if (adjusted_input == 0) {
 		// Zero throttle is pilot intervention: clear the episode rail the
@@ -138,12 +159,6 @@ void faultUpdateBemfTimeoutPolicy(void)
 		desync_episode_bucket = 0;
 		desync_restart_holdoff_ms = 0;
 		acq_fail_desyncs = 0;
-	}
-	if (zero_crosses > 100 && adjusted_input < 200) {
-		bemf_timeout_happened = 0;
-	}
-	if (eepromBuffer.sine_startup && adjusted_input < 160) {
-		bemf_timeout_happened = 0;
 	}
 
 	if (adjusted_input < 150) { // startup duty cycle should be low enough to not burn motor

@@ -14,9 +14,6 @@
 volatile esc_state_t esc_state = ESC_DISARMED;
 volatile uint16_t esc_illegal_edge_count = 0;
 
-/* stuck-rotor latch value used by setInput / faultHandleStuckRotorIfNeeded */
-#define ESC_STUCK_LATCH 102
-
 /*
  * Allowed named-transition edges: bit N set => may enter esc_state_t N.
  * Self-transitions are always treated as allowed in escTransitionAllowed().
