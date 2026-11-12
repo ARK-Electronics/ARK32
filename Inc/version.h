@@ -10,7 +10,8 @@
  * Update this file for new releases.
  */
 #define VERSION_MAJOR 32
-#define VERSION_MINOR 0
+#define VERSION_MINOR 1
+#define VERSION_TAG "beta1"
 
 /* EEPROM layout revision. 4: max_ramp became an exact duty rate (no
  * pack-voltage scaling). The byte layout is unchanged from 3 and the
