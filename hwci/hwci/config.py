@@ -112,6 +112,9 @@ class Profile:
     steady_tail_fraction: float = 0.5   # use last half of a steady segment
     demag_commutation_spike: float = 3.0  # x median commutation interval
     demag_rpm_drop_fraction: float = 0.25  # rpm fell >25% while throttle high
+    # ESC-reported mechanical rpm above which the run aborts as a runaway
+    # (commutation outrunning the rotor), at any throttle. None = off.
+    esc_max_rpm: float | None = None
     # Offline fallback only: on a rig the motor's pole pairs come from
     # RigConfig (recorded into the run meta), not from the test profile.
     pole_pairs: int = 7
@@ -173,6 +176,7 @@ def profile_from_dict(d: dict) -> Profile:
         steady_tail_fraction=float(d.get("steady_tail_fraction", 0.5)),
         demag_commutation_spike=float(d.get("demag_commutation_spike", 3.0)),
         demag_rpm_drop_fraction=float(d.get("demag_rpm_drop_fraction", 0.25)),
+        esc_max_rpm=(float(d["esc_max_rpm"]) if d.get("esc_max_rpm") is not None else None),
         pole_pairs=int(d.get("pole_pairs", 7)),
         smoke_gates=_smoke_gates_from(d.get("smoke_gates")),
         require_eeprom={str(k): int(v)

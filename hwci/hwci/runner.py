@@ -109,9 +109,18 @@ class LiveDesyncWatch:
     """
 
     def __init__(self, *, rpm_drop_fraction: float = 0.25,
-                 min_drive_throttle: float = 0.20):
+                 min_drive_throttle: float = 0.20,
+                 esc_max_rpm: float | None = None,
+                 pole_pairs: int = 7):
         self.rpm_drop_fraction = rpm_drop_fraction
         self.min_drive_throttle = min_drive_throttle
+        # Runaway guard: the firmware's own speed estimate far above what
+        # the motor can reach means the commutation is outrunning the rotor
+        # (12S CAN 2026-11-12: 60k-440k eRPM reported, no thrust, ~3 A, and
+        # it survived zero throttle, so the current limits never fired).
+        self.esc_max_rpm = esc_max_rpm
+        self.pole_pairs = max(1, int(pole_pairs))
+        self._overspeed_streak = 0
         self._ref_rpm: float | None = None
         self._prev_throttle = 0.0
         self._spin_established = False
@@ -137,6 +146,16 @@ class LiveDesyncWatch:
                 erpm = int(raw.get("e_rpm") or 0) * 100
             if erpm > 3000 or running:
                 self._spin_established = True
+            # Any throttle, zero included: a runaway does not stop on its own.
+            # Three consecutive samples, so one corrupt SWD read cannot abort.
+            if self.esc_max_rpm and running and erpm / self.pole_pairs > self.esc_max_rpm:
+                self._overspeed_streak += 1
+                if self._overspeed_streak >= 3:
+                    raise DesyncTripped(
+                        f"runaway: ESC reports {erpm / self.pole_pairs:.0f} rpm, above "
+                        f"esc_max_rpm {self.esc_max_rpm:.0f} at throttle={thr:.2f}")
+            else:
+                self._overspeed_streak = 0
             if bemf >= _BEMF_STUCK_LATCH:
                 raise DesyncTripped(
                     f"stuck-rotor latch bemf_timeout={bemf}")
@@ -366,7 +385,9 @@ def run_profile(profile: Profile, sources: Sources, *,
     prev_throttle = 0.0
     desync_watch = LiveDesyncWatch(
         rpm_drop_fraction=float(getattr(profile, "demag_rpm_drop_fraction", 0.25)
-                                or 0.25))
+                                or 0.25),
+        esc_max_rpm=getattr(profile, "esc_max_rpm", None),
+        pole_pairs=int(getattr(profile, "pole_pairs", 7) or 7))
     try:
         for seg in profile.segments:
             n = max(1, round(seg.duration_s * profile.sample_rate_hz))
