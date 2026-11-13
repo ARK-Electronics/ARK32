@@ -136,7 +136,6 @@
 #	define NUM_LEDS 1   // APA102 RGB LED count
 #	define BRIGHTNESS 3 // 0..31
 #	define RESET 0	     // unused, required for a clean build
-#	define TARGET_MIN_BEMF_COUNTS 3
 #endif
 
 /*
