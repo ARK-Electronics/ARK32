@@ -223,9 +223,9 @@ $$($(2)_BASENAME).elf: $(GENERATED_EEPROM) $(if $(NATIVE_$(1)),,arm_sdk_check) $
 # we copy debug.elf to give us a constant debug target for vscode
 # this means the debug button will always debug the last target built
 	$(if $(SVD_$(1)),$(QUIET)$(CP) -f $$(SVD_$(1)) $(OBJ)/debug.svd)
-# also copy the openocd.cfg from the MCU directory to obj/openocd.cfg for auto config of Cortex-Debug
-# in vscode
-	$(if $(NATIVE_$(1)),,$(QUIET)$(CP) -f Mcu$(DSEP)$(call lc,$(1))$(DSEP)openocd.cfg $(OBJ)$(DSEP)openocd.cfg > $(NUL))
+# also copy the MCU directory openocd.cfg to obj/openocd.cfg for auto config
+# of Cortex-Debug in vscode; skipped when the MCU has no openocd.cfg
+	$(if $(NATIVE_$(1)),,$(if $(wildcard Mcu$(DSEP)$(call lc,$(1))$(DSEP)openocd.cfg),$(QUIET)$(CP) -f Mcu$(DSEP)$(call lc,$(1))$(DSEP)openocd.cfg $(OBJ)$(DSEP)openocd.cfg > $(NUL)))
 endef
 $(foreach MCU,$(MCU_TYPES),$(foreach TARGET,$(TARGETS_$(MCU)), $(eval $(call CREATE_BUILD_TARGET,$(MCU),$(TARGET)))))
 
