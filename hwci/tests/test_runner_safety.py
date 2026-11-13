@@ -240,6 +240,24 @@ def test_live_desync_aborts_on_esc_reported_overspeed_at_any_throttle():
         w.check(0.0, None, PerfSample(raw=dict(run)))
 
 
+def test_live_desync_overspeed_counts_fresh_samples_not_ticks():
+    """The perf poller can return one cached sample to several runner ticks;
+    a single corrupt read seen three times must not abort, and three fresh
+    reads inside 50 ms must not either."""
+    from hwci.runner import LiveDesyncWatch, DesyncTripped
+    from hwci.perf import PerfSample
+
+    w = LiveDesyncWatch(esc_max_rpm=12000, pole_pairs=7)
+    bad = PerfSample(raw={"bemf_timeout_state": 0, "running": 1, "e_rpm": 9000, "zc_blind_steps": 0},
+                     host_monotonic=10.0)
+    for _ in range(5):
+        w.check(0.10, None, bad)  # the same cached acquisition
+    for k in range(3):  # three fresh reads only 20 ms apart
+        w.check(0.10, None, PerfSample(raw=dict(bad.raw), host_monotonic=10.01 + 0.01 * k))
+    with pytest.raises(DesyncTripped, match="runaway"):
+        w.check(0.10, None, PerfSample(raw=dict(bad.raw), host_monotonic=10.08))
+
+
 def test_live_desync_overspeed_ignores_single_glitches_and_is_off_by_default():
     from hwci.runner import LiveDesyncWatch
     from hwci.perf import PerfSample

@@ -120,7 +120,11 @@ class LiveDesyncWatch:
         # it survived zero throttle, so the current limits never fired).
         self.esc_max_rpm = esc_max_rpm
         self.pole_pairs = max(1, int(pole_pairs))
-        self._overspeed_streak = 0
+        # Fresh-sample tracking: the perf poller can hand the same cached
+        # sample to several runner ticks, so count acquisitions, not ticks.
+        self._overspeed_n = 0
+        self._overspeed_t0: float | None = None
+        self._overspeed_last: object = None
         self._ref_rpm: float | None = None
         self._prev_throttle = 0.0
         self._spin_established = False
@@ -147,15 +151,32 @@ class LiveDesyncWatch:
             if erpm > 3000 or running:
                 self._spin_established = True
             # Any throttle, zero included: a runaway does not stop on its own.
-            # Three consecutive samples, so one corrupt SWD read cannot abort.
-            if self.esc_max_rpm and running and erpm / self.pole_pairs > self.esc_max_rpm:
-                self._overspeed_streak += 1
-                if self._overspeed_streak >= 3:
-                    raise DesyncTripped(
-                        f"runaway: ESC reports {erpm / self.pole_pairs:.0f} rpm, above "
-                        f"esc_max_rpm {self.esc_max_rpm:.0f} at throttle={thr:.2f}")
-            else:
-                self._overspeed_streak = 0
+            # Needs 3 distinct perf acquisitions spanning >= 50 ms, so one
+            # corrupt SWD read, or one cached sample seen by several ticks,
+            # cannot abort.
+            if self.esc_max_rpm:
+                last = self._overspeed_last
+                if pf.host_monotonic is not None:
+                    fresh = last is None or getattr(last, "host_monotonic", None) != pf.host_monotonic
+                else:
+                    fresh = pf is not last  # holding `last` keeps its id from being reused
+                if fresh:
+                    self._overspeed_last = pf
+                    mech = erpm / float(self.pole_pairs)
+                    if running and mech > self.esc_max_rpm:
+                        now = pf.host_monotonic
+                        if self._overspeed_n == 0:
+                            self._overspeed_t0 = now
+                        self._overspeed_n += 1
+                        span_ok = (now is None or self._overspeed_t0 is None
+                                   or now - self._overspeed_t0 >= 0.05)
+                        if self._overspeed_n >= 3 and span_ok:
+                            raise DesyncTripped(
+                                f"runaway: ESC reports {mech:.0f} rpm, above "
+                                f"esc_max_rpm {self.esc_max_rpm:.0f} at throttle={thr:.2f}")
+                    else:
+                        self._overspeed_n = 0
+                        self._overspeed_t0 = None
             if bemf >= _BEMF_STUCK_LATCH:
                 raise DesyncTripped(
                     f"stuck-rotor latch bemf_timeout={bemf}")
@@ -363,6 +384,7 @@ def run_profile(profile: Profile, sources: Sources, *,
     period = 1.0 / profile.sample_rate_hz
     rows: list[dict] = []
     aborted: str | None = None
+    runaway = False
 
     sources.throttle.arm()
     if sources.perf_reader is not None:
@@ -387,7 +409,9 @@ def run_profile(profile: Profile, sources: Sources, *,
         rpm_drop_fraction=float(getattr(profile, "demag_rpm_drop_fraction", 0.25)
                                 or 0.25),
         esc_max_rpm=getattr(profile, "esc_max_rpm", None),
-        pole_pairs=int(getattr(profile, "pole_pairs", 7) or 7))
+        # the rig's pole pairs are authoritative (cli.py records them in meta);
+        # the profile's is the offline fallback
+        pole_pairs=int((meta or {}).get("pole_pairs") or getattr(profile, "pole_pairs", 7) or 7))
     try:
         for seg in profile.segments:
             n = max(1, round(seg.duration_s * profile.sample_rate_hz))
@@ -449,17 +473,24 @@ def run_profile(profile: Profile, sources: Sources, *,
             prev_throttle = seg.throttle
     except DesyncTripped as e:
         aborted = f"desync: {e}"
+        runaway = str(e).startswith("runaway")
     except StandSafetyTripped as e:
         aborted = f"safety: {e}"
     finally:
         try:
             sources.throttle.disarm()
+            if runaway:
+                # Zero throttle does not end a runaway (the commutation keeps
+                # outrunning a stopped rotor). Drop the signal so the ESC's
+                # signal-loss reset clears it.
+                sources.throttle.quiesce()
         finally:
             if perf_poller is not None:
                 perf_poller.close()
 
     full_meta = {
         "profile": profile.name,
+        "runaway_quiesced": runaway,
         "sample_rate_hz": profile.sample_rate_hz,
         "n_samples": len(rows),
         "aborted": aborted,
