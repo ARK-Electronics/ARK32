@@ -23,6 +23,11 @@
  *   ZC_MISSED_VIRTUAL  blind step at the expected crossing (#137, the ARK 4IN1
  *                      policy): the interval stays the estimate, and the timer
  *                      restarts at the grace spent.
+ *   ZC_MISSED_VIRTUAL_LOWDUTY  VIRTUAL, but at low duty (adjusted duty <= ARR/4)
+ *                      the deadline grace is a whole CI instead of CI/2. The
+ *                      late rising crossings this board reads at low duty are
+ *                      then accepted rather than blind-stepped, while
+ *                      mid/high-throttle dropouts keep #137's handling.
  *
  * The 12S board reads low-speed crossings with an off-window offset. Rising
  * crossings are accepted ~1.47 CI after the previous one and falling ones
@@ -33,17 +38,25 @@
  *   slowing prop, false early accepts follow, and the interval collapses:
  *   ~1.2 restarts per start, and runaways that survived zero throttle.
  * - ELAPSED and NONE both ran with 0 restarts and 0 dead starts.
- * ELAPSED keeps ride-through at high throttle; the bench A/B against NONE
- * (thrust and current at idle and 0.10) decides the default.
+ * In SITL (ideal comparator, ARK_G4_12S_SITL_CAN, injected 1-2 window
+ * dropouts at mid throttle), VIRTUAL bridges every dropout. ELAPSED cascades
+ * (7 blind steps, CI x2-x30, desync restarts: the cascade #137 fixed), and
+ * NONE restarts. VIRTUAL_LOWDUTY is VIRTUAL above a quarter duty. The bench
+ * A/B (ELAPSED / NONE / VIRTUAL_LOWDUTY: low-duty starts, plus high-throttle
+ * holds and snaps) decides the default.
  */
 #define ZC_MISSED_NONE 0
 #define ZC_MISSED_ELAPSED 1
 #define ZC_MISSED_VIRTUAL 2
+#define ZC_MISSED_VIRTUAL_LOWDUTY 3
+/* VIRTUAL and VIRTUAL_LOWDUTY share #137's blind-step placement */
+#define ZC_G431_VIRTUAL_PLACEMENT (ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL || ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL_LOWDUTY)
 #ifndef ZC_G431_MISSED_POLICY
-#	define ZC_G431_MISSED_POLICY ZC_MISSED_ELAPSED
+#	define ZC_G431_MISSED_POLICY ZC_MISSED_VIRTUAL_LOWDUTY
 #endif
-#if ZC_G431_MISSED_POLICY != ZC_MISSED_NONE && ZC_G431_MISSED_POLICY != ZC_MISSED_ELAPSED && ZC_G431_MISSED_POLICY != ZC_MISSED_VIRTUAL
-#	error "ZC_G431_MISSED_POLICY must be ZC_MISSED_NONE (0), ZC_MISSED_ELAPSED (1) or ZC_MISSED_VIRTUAL (2)"
+#if ZC_G431_MISSED_POLICY != ZC_MISSED_NONE && ZC_G431_MISSED_POLICY != ZC_MISSED_ELAPSED && ZC_G431_MISSED_POLICY != ZC_MISSED_VIRTUAL && \
+	ZC_G431_MISSED_POLICY != ZC_MISSED_VIRTUAL_LOWDUTY
+#	error "ZC_G431_MISSED_POLICY must be ZC_MISSED_NONE (0), ZC_MISSED_ELAPSED (1), ZC_MISSED_VIRTUAL (2) or ZC_MISSED_VIRTUAL_LOWDUTY (3)"
 #endif
 /* Which policy this image runs, for the bench (nm / a debugger read). */
 const uint8_t zc_g431_missed_policy __attribute__((used)) = ZC_G431_MISSED_POLICY;
@@ -53,7 +66,7 @@ RAM_FUNC void PeriodElapsedCallback()
 	uint8_t blind = 0;
 	/* Blind step only: INTERVAL_TIMER at this commutation, the grace
 	 * already spent since the virtual crossing it follows. */
-#if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL
+#if ZC_G431_VIRTUAL_PLACEMENT
 	uint32_t blind_since_crossing = 0;
 #endif
 	DISABLE_COM_TIMER_INT(); // disable interrupt
@@ -113,7 +126,7 @@ RAM_FUNC void PeriodElapsedCallback()
 		// its crossing lands before the next deadline (1.5 CI after the
 		// previous crossing), and a stopped one still exhausts the
 		// budget, which counts real time since the last accepted crossing.
-#if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL
+#if ZC_G431_VIRTUAL_PLACEMENT
 		maskPhaseInterrupts();
 		uint32_t elapsed = INTERVAL_TIMER_COUNT;
 		if (elapsed > 65535u) {
@@ -156,7 +169,7 @@ RAM_FUNC void PeriodElapsedCallback()
 		}
 	}
 	zcSchedCommutate(blind);
-#if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL
+#if ZC_G431_VIRTUAL_PLACEMENT
 	if (blind) {
 		// ZC_MISSED_VIRTUAL only.
 		// A real crossing's commutation comes waitTime after it, and the
@@ -185,12 +198,22 @@ RAM_FUNC void PeriodElapsedCallback()
 			// instead of drifting one advance later each step. The 16-bit clamp shrinks the grace
 			// above CI ~40000, but the trust rail restarts long before a
 			// healthy loop runs that slow.
-#if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL
+#if ZC_G431_VIRTUAL_PLACEMENT
 			uint32_t since_crossing = blind ? blind_since_crossing : waitTime;
 			if (since_crossing > commutation_interval) {
 				since_crossing = commutation_interval;
 			}
-			uint32_t deadline = (commutation_interval - since_crossing) + (commutation_interval >> 1);
+			uint32_t grace = commutation_interval >> 1;
+#	if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL_LOWDUTY
+			// Low duty: this board reads rising crossings ~0.47 CI late
+			// (accepted ~1.47-1.51 CI after the previous one at <= 17 %
+			// duty; 1.30 at 0.20 throttle), right on a CI/2 grace. Give
+			// them a whole CI.
+			if ((uint32_t)adjusted_duty_cycle * 4u <= (uint32_t)tim1_arr) {
+				grace = commutation_interval;
+			}
+#	endif
+			uint32_t deadline = (commutation_interval - since_crossing) + grace;
 #else
 			uint32_t deadline = (commutation_interval - waitTime) + (commutation_interval >> 1);
 #endif
@@ -206,7 +229,7 @@ RAM_FUNC void PeriodElapsedCallback()
 
 RAM_FUNC void interruptRoutine()
 {
-#if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL
+#if ZC_G431_VIRTUAL_PLACEMENT
 	if (INTERVAL_TIMER_COUNT < zc_blank_until) { // 0 = no blanking
 		return;				     // a blind commutation's demag window (PeriodElapsedCallback)
 	}
@@ -375,7 +398,7 @@ RAM_FUNC void interruptRoutine()
 	 * escalation. Demag authority is handled separately in control_loop.c.
 	 */
 	zc_blind_ticks = 0;
-#if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL
+#if ZC_G431_VIRTUAL_PLACEMENT
 	zc_blank_until = 0; // the timer restarts at 0 below
 	zc_blind_timer_start = 0;
 #endif
