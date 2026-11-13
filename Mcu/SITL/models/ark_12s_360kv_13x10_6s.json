@@ -1,0 +1,24 @@
+{
+  "motor": {
+    "kv": 360,
+    "poles": 14,
+    "resistance": 0.07,
+    "inductance": 4.0e-5,
+    "inertia": 2.5e-4,
+    "damping": 3.0e-6,
+    "static_friction": 0.006,
+    "load_k_omega2": 1.45e-6
+  },
+  "battery": { "voltage": 23.0, "resistance": 0.02 },
+  "sim": {
+    "isr_read_ns": 120,
+    "comparator_noise_mv": 5.0,
+    "comparator_phase_rc_ns": 200,
+    "comparator_neutral_rc_ns": 200,
+    "comparator_min_toggle_ns": 30,
+    "comparator_offwin_lag_rise_deg": 28.0,
+    "comparator_offwin_lag_fall_deg": 9.0,
+    "comparator_turnon_settle_ns": 1000,
+    "comparator_turnoff_high_ns": 2000
+  }
+}

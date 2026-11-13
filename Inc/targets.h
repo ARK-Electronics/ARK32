@@ -61,6 +61,40 @@
 #	define TARGET_DEFAULT_INPUT_TYPE 0
 #endif
 
+/*
+ * ARK_G4_12S_SITL_CAN: the SITL running the ARK 12S CAN (G431) zero-crossing
+ * front end. ZC_FRONTEND_G431 (Inc/zc_frontend.h) selects the G431 fragment
+ * and the G431 branches of the shared motor code, which AM32_SITL_CAN runs
+ * stock. Pair it with a model that sets the sim.comparator_offwin_* front end
+ * (Mcu/SITL/models/ark_12s_360kv_13x10_6s.json) to reproduce the 12S board's
+ * PWM-window dependent comparator; see Mcu/SITL/tests/test_g4_low_duty_starts.py.
+ */
+#ifdef ARK_G4_12S_SITL_CAN
+#	define FIRMWARE_NAME "ARK 12S SITL"
+#	define FILE_NAME "ARK_G4_12S_SITL_CAN"
+#	define ZC_FRONTEND_G431 1
+/* ARK_G431_CAN motor-path values (that block, below): ramp regime ceilings,
+ * factory ramp, and the poll-to-interrupt changeover. */
+#	define RAMP_SPEED_LOW_RPM 3
+#	define RAMP_SPEED_HIGH_RPM 8
+#	define TARGET_DEFAULT_MAX_RAMP 5
+#	define POLLING_MODE_THRESHOLD 5000
+#	define DRONECAN_SUPPORT 1
+#	define DRONECAN_NODE_NAME "org.am32.sitl"
+#	define HARDWARE_GROUP_SITL_A
+#	define DEAD_TIME 80
+#	define TARGET_STALL_PROTECTION_INTERVAL 20000
+#	define TARGET_VOLTAGE_DIVIDER 110
+#	define MILLIVOLT_PER_AMP 20
+#	define CURRENT_OFFSET 0
+#	define CURRENT_AUTO_OFFSET
+#	define TARGET_MIN_BEMF_COUNTS 3
+#	define TARGET_DEFAULT_TEMPERATURE_LIMIT 105
+#	define TARGET_DEFAULT_CURRENT_LIMIT 100
+#	define TARGET_DEFAULT_TEMP_DERATE_BAND 15
+#	define TARGET_DEFAULT_INPUT_TYPE 0
+#endif
+
 #ifdef ARK_G431_CAN
 #	define FIRMWARE_NAME "ARK_G431_CAN"
 #	define FILE_NAME "ARK_G431_CAN"

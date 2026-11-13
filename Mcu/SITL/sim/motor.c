@@ -124,6 +124,10 @@ static struct {
 	double v_cmp[3];
 	double vn_cmp;
 	double noise_cmp;
+	// G4 front end (sim.comparator_offwin_*): is a PWM phase's high side
+	// on, and when that last changed
+	bool g4_on;
+	uint64_t g4_edge_ns;
 	// persistent per-phase body-diode conduction state: 0 = off,
 	// +1 = high-side diode (terminal at vbus+vf, current <= 0),
 	// -1 = low-side diode (terminal at -vf, current >= 0). A diode
@@ -141,6 +145,8 @@ static struct {
 		uint32_t sign_viol;   // conducting diode with wrong-sign current
 		uint32_t ev_overflow; // sub-step event budget exhausted
 		uint32_t comp_edges;  // comparator output toggles
+		uint32_t g4_offwin;   // G4 front end: steps read lagged (off-window/turn-on)
+		uint32_t g4_turnoff;  // G4 front end: steps forced HIGH (turn-off transient)
 	} diag;
 	// last electromagnetic torque, for the audio stream
 	double tau;
@@ -857,6 +863,46 @@ void motor_step(uint64_t now_ns, uint32_t dt_ns)
 	const double v_neutral = m.vn_cmp;
 	const double v_float = m.v_cmp[sitl_comp_phase];
 	double diff_mv = (v_neutral - v_float) * 1000.0;
+	if (sitl_cfg.sim.comparator_offwin_lag_rise_deg > 0 || sitl_cfg.sim.comparator_offwin_lag_fall_deg > 0 ||
+	    sitl_cfg.sim.comparator_turnoff_high_ns > 0) {
+		/*
+		  ARK 12S CAN (G431) front end, phenomenological: fitted to the
+		  bench map of raw COMP VALUE against PWM phase and time since the
+		  last crossing (360 kV + 13x10x3 on 6S, 7-17 % duty). There the
+		  settled on-window read the crossing on time, the off-window kept
+		  the pre-crossing level ~28 deg past a rising crossing and ~9 deg
+		  past a falling one, and the turn-off transient read HIGH. Only
+		  in six-step drive (a phase in complementary PWM).
+		 */
+		bool pwm_phase = false, on = false;
+		for (int p = 0; p < 3; p++) {
+			if (sitl_phase_mode[p] == SITL_PHASE_PWM) {
+				pwm_phase = true;
+				on = on || hi[p];
+			}
+		}
+		if (on != m.g4_on) {
+			m.g4_on = on;
+			m.g4_edge_ns = now_ns;
+		}
+		const uint64_t since = now_ns - m.g4_edge_ns;
+		if (pwm_phase && !on && since < sitl_cfg.sim.comparator_turnoff_high_ns) {
+			diff_mv = 1000.0; // turn-off transient: output HIGH
+			m.diag.g4_turnoff++;
+		} else if (pwm_phase && (!on || since < sitl_cfg.sim.comparator_turnon_settle_ns)) {
+			const double th = thetae + sitl_comp_phase * (TWO_PI / 3.0);
+			double ph = fmod(th, TWO_PI);
+			if (ph < 0) {
+				ph += TWO_PI;
+			}
+			// trap_shape crosses rising at 0 and falling at pi
+			const bool near_rising = ph >= 1.5 * M_PI || ph < 0.5 * M_PI;
+			const double lag_deg =
+				near_rising ? sitl_cfg.sim.comparator_offwin_lag_rise_deg : sitl_cfg.sim.comparator_offwin_lag_fall_deg;
+			diff_mv = -1000.0 * m.ke * m.omega * trap_shape(th - lag_deg * (M_PI / 180.0));
+			m.diag.g4_offwin++;
+		}
+	}
 	if (sitl_cfg.sim.comparator_noise_mv > 0) {
 		const double r = (double)rand_r(&m.rand_seed) / RAND_MAX - 0.5;
 		const double white = r * 2.0 * sitl_cfg.sim.comparator_noise_mv;
@@ -1084,9 +1130,10 @@ void motor_print_state(uint64_t now_ns, float time_ratio)
 	// solver diagnostics: rates since the previous print
 	{
 		static typeof(m.diag) last;
-		fprintf(stderr, "SITL diag: comp_edges=%u diode_on_i=%u on_v=%u off=%u sign_viol=%u ev_ovf=%u\n",
-			m.diag.comp_edges - last.comp_edges, m.diag.diode_on_i - last.diode_on_i, m.diag.diode_on_v - last.diode_on_v,
-			m.diag.diode_off - last.diode_off, m.diag.sign_viol - last.sign_viol, m.diag.ev_overflow - last.ev_overflow);
+		fprintf(stderr, "SITL diag: comp_edges=%u g4_offwin=%u g4_turnoff=%u diode_on_i=%u on_v=%u off=%u sign_viol=%u ev_ovf=%u\n",
+			m.diag.comp_edges - last.comp_edges, m.diag.g4_offwin - last.g4_offwin, m.diag.g4_turnoff - last.g4_turnoff,
+			m.diag.diode_on_i - last.diode_on_i, m.diag.diode_on_v - last.diode_on_v, m.diag.diode_off - last.diode_off,
+			m.diag.sign_viol - last.sign_viol, m.diag.ev_overflow - last.ev_overflow);
 		last = m.diag;
 	}
 	// firmware state, for debug output only
