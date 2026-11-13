@@ -96,38 +96,7 @@ RAM_FUNC void PeriodElapsedCallback()
 			return;
 		}
 	}
-	commutate();
-	commutation_interval = ((commutation_interval) + ((lastzctime + thiszctime) >> 1)) >> 1;
-	/* See zc_trend: predict the interval about to be timed, not the lagging
-	 * average of the ones already measured. */
-	uint32_t predicted = commutation_interval;
-	if (blind) {
-		zc_trend_hold = 2;
-	} else if (zc_trend_hold) {
-		zc_trend_hold--;
-	} else {
-		const int32_t step = (int32_t)thiszctime - (int32_t)lastzctime;
-		zc_trend += (step - zc_trend) >> 2;
-	}
-	if (zero_crosses >= ZC_TREND_MIN_ZC) {
-		const int32_t limit = (int32_t)(commutation_interval >> 1);
-		int32_t corr = zc_trend;
-		if (corr > limit) {
-			corr = limit;
-		} else if (corr < -limit) {
-			corr = -limit;
-		}
-		predicted = (uint32_t)((int32_t)commutation_interval + corr);
-	}
-	zc_predicted = predicted;
-	if (!eepromBuffer.auto_timing) {
-		advance = (predicted * temp_advance) >> 6; // 60 divde 64 0.9375 degree increments
-	} else {
-		advance = (predicted * auto_advance_level) >> 6; // 60 divde 64 0.9375 degree increments
-	}
-	/* Saturate: predicted can be as low as CI/2 under max negative
-	 * correction, so (predicted/2 - advance) must not wrap uint16. */
-	waitTime = bemfZcWaitTimeFromInterval(predicted, advance);
+	zcSchedCommutate(blind);
 	if (blind) {
 		// A real crossing's commutation comes waitTime after it, and the
 		// comparator gate stays shut until CI/2: `advance` of blanking
@@ -164,18 +133,7 @@ RAM_FUNC void PeriodElapsedCallback()
 			SET_AND_ENABLE_COM_INT((uint16_t)deadline);
 		}
 	}
-	if (!blind && zero_crosses < 10000) {
-		zero_crosses++;
-	}
-	if (!blind) {
-		// Blind steps must not feed the jitter accumulators: the
-		// dead-reckoned interval is not a measured crossing, and the
-		// perf gate (zero_crosses >= 100) is the same window in which
-		// blind stepping is armed - counting them would conflate real
-		// jitter with blind-step count in exactly the runs being read.
-		// Blind steps have their own counter (HWCI_PERF_BLIND_STEP).
-		HWCI_PERF_ZC();
-	}
+	zcSchedCountCommutation(blind);
 }
 
 RAM_FUNC void interruptRoutine()
