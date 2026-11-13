@@ -4,6 +4,7 @@
 
 #include "commutation.h"
 #include "motor_runtime.h"
+#include "zc_frontend.h"
 #include "sine_table.h"
 #include "bemf_zc.h"
 #include "main.h"
@@ -93,7 +94,7 @@ RAM_FUNC void commutate()
 	// it too). Established closed loop never exits here - a missed
 	// crossing is one blind step (PeriodElapsedCallback) and false locks
 	// are the trust rail's job (runtimeProcessDesyncCheck).
-#	if defined(MCU_G431)
+#	if defined(ZC_FRONTEND_G431)
 	/* Re-enter poll more readily during acquisition after stall/desync.
 	 * Mask COMP IRQs so interrupt-ZC and poll-ZC cannot fight. */
 	if (zero_crosses < 100 && (average_interval > polling_mode_changeover + 500 || zero_crosses < 40)) {
@@ -209,7 +210,7 @@ void zcfoundroutine()
 			enableCompInterrupts(); // enable interrupt
 		}
 	} else {
-#	if defined(MCU_G431)
+#	if defined(ZC_FRONTEND_G431)
 		/*
 		 * ARK 12S CAN (G4 dual-COMP): PWM/comparator noise can shrink
 		 * commutation_interval below POLLING_MODE_THRESHOLD before the

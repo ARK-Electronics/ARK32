@@ -7,6 +7,7 @@
 #include "main.h"
 #include "common.h"
 #include "motor_runtime.h"
+#include "zc_frontend.h"
 #include "faults.h"
 #include "esc_state.h"
 #include "gate_driver.h"
@@ -45,7 +46,7 @@
  * the G4 dual-COMP path is noisier than F051's single muxed COMP.
  * Turn-on grid hump band is G431-specific in bemf_zc.c (mult 24).
  */
-#if defined(MCU_G431)
+#if defined(ZC_FRONTEND_G431)
 /*
  * Confirm-window lengths (samples). Free-run pack 48/12/9 (2026-08, then
  * post-blanking re-check 2026-08-07 on AOS 2207 1980 KV no-prop, optical RPM):
@@ -84,7 +85,7 @@
 #	ifndef ZC_FILTER_FAST
 #		define ZC_FILTER_FAST 9
 #	endif
-#elif defined(MCU_F051)
+#elif defined(ZC_FRONTEND_F051)
 #	ifndef ZC_FILTER_MAX
 #		define ZC_FILTER_MAX 42
 #	endif

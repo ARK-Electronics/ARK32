@@ -5,6 +5,7 @@
 #include "esc_state.h"
 
 #include "motor_runtime.h"
+#include "zc_frontend.h"
 #include "common.h"
 #include "dshot.h"
 #include "signal.h"
@@ -223,7 +224,7 @@ void escToOpenLoop(void)
 	running = 1;
 	old_routine = 1;
 	stepper_sine = 0;
-#if defined(MCU_G431)
+#if defined(ZC_FRONTEND_G431)
 	/* Drop interrupt-ZC while back in poll; otherwise dual-path thrash. */
 	maskPhaseInterrupts();
 #endif

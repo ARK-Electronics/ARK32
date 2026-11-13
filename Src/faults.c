@@ -7,6 +7,7 @@
 #include "main.h"
 #include "common.h"
 #include "motor_runtime.h"
+#include "zc_frontend.h"
 #include "phaseouts.h"
 #include "comparator.h"
 #include "peripherals.h"
@@ -41,7 +42,7 @@ static uint8_t acq_fail_desyncs;
 /* "Start resisted" counter (see the declaration in faults.h). */
 volatile uint8_t fault_acq_resist_events;
 
-#if defined(MCU_G431)
+#if defined(ZC_FRONTEND_G431)
 /*
  * ARK 12S CAN acquisition grace budget (see faultUpdateBemfTimeoutPolicy).
  * Sized above one startup-matrix start segment (3.0 s of continuous
@@ -615,7 +616,7 @@ void faultUpdateBemfTimeoutPolicy(void)
 	 * F051, the CAN IRQ on G431), so the pilot-zero test and the clear share
 	 * one critical section: a zero seen before a new latch must not erase it.
 	 */
-#	if defined(MCU_G431)
+#	if defined(ZC_FRONTEND_G431)
 	/*
 	 * ARK 12S CAN free-run restarts thrash in the acquisition window
 	 * (zero_crosses reset each stall) while still commanded throttle.
@@ -667,7 +668,7 @@ void faultUpdateBemfTimeoutPolicy(void)
 		acq_fail_desyncs = 0;
 	}
 
-#	if defined(MCU_G431)
+#	if defined(ZC_FRONTEND_G431)
 	/*
 		 * ARK 12S CAN (G4): free-run high-KV crawl lives above DShot~150 while
 		 * BEMF is still weak. F051 gets clean edges from COMP hysteresis there;
@@ -863,7 +864,7 @@ void faultDesyncEpisodeTick1kHz(void)
 	if (zero_crosses > ACQ_FAIL_CLEAR_ZC) {
 		acq_fail_desyncs = 0;
 	}
-#	if defined(MCU_G431)
+#	if defined(ZC_FRONTEND_G431)
 	/* Acquisition grace clock. Runs only while throttle is commanded and
 	 * the loop has not established; pilot cut or a real acquire rearms it. */
 	if (zero_crosses >= 100 || adjusted_input == 0) {

@@ -16,6 +16,12 @@
  * translation units and order and the F051 image stays byte-identical.
  * ZC_FRONTEND_G431 selects the G431 front end on a non-G431 build (the
  * ARK_G4_12S_SITL_CAN SITL target).
+ *
+ * Front-end behaviour outside the fragment, in shared files, is keyed on
+ * ZC_FRONTEND_G431 / ZC_FRONTEND_F051 (never on the MCU): the confirm
+ * filter tiers (runtime_loop.c), poll re-entry and the poll-to-interrupt
+ * handoff (commutation.c), masking comparator IRQs on re-entering poll
+ * (esc_state.c) and the acquisition grace and soft stall budget (faults.c).
  */
 
 #include "targets.h"
