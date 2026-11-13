@@ -863,43 +863,52 @@ void motor_step(uint64_t now_ns, uint32_t dt_ns)
 	const double v_neutral = m.vn_cmp;
 	const double v_float = m.v_cmp[sitl_comp_phase];
 	double diff_mv = (v_neutral - v_float) * 1000.0;
-	if (sitl_cfg.sim.comparator_offwin_lag_rise_deg > 0 || sitl_cfg.sim.comparator_offwin_lag_fall_deg > 0 ||
-	    sitl_cfg.sim.comparator_turnoff_high_ns > 0) {
+	const bool g4_lag = sitl_cfg.sim.comparator_offwin_lag_rise_deg > 0 || sitl_cfg.sim.comparator_offwin_lag_fall_deg > 0;
+	if (g4_lag || sitl_cfg.sim.comparator_turnoff_high_ns > 0) {
 		/*
 		  ARK 12S CAN (G431) front end, phenomenological: fitted to the
 		  bench map of raw COMP VALUE against PWM phase and time since the
 		  last crossing (360 kV + 13x10x3 on 6S, 7-17 % duty). There the
 		  settled on-window read the crossing on time, the off-window kept
 		  the pre-crossing level ~28 deg past a rising crossing and ~9 deg
-		  past a falling one, and the turn-off transient read HIGH. Only
-		  in six-step drive (a phase in complementary PWM).
+		  past a falling one, and the turn-off transient read HIGH.
+		  Six-step drive only: one phase in complementary PWM and exactly
+		  one floating. The lagged read replaces the solved floating-phase
+		  voltage in the off-window, so demag and diode clamping are not
+		  seen there - a known simplification.
 		 */
-		bool pwm_phase = false, on = false;
+		bool on = false;
+		int n_pwm = 0, n_float = 0;
 		for (int p = 0; p < 3; p++) {
 			if (sitl_phase_mode[p] == SITL_PHASE_PWM) {
-				pwm_phase = true;
+				n_pwm++;
 				on = on || hi[p];
+			} else if (sitl_phase_mode[p] == SITL_PHASE_FLOAT) {
+				n_float++;
 			}
 		}
+		const bool six_step = n_pwm == 1 && n_float == 1;
 		if (on != m.g4_on) {
 			m.g4_on = on;
 			m.g4_edge_ns = now_ns;
 		}
 		const uint64_t since = now_ns - m.g4_edge_ns;
-		if (pwm_phase && !on && since < sitl_cfg.sim.comparator_turnoff_high_ns) {
+		if (six_step && !on && since < sitl_cfg.sim.comparator_turnoff_high_ns) {
 			diff_mv = 1000.0; // turn-off transient: output HIGH
 			m.diag.g4_turnoff++;
-		} else if (pwm_phase && (!on || since < sitl_cfg.sim.comparator_turnon_settle_ns)) {
+		} else if (six_step && g4_lag && (!on || since < sitl_cfg.sim.comparator_turnon_settle_ns)) {
 			const double th = thetae + sitl_comp_phase * (TWO_PI / 3.0);
 			double ph = fmod(th, TWO_PI);
 			if (ph < 0) {
 				ph += TWO_PI;
 			}
-			// trap_shape crosses rising at 0 and falling at pi
+			// trap_shape crosses rising at 0 and falling at pi (in angle);
+			// the read lags in time, i.e. behind the direction of rotation
 			const bool near_rising = ph >= 1.5 * M_PI || ph < 0.5 * M_PI;
 			const double lag_deg =
 				near_rising ? sitl_cfg.sim.comparator_offwin_lag_rise_deg : sitl_cfg.sim.comparator_offwin_lag_fall_deg;
-			diff_mv = -1000.0 * m.ke * m.omega * trap_shape(th - lag_deg * (M_PI / 180.0));
+			const double dir = m.omega < 0 ? -1.0 : 1.0;
+			diff_mv = -1000.0 * m.ke * m.omega * trap_shape(th - dir * lag_deg * (M_PI / 180.0));
 			m.diag.g4_offwin++;
 		}
 	}

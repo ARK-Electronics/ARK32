@@ -74,8 +74,8 @@ WATCH_EVENT = struct.Struct('<QIQ')  # as test_state_protocol.WATCH_EVENT: t, in
 
 
 def g4_binary():
-    hits = sorted(glob.glob(os.path.join(REPO, 'obj', 'ARK32_ARK_G4_12S_SITL_CAN_*.elf')))
-    return hits[-1] if hits else None
+    hits = glob.glob(os.path.join(REPO, 'obj', 'ARK32_ARK_G4_12S_SITL_CAN_*.elf'))
+    return max(hits, key=os.path.getmtime) if hits else None
 
 
 def bench_page():
@@ -109,9 +109,11 @@ class Watch:
             data = self.sock.recv(65536)
         except socket.timeout:
             return
-        magic, _v, _n = struct.unpack_from('<HBB', data)
-        if magic != 0x535a:
+        if len(data) < 4:
             return
+        magic, _v, _n = struct.unpack_from('<HBB', data)
+        if magic != 0x535a or (len(data) - 4) % WATCH_EVENT.size:
+            return  # not an event batch, or truncated
         now = time.monotonic()
         for off in range(4, len(data), WATCH_EVENT.size):
             ev = WATCH_EVENT.unpack_from(data, off)
@@ -183,32 +185,41 @@ def run_starts(elf, starts=STARTS, model=MODEL, workdir=None, log=None, sim_over
 
 
 def judge(records, events):
-    '''Per start: restarts with throttle held, runaway samples, hold speed.'''
+    '''Per start: restarts with throttle held (running dropped, or an established
+    closed loop fell back to poll), runaway samples, hold speed.'''
     res = []
     for r in records:
         ev = events[r['ev0']:r['ev1']]
-        thr = {}
-        # input at each event time from the firmware's own 'input' changes
-        restarts, last_in, last_run = 0, None, None
+        restarts, fallbacks = 0, 0
+        last_in, last_run, last_old, zc = None, None, None, 0
         for t, idx, val in ev:
             if idx == INPUT:
                 last_in = val
-            if idx == RUNNING:
+            elif idx == ZC:
+                zc = val
+            elif idx == RUNNING:
                 if last_run == 1 and val == 0 and (last_in or 0) > 0:
                     restarts += 1
                 last_run = val
+            elif idx == OLD:
+                # established closed loop dropping back to poll with throttle held
+                # (escNoteStallOrDesync(1) keeps running == 1)
+                if last_old == 0 and val == 1 and last_run == 1 and (last_in or 0) > 0 and zc > 100:
+                    fallbacks += 1
+                last_old = val
         # runaway: firmware CI (0.5 us ticks) under half the rotor's true interval while driving
         runaway = 0
         for (t, ph, val, rpm), (_t2, _p2, _v2, fw) in zip(r['true_rpm'], r['fw']):
             ci = fw.get(CI)
-            if val > 0 and fw.get(RUNNING) == 1 and fw.get(OLD) == 0 and ci and rpm > 100:
-                true_ci = 1.0 / (6.0 * rpm * POLE_PAIRS / 60.0) / 0.5e-6
+            if val > 0 and fw.get(RUNNING) == 1 and fw.get(OLD) == 0 and ci and abs(rpm) > 100:
+                true_ci = 1.0 / (6.0 * abs(rpm) * POLE_PAIRS / 60.0) / 0.5e-6
                 if ci < 0.5 * true_ci:
                     runaway += 1
         hold_rpm = [rpm for (t, ph, val, rpm) in r['true_rpm'] if ph == 'hold']
         tail = hold_rpm[len(hold_rpm) // 2:] or [0]
         blind = sum(1 for (t, idx, val) in ev if idx == BLIND and val > 0)
-        res.append(dict(k=r['k'], restarts=restarts, runaway=runaway, hold_rpm=sum(tail) / len(tail), blind_events=blind))
+        res.append(dict(k=r['k'], restarts=restarts, fallbacks=fallbacks, runaway=runaway,
+                        hold_rpm=sum(tail) / len(tail), blind_events=blind))
     return res
 
 
@@ -217,11 +228,15 @@ def judge(records, events):
 def test_px4_idle_starts_keep_sync_on_the_12s_g4_front_end(workdir):
     records, events, log_tail = run_starts(g4_binary(), workdir=workdir)
     res = judge(records, events)
-    speeds = sorted(r['hold_rpm'] for r in res)
+    # Model artifacts (docstring): the first start after the settings write
+    # never spins up, and some starts run backwards. Neither is the firmware
+    # behaviour under test, so judge the forward-running starts after the first.
+    judged = [r for r in res if r['k'] > 0 and r['hold_rpm'] > 0]
+    assert len(judged) >= max(1, (len(res) - 1) // 2), ('too few forward starts to judge: %r\n%s' % (res, log_tail))
+    speeds = sorted(r['hold_rpm'] for r in judged)
     med = speeds[len(speeds) // 2]
-    bad = [r for r in res if r['restarts'] or r['runaway'] > 5 or r['hold_rpm'] < 0.6 * med or med < 500]
+    bad = [r for r in judged if r['restarts'] or r['fallbacks'] or r['runaway'] > 5 or r['hold_rpm'] < 0.6 * med or med < 500]
     assert not bad, ('12S/G4 low-duty starts lost sync: %r\nall: %r\n%s' % (bad, res, log_tail))
-
 
 if __name__ == '__main__':
     elf = sys.argv[1] if len(sys.argv) > 1 else g4_binary()
