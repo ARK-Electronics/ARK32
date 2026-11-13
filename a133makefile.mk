@@ -25,9 +25,9 @@ CFLAGS_$(MCU) := \
 CFLAGS_$(MCU) += \
 	 -D$(PART) \
 	 -DCPU_MCXA133VFM
-# MCXA133 ships only in VFM / VFT (48-pin) packages - there is no VLH part
-# (VLH is an MCXA153 package). VFM is the default here; set CPU_MCXA133VFT
-# instead if the MR-ESC-ARK32 populates the VFT package. The flat CMSIS
-# header (fsl_device_registers.h) #errors on any other CPU_MCXA133* macro.
+# MCXA133 ships only in VFM / VFT (48-pin) packages. The CPU macro only
+# selects the fsl_device_registers.h series guard: VFM and VFT both map
+# to MCXA133_SERIES, so the choice is cosmetic for this HAL. Any other
+# CPU_MCXA133* macro #errors.
 
 SRC_$(MCU) := $(foreach dir,$(SRC_DIR_$(MCU)),$(wildcard $(dir)/*.[cs]))
