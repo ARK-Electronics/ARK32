@@ -2416,7 +2416,7 @@
 #	define USE_ADC
 #endif
 
-//NXP MCXA133/133
+//NXP MCXA133
 #ifdef MCU_A133
 //#define STMICRO
 #	define NXP
