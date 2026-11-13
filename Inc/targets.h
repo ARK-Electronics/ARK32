@@ -107,25 +107,20 @@
 #endif
 
 /*
- * MR-ESC-ARK32 (NXP MCXA133 mobile-robotics reference ESC).
+ * MCXA133 reference ESC target.
  *
- * Board target for the NXP MR-ESC-ARK32 reference design. The MCU HAL and
- * the MCXA133 pin/comparator/ADC map are reused unchanged from upstream
- * AM32 (HARDWARE_GROUP_NXP_MCXA133 below); only the board-electrical scale
- * factors and feature flags live here. This block mirrors upstream AM32's
- * FRDM_A133 target, which is the same silicon.
+ * The MCU HAL and MCXA133 pin/comparator/ADC map come unchanged from
+ * upstream AM32 (HARDWARE_GROUP_NXP_MCXA133). Only the board-electrical
+ * scale factors and feature flags live here; they are inherited from
+ * AM32's FRDM-MCXA153 (FRDM_A153) reference board.
  *
- * The FILE_NAME ends in _A133 so get_targets (make/tools.mk) discovers it
- * and builds it with a133makefile.mk - no Makefile edit is required.
- *
- * VERIFY-ON-HARDWARE: the three analog scale factors below
- * (TARGET_VOLTAGE_DIVIDER, MILLIVOLT_PER_AMP, CURRENT_OFFSET) are copied
- * from FRDM_A133 and are only correct if the MR-ESC-ARK32 shield uses the
- * same divider ratio and current-sense gain. Confirm against the
- * MR-ESC-ARK32 schematic (voltage divider ratio, shunt value + amp gain,
- * amp offset) before trusting telemetry/OV-OC behaviour. DEAD_TIME must
- * match the gate driver on the board; FRDM_A133 uses 70 (dead-time in
- * ns-equivalent ticks at the MCXA133 FlexPWM clock).
+ * VERIFY-ON-HARDWARE (not yet checked against the target board):
+ * - TARGET_VOLTAGE_DIVIDER, MILLIVOLT_PER_AMP, CURRENT_OFFSET are copied
+ *   from FRDM_A153 and must be confirmed before trusting telemetry/OV-OC.
+ * - the pin map is the FRDM-MCXA153 64-pin map; confirm the actual
+ *   MCXA133 package and pins of the target board.
+ * - DEAD_TIME is a raw FlexPWM dead-time count: 70 ticks at the 192 MHz
+ *   FlexPWM clock is about 365 ns; it must match the board gate driver.
  */
 #ifdef MR_ESC_ARK32_A133
 #	define FILE_NAME "MR_ESC_ARK32_A133"
