@@ -8,12 +8,49 @@
  * keeps that translation unit and its LTO order. Not a standalone header.
  */
 
+/*
+ * G431 missed-crossing policy: what a missed zero-cross deadline does.
+ *
+ *   ZC_MISSED_NONE     no deadline. A missed crossing waits for the next
+ *                      accepted one, and a rotor that stops reporting reaches
+ *                      the stall rail (BEMF_STALL_TICKS). This is upstream
+ *                      AM32's behaviour and ARK 3.0.3's.
+ *   ZC_MISSED_ELAPSED  blind step on the elapsed time (pre-#137): the
+ *                      dead-reckoned interval is the whole ~1.5 CI and the
+ *                      interval timer restarts at the blind commutation. The
+ *                      estimate grows ~12.5 % per blind step, which tracks a
+ *                      decelerating rotor.
+ *   ZC_MISSED_VIRTUAL  blind step at the expected crossing (#137, the ARK 4IN1
+ *                      policy): the interval stays the estimate, and the timer
+ *                      restarts at the grace spent.
+ *
+ * The 12S board reads low-speed crossings with an off-window offset. Rising
+ * crossings are accepted ~1.47 CI after the previous one and falling ones
+ * ~0.53 CI at idle; this fades to 1.09/0.95 by 0.50 throttle. Bench 2026-11-12/13
+ * (360 kV + 13x10x3 on 6S, 20 PX4-style starts per build):
+ * - With VIRTUAL, the late rising crossings miss the 1.5 CI deadline at idle
+ *   and on ramp-downs. Dead reckoning at a constant interval then outruns the
+ *   slowing prop, false early accepts follow, and the interval collapses:
+ *   ~1.2 restarts per start, and runaways that survived zero throttle.
+ * - ELAPSED and NONE both ran with 0 restarts and 0 dead starts.
+ * ELAPSED keeps ride-through at high throttle; the bench A/B against NONE
+ * (thrust and current at idle and 0.10) decides the default.
+ */
+#define ZC_MISSED_NONE 0
+#define ZC_MISSED_ELAPSED 1
+#define ZC_MISSED_VIRTUAL 2
+#ifndef ZC_G431_MISSED_POLICY
+#	define ZC_G431_MISSED_POLICY ZC_MISSED_ELAPSED
+#endif
+
 RAM_FUNC void PeriodElapsedCallback()
 {
 	uint8_t blind = 0;
 	/* Blind step only: INTERVAL_TIMER at this commutation, the grace
 	 * already spent since the virtual crossing it follows. */
+#if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL
 	uint32_t blind_since_crossing = 0;
+#endif
 	DISABLE_COM_TIMER_INT(); // disable interrupt
 	if (!running || old_routine) {
 		// COM events are meaningless outside interrupt closed-loop: a
@@ -66,6 +103,7 @@ RAM_FUNC void PeriodElapsedCallback()
 		// its crossing lands before the next deadline (1.5 CI after the
 		// previous crossing), and a stopped one still exhausts the
 		// budget, which counts real time since the last accepted crossing.
+#if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL
 		maskPhaseInterrupts();
 		uint32_t elapsed = INTERVAL_TIMER_COUNT;
 		if (elapsed > 65535u) {
@@ -83,6 +121,17 @@ RAM_FUNC void PeriodElapsedCallback()
 		lastzctime = thiszctime;
 		thiszctime = (uint16_t)interval;
 		SET_INTERVAL_TIMER_COUNT(blind_since_crossing);
+#else
+		maskPhaseInterrupts();
+		uint32_t elapsed = INTERVAL_TIMER_COUNT;
+		if (elapsed > 65535u) {
+			elapsed = 65535u;
+		}
+		zc_blind_ticks += elapsed; // extrapolated time, cleared by a real crossing
+		lastzctime = thiszctime;
+		thiszctime = (uint16_t)elapsed;
+		SET_INTERVAL_TIMER_COUNT(0);
+#endif
 	} else {
 		// Cancel race: SET_AND_ENABLE_COM_INT clears the peripheral flag,
 		// but a deadline event that reached NVIC pending just before an
@@ -97,6 +146,7 @@ RAM_FUNC void PeriodElapsedCallback()
 		}
 	}
 	zcSchedCommutate(blind);
+#if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL
 	if (blind) {
 		// A real crossing's commutation comes waitTime after it, and the
 		// comparator gate stays shut until CI/2: `advance` of blanking
@@ -108,9 +158,10 @@ RAM_FUNC void PeriodElapsedCallback()
 		const uint32_t blank = (advance < cap) ? advance : cap;
 		zc_blank_until = (uint16_t)(blind_since_crossing + blank);
 	}
+#endif
 	if (!old_routine) {
 		enableCompInterrupts(); // enable comp interrupt
-		if (zero_crosses >= ZC_DEADLINE_MIN_ZC) {
+		if (ZC_G431_MISSED_POLICY != ZC_MISSED_NONE && zero_crosses >= ZC_DEADLINE_MIN_ZC) {
 			// Next crossing expected (commutation_interval - time since
 			// the crossing this commutation follows) from now; arm the
 			// blind-step deadline at expected + 50% grace. After a real
@@ -121,11 +172,15 @@ RAM_FUNC void PeriodElapsedCallback()
 			// instead of drifting one advance later each step. The 16-bit clamp shrinks the grace
 			// above CI ~40000, but the trust rail restarts long before a
 			// healthy loop runs that slow.
+#if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL
 			uint32_t since_crossing = blind ? blind_since_crossing : waitTime;
 			if (since_crossing > commutation_interval) {
 				since_crossing = commutation_interval;
 			}
 			uint32_t deadline = (commutation_interval - since_crossing) + (commutation_interval >> 1);
+#else
+			uint32_t deadline = (commutation_interval - waitTime) + (commutation_interval >> 1);
+#endif
 			if (deadline > 65535u) {
 				deadline = 65535u;
 			}
@@ -138,9 +193,11 @@ RAM_FUNC void PeriodElapsedCallback()
 
 RAM_FUNC void interruptRoutine()
 {
+#if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL
 	if (INTERVAL_TIMER_COUNT < zc_blank_until) { // 0 = no blanking
 		return;				     // a blind commutation's demag window (PeriodElapsedCallback)
 	}
+#endif
 	HWCI_PERF_ZC_PHASE_CAPTURE(); // TIM1 phase at ISR entry, pre-confirm
 				      /* ARK F051 + G431: glitch-tolerant confirm + turn-on-grid compensation
 	 * (ported from the ARK_4IN1_F051 bench work). Other MCUs keep stock. */
@@ -305,8 +362,10 @@ RAM_FUNC void interruptRoutine()
 	 * escalation. Demag authority is handled separately in control_loop.c.
 	 */
 	zc_blind_ticks = 0;
+#if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL
 	zc_blank_until = 0; // the timer restarts at 0 below
 	zc_blind_timer_start = 0;
+#endif
 	lastzctime = thiszctime;
 	thiszctime = (uint16_t)(INTERVAL_TIMER_COUNT - zc_grid_comp);
 	SET_INTERVAL_TIMER_COUNT(0);

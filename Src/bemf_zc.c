@@ -99,7 +99,7 @@ static int32_t zc_trend;
 static uint8_t zc_trend_hold; /* real crossings to skip after a blind step */
 /* After a blind commutation: INTERVAL_TIMER value the timer restarted at,
  * so the next blind step adds real time to zc_blind_ticks... */
-static uint16_t zc_blind_timer_start;
+static uint16_t zc_blind_timer_start __attribute__((unused)); /* #137 blind-step state; unused by a front end without it */
 /* ...and the INTERVAL_TIMER value before which no crossing is accepted, the
  * post-commutation blanking a real crossing's commutation gets from the
  * comparator gate (0 = none). */
