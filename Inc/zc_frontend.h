@@ -24,18 +24,13 @@
  * (esc_state.c) and the acquisition grace and soft stall budget (faults.c).
  */
 
-#include "targets.h"
+#include "targets.h" /* selects ZC_FRONTEND_F051 / _G431 / _STOCK (end of targets.h) */
 
-#if defined(MCU_F051)
-#	define ZC_FRONTEND_F051 1
+#if defined(ZC_FRONTEND_F051)
 #	define ZC_FRONTEND_IMPL "../Mcu/f051/Inc/zc_frontend_f051.h"
-#elif defined(MCU_G431) || defined(ZC_FRONTEND_G431)
-#	ifndef ZC_FRONTEND_G431
-#		define ZC_FRONTEND_G431 1
-#	endif
+#elif defined(ZC_FRONTEND_G431)
 #	define ZC_FRONTEND_IMPL "../Mcu/g431/Inc/zc_frontend_g431.h"
 #else
-#	define ZC_FRONTEND_STOCK 1
 #	define ZC_FRONTEND_IMPL "zc_frontend_stock.h"
 #endif
 

@@ -246,11 +246,17 @@ LDFLAGS_$(2) = $(xLDFLAGS_COMMON) $(LDFLAGS_$(1)) $(if $(xLDSCRIPT),-T$(xLDSCRIP
 
 -include $$($(2)_BASENAME).d
 
+# The zero-crossing front ends (Inc/zc_frontend.h) are code in headers that
+# Src/bemf_zc.c includes. The one-shot compile's single -MF depfile only
+# records the last translation unit's headers, so list them explicitly or
+# a fragment or policy edit leaves a stale image (SITL has no phony
+# prerequisite forcing a relink).
+ZC_FRONTEND_SRCS := $(wildcard Inc/zc_frontend*.h Mcu/*/Inc/zc_frontend_*.h)
 # Cross targets require the pinned xPack GCC 15 (see make/tools.mk). SITL is native.
 # The bootloader .bin is listed explicitly: .incbin happens in the assembler, so
 # it never shows up in the -MMD depfile and swapping the image would otherwise
 # not rebuild anything.
-$$($(2)_BASENAME).elf: $(GENERATED_EEPROM) $(if $(NATIVE_$(1)),,arm_sdk_check) $$(SRC_APP_$(2)) $$(SRC_$(1)) $(xSRC) $(if $(xEMBED_F051),$(BL_IMAGE_F051)) $(if $(xEMBED_G431),$(BL_IMAGE_G431_CAN))
+$$($(2)_BASENAME).elf: $(GENERATED_EEPROM) $(if $(NATIVE_$(1)),,arm_sdk_check) $$(SRC_APP_$(2)) $$(SRC_$(1)) $(xSRC) $(if $(xEMBED_F051),$(BL_IMAGE_F051)) $(if $(xEMBED_G431),$(BL_IMAGE_G431_CAN)) $(ZC_FRONTEND_SRCS)
 	@$(ECHO) Compiling $$(notdir $$@)
 	$(QUIET)$(MKDIR) -p $(OBJ)
 	$(QUIET)$(xCC) $$(CFLAGS_$(2)) $$(LDFLAGS_$(2)) -MMD -MP -MF $$(@:.elf=.d) -o $$(@) $$(SRC_APP_$(2)) $$(SRC_$(1)) $(xSRC) $(LDLIBS_$(1))

@@ -42,6 +42,11 @@
 #ifndef ZC_G431_MISSED_POLICY
 #	define ZC_G431_MISSED_POLICY ZC_MISSED_ELAPSED
 #endif
+#if ZC_G431_MISSED_POLICY != ZC_MISSED_NONE && ZC_G431_MISSED_POLICY != ZC_MISSED_ELAPSED && ZC_G431_MISSED_POLICY != ZC_MISSED_VIRTUAL
+#	error "ZC_G431_MISSED_POLICY must be ZC_MISSED_NONE (0), ZC_MISSED_ELAPSED (1) or ZC_MISSED_VIRTUAL (2)"
+#endif
+/* Which policy this image runs, for the bench (nm / a debugger read). */
+const uint8_t zc_g431_missed_policy __attribute__((used)) = ZC_G431_MISSED_POLICY;
 
 RAM_FUNC void PeriodElapsedCallback()
 {
@@ -82,6 +87,11 @@ RAM_FUNC void PeriodElapsedCallback()
 		blind = 1;
 		zc_blind_steps++;
 		HWCI_PERF_BLIND_STEP();
+		// ZC_MISSED_ELAPSED (default here) dead-reckons the whole elapsed
+		// time and restarts the timer at the blind commutation, as before
+		// #137; see the policy note above PeriodElapsedCallback.
+		//
+		// ZC_MISSED_VIRTUAL (#137):
 		// Place the missed crossing where it was expected - one estimated
 		// interval after the last crossing, real or virtual - and
 		// commutate now. The interval timer restarts at the grace already
@@ -148,6 +158,7 @@ RAM_FUNC void PeriodElapsedCallback()
 	zcSchedCommutate(blind);
 #if ZC_G431_MISSED_POLICY == ZC_MISSED_VIRTUAL
 	if (blind) {
+		// ZC_MISSED_VIRTUAL only.
 		// A real crossing's commutation comes waitTime after it, and the
 		// comparator gate stays shut until CI/2: `advance` of blanking
 		// over the demag that follows. A blind commutation comes after
@@ -162,6 +173,8 @@ RAM_FUNC void PeriodElapsedCallback()
 	if (!old_routine) {
 		enableCompInterrupts(); // enable comp interrupt
 		if (ZC_G431_MISSED_POLICY != ZC_MISSED_NONE && zero_crosses >= ZC_DEADLINE_MIN_ZC) {
+			// ZC_MISSED_ELAPSED: (CI - waitTime) + CI/2 from every commutation.
+			// ZC_MISSED_VIRTUAL:
 			// Next crossing expected (commutation_interval - time since
 			// the crossing this commutation follows) from now; arm the
 			// blind-step deadline at expected + 50% grace. After a real

@@ -2937,3 +2937,28 @@
 #		define RAM_FUNC
 #	endif
 #endif
+
+/*
+ * Zero-crossing front end selection (Inc/zc_frontend.h has the rationale).
+ * Defined here so every file that includes targets.h sees it: a shared
+ * branch on ZC_FRONTEND_G431 in a file without Inc/zc_frontend.h must not
+ * silently compile the other branch. ZC_FRONTEND_G431 may be set by a target
+ * only on the G431 or on SITL (ARK_G4_12S_SITL_CAN).
+ */
+#ifndef ZC_FRONTEND_SELECTED
+#	define ZC_FRONTEND_SELECTED
+#	if defined(ZC_FRONTEND_G431) && defined(MCU_F051)
+#		error "ZC_FRONTEND_G431 on an F051 build would mix the F051 front end with the G431 shared branches"
+#	endif
+#	if defined(ZC_FRONTEND_G431) && !(defined(MCU_G431) || defined(MCU_SITL))
+#		error "ZC_FRONTEND_G431 is only supported on MCU_G431 and on SITL"
+#	endif
+#	if defined(MCU_F051)
+#		define ZC_FRONTEND_F051 1
+#	elif defined(MCU_G431) || defined(ZC_FRONTEND_G431)
+#		undef ZC_FRONTEND_G431
+#		define ZC_FRONTEND_G431 1
+#	else
+#		define ZC_FRONTEND_STOCK 1
+#	endif
+#endif
