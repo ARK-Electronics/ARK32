@@ -1,0 +1,485 @@
+/* Host hardware adapter for verbatim Src/faults.c regression tests. */
+#include <assert.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "faults.h"
+
+#ifdef HOST_DRV8328
+/* ARK 4IN1 (F051) branch: same policy, DRV8328 specifics. */
+#	define USE_DRV8328_NFAULT
+#else
+#	define USE_DRV_NFAULT
+#	define USE_DRV_ENABLE
+#endif
+#define BEMF_STALL_TICKS 45000u
+#define DSHOT_CMD_MAX 47u
+#define DSHOT_MIN_THROTTLE 48u
+#define ESC_STUCK_LATCH 255u
+#define ESC_FAULT_STUCK 7u
+#define DBG_EVT_STUCK 1u
+
+static struct {
+	uint32_t IDR;
+} nfault_port = {1};
+#define NFAULT_PORT (&nfault_port)
+#define NFAULT_PIN 1u
+
+static uint8_t running = 1, stepper_sine, prop_brake_active;
+static uint16_t input = 500, adjusted_input = 500;
+static uint16_t duty_cycle_setpoint = 700, duty_cycle = 700, last_duty_cycle = 700;
+static uint16_t battery_voltage = 3200;
+static int16_t actual_current = 2000;
+__attribute__((unused)) static int16_t degrees_celsius = 40; /* DRV8350 label only */
+static uint32_t zero_crosses = 200;
+static uint32_t desync_happened;
+static uint8_t acq_fail_desyncs;
+static uint8_t bemf_timeout_happened;
+static uint32_t interval_timer_count;
+#define INTERVAL_TIMER_COUNT interval_timer_count
+volatile uint32_t fault_stall_trips;
+volatile uint8_t fault_run_established = 1;
+volatile uint8_t fault_acq_resist_events;
+volatile uint8_t fault_pilot_zero;
+
+/* A stop the input protocol received (see Inc/faults.h), as opposed to a zero
+ * the firmware makes itself. */
+static void pilot_zero(void)
+{
+	adjusted_input = 0;
+	fault_pilot_zero = 1;
+}
+
+static uint8_t awake = 1, pin_trusted = 1, esc_state;
+static unsigned off_calls, mask_calls, reset_calls, restart_calls, wake_calls;
+static unsigned disable_timer_calls;
+static uint16_t pwm_compare = 700;
+#define SET_DUTY_CYCLE_ALL(value) (pwm_compare = (value))
+#define DISABLE_COM_TIMER_INT() (disable_timer_calls++)
+
+static void allOff(void)
+{
+	off_calls++;
+}
+static void maskPhaseInterrupts(void)
+{
+	mask_calls++;
+}
+static void bemfZcResetTrend(void) {}
+uint8_t escGetState(void)
+{
+	return esc_state;
+}
+static void escToFaultStuck(void)
+{
+	esc_state = ESC_FAULT_STUCK;
+	bemf_timeout_happened = ESC_STUCK_LATCH;
+	input = 0;
+	running = 0;
+	stepper_sine = 0;
+}
+static uint8_t escIsFault(void)
+{
+	return bemf_timeout_happened == ESC_STUCK_LATCH || faultGateDriverFaultActive();
+}
+static uint8_t escInOpenLoop(void)
+{
+	return running && !stepper_sine && !escIsFault();
+}
+static uint8_t escInClosedLoop(void)
+{
+	return 0;
+}
+static void escNoteStallOrDesync(uint8_t stop)
+{
+	if (stop && input < 48) {
+		running = 0;
+	}
+}
+static uint8_t gateDriverIsAwake(void)
+{
+	return awake;
+}
+static uint8_t gateDriverNfaultPinTrusted(void)
+{
+	return awake && pin_trusted;
+}
+static void gateDriverNfaultGraceTick(void) {}
+static void gateDriverSleep(void)
+{
+	awake = 0;
+}
+void gateDriverWakeBlocking(void)
+{
+	awake = 1;
+	wake_calls++;
+}
+void gateDriverFaultResetPulse(void)
+{
+	reset_calls++;
+}
+static uint8_t armed;
+static struct {
+	uint8_t brake_on_stop;
+} eepromBuffer;
+static unsigned latch_clear_wakes, latch_clear_wake_while_latched;
+static void gateDriverWakeForLatchClear(void)
+{
+	/* Must run while the latch still holds the 20 kHz loop inert. */
+	latch_clear_wakes++;
+	latch_clear_wake_while_latched += faultGateDriverFaultActive();
+	awake = 1;
+}
+void faultDesyncEpisodeCharge(desync_episode_kind_t kind)
+{
+	(void)kind;
+}
+uint8_t faultDesyncRestartHoldoffActive(void)
+{
+	return 0;
+}
+static void zcfoundroutine(void)
+{
+	restart_calls++;
+	interval_timer_count = 0;
+	zero_crosses++;
+}
+
+#include "gd_nfault_firmware.inc"
+
+static void poll_ms(unsigned count)
+{
+	while (count--) {
+		faultGateDriverTick1kHz();
+		faultPollGateDriver();
+	}
+}
+
+static void assert_no_cut(void)
+{
+	assert(!faultGateDriverFaultActive());
+	assert(off_calls == 0);
+	assert(mask_calls == 0);
+	assert(disable_timer_calls == 0);
+	assert(reset_calls == 0);
+	assert(restart_calls == 0);
+	assert(pwm_compare == 700);
+	assert(duty_cycle_setpoint == 700);
+	assert(duty_cycle == 700 && last_duty_cycle == 700);
+}
+
+static void stall(void)
+{
+	interval_timer_count = BEMF_STALL_TICKS + 1;
+	faultHandleBemfIntervalStall();
+}
+
+static void assert_latched(void)
+{
+	assert(faultGateDriverFaultActive());
+	assert(!running && !stepper_sine);
+	assert(!prop_brake_active);
+	assert(pwm_compare == 0);
+	assert(duty_cycle_setpoint == 0);
+	assert(duty_cycle == 0 && last_duty_cycle == 0);
+	assert(disable_timer_calls > 0);
+	assert(restart_calls == 0);
+	assert(reset_calls == 0);
+}
+
+static void latch_fault(void)
+{
+	nfault_port.IDR = 0;
+	faultPollGateDriver();
+	stall();
+	assert_latched();
+}
+
+#ifdef HOST_DRV8328
+int main(int argc, char **argv)
+{
+	assert(argc >= 2);
+	const char *scenario = argv[1];
+	if (!strcmp(scenario, "held_pin_rides_through")) {
+		/* A sag the DRV8328 recovers from by itself must not stop the motor. */
+		nfault_port.IDR = 0;
+		poll_ms(10000);
+		assert_no_cut();
+		nfault_port.IDR = 1;
+		poll_ms(10000);
+		assert_no_cut();
+	} else if (!strcmp(scenario, "fault_stall")) {
+		assert(argc == 3);
+		actual_current = (int16_t)atoi(argv[2]);
+		latch_fault();
+		assert(esc_state == ESC_FAULT_STUCK);
+	} else if (!strcmp(scenario, "recent_fault_stall")) {
+		nfault_port.IDR = 0;
+		poll_ms(8);
+		nfault_port.IDR = 1;
+		poll_ms(25);
+		stall();
+		assert_latched();
+	} else if (!strcmp(scenario, "expired_fault_stall") || !strcmp(scenario, "age_saturation")) {
+		nfault_port.IDR = 0;
+		poll_ms(8);
+		nfault_port.IDR = 1;
+		poll_ms(!strcmp(scenario, "age_saturation") ? 65550 : 1000);
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 1);
+	} else if (!strcmp(scenario, "ordinary_stall_restarts")) {
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 1);
+	} else if (!strcmp(scenario, "commanded_stop_does_not_latch")) {
+		input = 0;
+		adjusted_input = 0;
+		nfault_port.IDR = 0;
+		faultPollGateDriver();
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 0);
+	} else if (!strcmp(scenario, "untrusted_pin_ignored")) {
+		pin_trusted = 0;
+		nfault_port.IDR = 0;
+		poll_ms(1000);
+		assert_no_cut();
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 1);
+	} else if (!strcmp(scenario, "sleep_voids_old_evidence")) {
+		/* Sleep resets the DRV8328: a fault seen before it is not evidence after. */
+		nfault_port.IDR = 0;
+		poll_ms(8);
+		nfault_port.IDR = 1;
+		gateDriverSleep();
+		poll_ms(1);
+		awake = 1;
+		poll_ms(5);
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 1);
+	} else if (!strcmp(scenario, "release_does_not_restart")) {
+		latch_fault();
+		nfault_port.IDR = 1;
+		poll_ms(10000);
+		assert_latched();
+	} else if (!strcmp(scenario, "sleep_does_not_clear_at_throttle")) {
+		latch_fault();
+		gateDriverSleep();
+		poll_ms(10000);
+		assert_latched();
+	} else if (!strcmp(scenario, "zero_needs_sleep")) {
+		/* Pilot zero clears only once the driver has slept (the DRV8328 reset). */
+		latch_fault();
+		pilot_zero();
+		poll_ms(1000);
+		assert_latched();
+		gateDriverSleep();
+		poll_ms(GD_LATCH_SLEEP_MS - 1);
+		assert_latched();
+		poll_ms(1);
+		assert(!faultGateDriverFaultActive());
+		assert(!running && !stepper_sine);
+		assert(restart_calls == 0 && wake_calls == 0 && latch_clear_wakes == 0);
+	} else if (!strcmp(scenario, "synthetic_zero_does_not_clear")) {
+		/* A zero the firmware makes itself (CAN timeout, DShot command frame,
+		 * direction hold) is not a pilot zero, even after the reset sleep. */
+		latch_fault();
+		adjusted_input = 0;
+		gateDriverSleep();
+		poll_ms(1000);
+		assert_latched();
+		fault_pilot_zero = 1;
+		poll_ms(1);
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 0);
+	} else if (!strcmp(scenario, "brake_wakes_before_clear")) {
+		armed = 1;
+		eepromBuffer.brake_on_stop = 2;
+		latch_fault();
+		pilot_zero();
+		gateDriverSleep();
+		poll_ms(GD_LATCH_SLEEP_MS);
+		assert(!faultGateDriverFaultActive());
+		assert(latch_clear_wakes == 1 && latch_clear_wake_while_latched == 1);
+		assert(awake);
+		/* A fault that persists after the reset is evidence again, not a cut. */
+		nfault_port.IDR = 0;
+		poll_ms(1000);
+		assert(!faultGateDriverFaultActive());
+	} else if (!strcmp(scenario, "prop_brake_cannot_keep_latch_awake")) {
+		prop_brake_active = 1;
+		latch_fault();
+		faultPollGateDriver();
+		assert_latched();
+	} else {
+		assert(!"unknown scenario");
+	}
+	return 0;
+}
+#else
+int main(int argc, char **argv)
+{
+	assert(argc >= 2);
+	const char *scenario = argv[1];
+	if (!strcmp(scenario, "low_current_warning")) {
+		actual_current = 0;
+		nfault_port.IDR = 0;
+		poll_ms(10000);
+		assert_no_cut();
+		assert(faultGateDriverWarningActive());
+	} else if (!strcmp(scenario, "repeated_pulses")) {
+		for (unsigned pulse = 0; pulse < 1000; pulse++) {
+			actual_current = (pulse % 2) ? 0 : 32767;
+			nfault_port.IDR = 0;
+			poll_ms(8);
+			nfault_port.IDR = 1;
+			poll_ms(1);
+		}
+		assert_no_cut();
+	} else if (!strcmp(scenario, "stale_current_warning")) {
+		nfault_port.IDR = 0;
+		faultPollGateDriver();
+		for (unsigned ms = 1; ms <= 10000; ms++) {
+			actual_current = ms <= 50 ? (int16_t)(2000 * (50 - ms) / 50) : ((ms / 20) % 2 ? 0 : 80);
+			poll_ms(1);
+		}
+		assert_no_cut();
+	} else if (!strcmp(scenario, "sine_warning")) {
+		running = 0;
+		stepper_sine = 1;
+		actual_current = 0;
+		nfault_port.IDR = 0;
+		poll_ms(10000);
+		assert_no_cut();
+		assert(stepper_sine);
+	} else if (!strcmp(scenario, "fault_stall")) {
+		assert(argc == 3);
+		actual_current = (int16_t)atoi(argv[2]);
+		latch_fault();
+	} else if (!strcmp(scenario, "recent_fault_stall")) {
+		nfault_port.IDR = 0;
+		poll_ms(8);
+		nfault_port.IDR = 1;
+		poll_ms(25);
+		stall();
+		assert_latched();
+	} else if (!strcmp(scenario, "expired_fault_stall") || !strcmp(scenario, "age_saturation")) {
+		nfault_port.IDR = 0;
+		poll_ms(8);
+		nfault_port.IDR = 1;
+		poll_ms(!strcmp(scenario, "age_saturation") ? 65550 : 1000);
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 1);
+	} else if (!strcmp(scenario, "manual_zero_clear")) {
+		/* No hold on the pilot's zero (as on the 4IN1): the first zero after
+		 * the driver has slept clears the latch, and nothing restarts. */
+		latch_fault();
+		poll_ms(1000);
+		assert_latched();
+		assert(!awake);
+		pilot_zero();
+		faultPollGateDriver();
+		assert(!faultGateDriverFaultActive());
+		assert(!running && !stepper_sine && !awake);
+		assert(restart_calls == 0 && wake_calls == 0 && reset_calls == 0);
+		assert(latch_clear_wakes == 0);
+	} else if (!strcmp(scenario, "synthetic_zero_does_not_clear")) {
+		/* A zero the firmware makes itself (CAN RawCommand timeout, DShot
+		 * command frame, direction hold) is not a pilot zero. */
+		latch_fault();
+		poll_ms(1000);
+		adjusted_input = 0;
+		poll_ms(1000);
+		assert_latched();
+		fault_pilot_zero = 1;
+		faultPollGateDriver();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 0 && wake_calls == 0);
+	} else if (!strcmp(scenario, "zero_waits_for_reset_sleep")) {
+		/* A zero in the same instant as the latch waits out the reset sleep. */
+		latch_fault();
+		pilot_zero();
+		faultPollGateDriver();
+		assert_latched();
+		assert(!awake);
+		poll_ms(GD_LATCH_SLEEP_MS - 1);
+		assert_latched();
+		poll_ms(1);
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 0 && wake_calls == 0);
+	} else if (!strcmp(scenario, "brake_wakes_before_clear")) {
+		armed = 1;
+		eepromBuffer.brake_on_stop = 2;
+		latch_fault();
+		poll_ms(1000);
+		assert(!awake);
+		pilot_zero();
+		faultPollGateDriver();
+		assert(!faultGateDriverFaultActive());
+		assert(latch_clear_wakes == 1 && latch_clear_wake_while_latched == 1);
+		assert(awake && wake_calls == 0);
+		/* A fault that persists after the reset is a warning, not a cut. */
+		poll_ms(1000);
+		assert(!faultGateDriverFaultActive());
+		assert(faultGateDriverWarningActive());
+	} else if (!strcmp(scenario, "release_does_not_restart")) {
+		latch_fault();
+		nfault_port.IDR = 1;
+		poll_ms(10000);
+		assert_latched();
+		assert(wake_calls == 0);
+	} else if (!strcmp(scenario, "sleep_does_not_clear_at_throttle")) {
+		latch_fault();
+		gateDriverSleep();
+		poll_ms(10000);
+		assert_latched();
+	} else if (!strcmp(scenario, "ordinary_stall_restarts")) {
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 1);
+	} else if (!strcmp(scenario, "commanded_stop_does_not_latch")) {
+		input = 0;
+		adjusted_input = 0;
+		nfault_port.IDR = 0;
+		faultPollGateDriver();
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 0);
+	} else if (!strcmp(scenario, "untrusted_pin_ignored")) {
+		pin_trusted = 0;
+		nfault_port.IDR = 0;
+		poll_ms(1000);
+		assert_no_cut();
+		stall();
+		assert(!faultGateDriverFaultActive());
+		assert(restart_calls == 1);
+	} else if (!strcmp(scenario, "warning_log_upgrades_to_error")) {
+		nfault_port.IDR = 0;
+		poll_ms(20);
+		fault_id_t cause = FAULT_NONE;
+		assert(faultGateDriverConsumeLog(&cause) == FAULT_GD_LOG_WARNING);
+		assert(cause == FAULT_GD_UNKNOWN);
+		stall();
+		assert_latched();
+		assert(faultGateDriverConsumeLog(&cause) == FAULT_GD_LOG_ERROR);
+		assert(cause == FAULT_GD_UNKNOWN);
+		poll_ms(1000);
+		assert(faultGateDriverConsumeLog(&cause) == FAULT_GD_LOG_NONE);
+		assert(cause == FAULT_NONE);
+	} else if (!strcmp(scenario, "prop_brake_cannot_keep_latch_awake")) {
+		prop_brake_active = 1;
+		latch_fault();
+		faultPollGateDriver();
+		assert_latched();
+		assert(!awake);
+	} else {
+		assert(!"unknown scenario");
+	}
+	return 0;
+}
+#endif

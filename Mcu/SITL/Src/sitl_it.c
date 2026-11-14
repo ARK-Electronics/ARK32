@@ -35,7 +35,7 @@ static void comp_irq(void)
 {
 	const uint32_t lines = SITL_EXTI_LINE_21 | SITL_EXTI_LINE_22;
 	const uint32_t cnt = sitl_interval_timer_count();
-	if (cnt > (uint32_t)(commutation_interval >> 1)) {
+	if (cnt > (uint32_t)ZC_SEARCH_BLANK(commutation_interval)) {
 		if (sitl_exti.PR & lines) {
 			sitl_exti.PR &= ~lines;
 			motor_log_event(3 /*MEV_COMP_RUN*/, cnt, 0, 0);
@@ -46,7 +46,7 @@ static void comp_irq(void)
 			motor_log_event(3 /*MEV_COMP_RUN*/, cnt, 1, 0);
 		}
 	} else {
-		motor_log_event(2 /*MEV_COMP_BLANKED*/, cnt, commutation_interval >> 1, 0);
+		motor_log_event(2 /*MEV_COMP_BLANKED*/, cnt, ZC_SEARCH_BLANK(commutation_interval), 0);
 		sitl_exti.PR &= ~lines;
 	}
 }

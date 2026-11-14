@@ -1,0 +1,29 @@
+name: noprop_low_rpm_crawl
+description: >
+  Free-run weak-BEMF crawl for ZC filter / map-tier data. Spin up to 12%,
+  then descend through 10/8/6/5/4/3% holds. Steady points log zc_jitter,
+  confirm_rejects_per_zc, phase hist, blind steps. No prop; ~25 V brick.
+  ~55 s.
+sample_rate_hz: 100
+arm_settle_s: 3.0
+steady_tail_fraction: 0.5
+demag_rpm_drop_fraction: 0.30
+demag_commutation_spike: 3.0
+
+safety:
+  max_current_a: 8.0
+  max_thrust_n: 3.0
+  max_rpm: 20000
+  max_motor_temp_c: 90.0
+
+segments:
+  - {label: idle,   throttle: 0.00, duration_s: 2.0}
+  - {label: spinup, throttle: 0.12, duration_s: 4.0, ramp: true}
+  - {label: t10,    throttle: 0.10, duration_s: 6.0, steady: true}
+  - {label: t08,    throttle: 0.08, duration_s: 6.0, steady: true}
+  - {label: t06,    throttle: 0.06, duration_s: 6.0, steady: true}
+  - {label: t05,    throttle: 0.05, duration_s: 6.0, steady: true}
+  - {label: t04,    throttle: 0.04, duration_s: 6.0, steady: true}
+  - {label: t03,    throttle: 0.03, duration_s: 6.0, steady: true}
+  - {label: rampdn, throttle: 0.00, duration_s: 3.0, ramp: true}
+  - {label: stop,   throttle: 0.00, duration_s: 2.0}

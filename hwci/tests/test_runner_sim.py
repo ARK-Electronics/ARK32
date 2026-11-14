@@ -16,6 +16,26 @@ def _run(profile_name, demag_prone=True):
         sources.close()
 
 
+def test_hiz_spindown_sim_accepts_default_coast_eeprom():
+    profile = load_profile("g431_hiz_spindown")
+    sources = build_sim_sources(RigConfig(), profile)
+    sources.close()
+    assert profile.require_eeprom["brake_on_stop"] == 0
+
+
+def test_hiz_spindown_sim_rejects_brake_on_stop():
+    from hwci import settings as st
+    import pytest
+    from hwci.runner import build_sim_sources
+
+    rig = RigConfig()
+    profile = load_profile("g431_hiz_spindown")
+    blob = bytearray(st.default_blob())
+    blob[28] = 1
+    with pytest.raises(st.SettingsError, match="brake_on_stop"):
+        build_sim_sources(rig, profile, settings_blob=bytes(blob))
+
+
 def test_ci_smoke_runs_and_has_steady_points():
     result, profile = _run("ci_smoke")
     assert result.meta["aborted"] is None

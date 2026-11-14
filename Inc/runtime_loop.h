@@ -31,6 +31,10 @@ void runtimeSendTelemetryIfNeeded(void);
 /* ADC sample + battery LVC + optional ADC input path. */
 void runtimeProcessAdcAndProtections(void);
 
+/* Filter the die temperature and recompute thermal_duty_ceiling. Must be
+ * called at 1 kHz (from the ADC block) - the IIR time constant assumes it. */
+void runtimeThermalLimitTick(void);
+
 /*
  * Brushless running path (limits, filter, stall) or sine/stepper branch,
  * matching the previous if (stepper_sine == 0) / else structure.

@@ -25,3 +25,12 @@ SUBSYSTEM=="usb", ATTRS{idVendor}=="1366", MODE="0660", TAG+="uaccess"
 # SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="0001", SYMLINK+="esc-telem"
 # Example (FTDI with serial FT1ABCDE):
 # SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", ATTRS{serial}=="FT1ABCDE", SYMLINK+="esc-throttle"
+
+# --- ST-Link V3 Virtual COM Port → G4 debug UART (USART2 TX PB3) ----------
+# Interface 01 is the bridge VCP on STLINK-V3 (VID 0483, PIDs below).
+# ARK_G431_CAN firmware prints state/fault lines here @ 115200 8N1.
+# Also matches by-id: usb-STMicroelectronics_STLINK-V3_*-if01
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="374e", ENV{ID_USB_INTERFACE_NUM}=="01", MODE="0660", TAG+="uaccess", SYMLINK+="esc-debug-uart"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="374f", ENV{ID_USB_INTERFACE_NUM}=="01", MODE="0660", TAG+="uaccess", SYMLINK+="esc-debug-uart"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="3753", ENV{ID_USB_INTERFACE_NUM}=="01", MODE="0660", TAG+="uaccess", SYMLINK+="esc-debug-uart"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="3754", ENV{ID_USB_INTERFACE_NUM}=="01", MODE="0660", TAG+="uaccess", SYMLINK+="esc-debug-uart"
