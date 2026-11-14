@@ -16,22 +16,26 @@ on:
     branches: ["main"]
     paths:
       - "Mcu/SITL/**"
-      - "scripts/esc_*.py"
-      - "Src/main.c"
-      - "Src/DroneCAN/**"
-      - "Src/motor_runtime.c"
-      - "Src/runtime_loop.c"
-      - "Src/settings.c"
+      - "scripts/**"
+      - "Src/**"
+      - "Inc/**"
+      - "Makefile"
+      - "*makefile.mk"
+      - "make/**"
+      - "schema/**"
+      - ".github/workflows/SITL-calibration.yml"
   pull_request:
     branches: ["main"]
     paths:
       - "Mcu/SITL/**"
-      - "scripts/esc_*.py"
-      - "Src/main.c"
-      - "Src/DroneCAN/**"
-      - "Src/motor_runtime.c"
-      - "Src/runtime_loop.c"
-      - "Src/settings.c"
+      - "scripts/**"
+      - "Src/**"
+      - "Inc/**"
+      - "Makefile"
+      - "*makefile.mk"
+      - "make/**"
+      - "schema/**"
+      - ".github/workflows/SITL-calibration.yml"
   schedule:
     - cron: "17 2 * * *"
   workflow_dispatch:

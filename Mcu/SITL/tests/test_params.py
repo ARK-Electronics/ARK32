@@ -5,10 +5,11 @@ from __future__ import annotations
 import time
 
 import pytest
+from sitl_test_requirements import unavailable_can, require_dronecan
 
 from sitl_harness import wait_for_state
 
-dronecan = pytest.importorskip('dronecan')
+dronecan = require_dronecan()
 
 
 def _wait_for_node(uri, timeout=8.0, our_id=110):
@@ -68,11 +69,11 @@ def _set_param(node, target, name, value, attempts=5):
 
 def _require_mcast_node(sitl, sim, mcast_uri, our_id=110):
     if not wait_for_state(sim, timeout=5.0):
-        pytest.skip('multicast/state unavailable\n' + sitl.log_tail())
+        unavailable_can('multicast/state unavailable\n' + sitl.log_tail())
     node, found = _wait_for_node(mcast_uri, our_id=our_id)
     if 10 not in found:
         node.close()
-        pytest.skip('ESC node 10 not seen on %s (mcast likely broken)\n%s'
+        unavailable_can('ESC node 10 not seen on %s (mcast likely broken)\n%s'
                     % (mcast_uri, sitl.log_tail()))
     return node, found
 

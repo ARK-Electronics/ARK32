@@ -5,10 +5,11 @@ from __future__ import annotations
 import time
 
 import pytest
+from sitl_test_requirements import unavailable_can, require_dronecan
 
 from sitl_harness import rpm_from_state, wait_for_state
 
-dronecan = pytest.importorskip('dronecan')
+dronecan = require_dronecan()
 
 
 def _multicast_usable(sitl, sim, timeout=5.0):
@@ -16,7 +17,7 @@ def _multicast_usable(sitl, sim, timeout=5.0):
     Skip rather than fail when the SITL never starts streaming with CAN on.'''
     if wait_for_state(sim, timeout=timeout):
         return True
-    pytest.skip(
+    unavailable_can(
         'SITL state stream never started with CAN enabled; '
         'multicast is probably unavailable.\n' + sitl.log_tail())
 
