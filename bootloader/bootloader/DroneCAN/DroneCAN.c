@@ -83,7 +83,12 @@ static void dc_note_rx_frame(const CanardCANFrame *f)
 #define MAIN_FW_START_ADDR 0x08004000
 
 static CanardInstance canard;
-static uint8_t canard_memory_pool[CANARD_POOL_SIZE];
+/* libcanard carves 32-byte blocks from this pool and reads the RxState's
+ * uint64 timestamp with LDRD, which faults on a non-word-aligned address.
+ * A plain uint8_t array has no alignment guarantee: the V18 link put it at
+ * 0x20000039 and the first multi-frame transfer (the firmware-update file
+ * read) hard-faulted the bootloader. */
+static uint8_t canard_memory_pool[CANARD_POOL_SIZE] __attribute__((aligned(8)));
 
 #ifndef MCU_FLASH_START
 #define MCU_FLASH_START 0x08000000

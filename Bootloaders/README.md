@@ -13,7 +13,7 @@ These files are release (or branch) artifacts as flat binaries. They are stored 
 |---|---|---|---|
 | `AM32_F051_BOOTLOADER_ARK4IN1_V18.bin` | STM32F051, ARK 4IN1 (default embed) | PB4; **PA15 nSLEEP low** | [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) `master` (`cdce0a2`, #4); product `AM32_F051_BOOTLOADER_ARK4IN1` |
 | `AM32_F051_BOOTLOADER_PB4_V18.bin` | STM32F051 generic PB4 (reference only) | PB4 | [ARK32-bootloader v18.0.0](https://github.com/ARK-Electronics/ARK32-bootloader/releases/tag/v18.0.0) (`0d667c5`), asset `AM32_F051_BOOTLOADER_PB4_V18.hex` |
-| `AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin` | STM32G431/G491, ARK 12S CAN ESC (`ARK_G431_CAN`) | PB4 (also FDCAN TX PB9 / RX PA11); **DRV ENABLE (PC9) held low** | **In-tree** [`bootloader/`](../bootloader/) (`make bootloader-g431-can`). From ARK32-bootloader `feat/ark-g431-can-dual-protocol` (`060c417`, UAVCAN hw **0.71**) plus CAN FD. |
+| `AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin` | STM32G431/G491, ARK 12S CAN ESC (`ARK_G431_CAN`) | PB4 (also FDCAN TX PB9 / RX PA11); **DRV ENABLE (PC9) held low** | **In-tree** [`bootloader/`](../bootloader/) (`make bootloader-g431-can`). From ARK32-bootloader `feat/ark-g431-can-dual-protocol` (`060c417`, UAVCAN hw **0.71**) plus CAN FD. |
 
 | Resource | URL |
 |---|---|
@@ -45,7 +45,7 @@ Either kill switch disables embed (`EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`).
 
 ### G431 CAN factory image
 
-`BL_IMAGE_G431_CAN` in the `Makefile` points at `AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin`. The same file is app-side embedded (above) and consumed by:
+`BL_IMAGE_G431_CAN` in the `Makefile` points at `AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin`. The same file is app-side embedded (above) and consumed by:
 
 ```bash
 make factory-image-g431-can
@@ -54,6 +54,16 @@ make factory-image-check
 ```
 
 The factory builder places it at `0x08000000` (16 KiB region) and pads with `0xFF` to the app base at `0x08004000`. See [factory/README.md](../factory/README.md).
+
+### G431 CAN bootloader versions
+
+- **V19:** aligns libcanard's memory pool (`__attribute__((aligned(8)))`).
+- **V18 cannot be updated over CAN.** Its link placed the pool at `0x20000039`. libcanard reads each RxState's uint64 timestamp with LDRD, so the first multi-frame transfer, PX4's reply to the firmware-update `file.Read`, hard-faulted the bootloader.
+  - The ESC then stayed in the bootloader on every reset, because the RTC update flag survives a reset.
+  - Normal boots were unaffected.
+- **Recovering a V18 unit:**
+  - Update it over SWD or the signal-wire serial bootloader. Its first boot on a V19 app then rewrites the bootloader to V19.
+  - A unit stuck mid-update needs `TAMP_BKP0R` (`0x40002500`) cleared, after setting RCC `PWREN` and PWR `DBP`, before it boots the app again.
 
 ## Risk / recovery
 
@@ -90,7 +100,7 @@ Source of truth is [`bootloader/`](../bootloader/), not a separate checkout:
 
 ```sh
 make bootloader-g431-can
-# installs Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin
+# installs Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin
 make ARK_G431_CAN
 make factory-image-g431-can
 ```
@@ -117,6 +127,6 @@ The compare is limited to the source file's length because `.bl_image` is padded
 ```sh
 arm-none-eabi-objcopy -O binary --only-section=.bl_image \
   obj/AM32_ARK_G431_CAN_*.elf /tmp/embedded.bin
-cmp -n "$(wc -c < Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin)" \
-  /tmp/embedded.bin Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin
+cmp -n "$(wc -c < Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin)" \
+  /tmp/embedded.bin Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin
 ```

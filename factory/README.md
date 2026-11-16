@@ -56,7 +56,7 @@ openocd -f interface/stlink.cfg -f target/stm32f0x.cfg \
 
 | Region | Address | Size | Source |
 |--------|---------|------|--------|
-| Bootloader | `0x08000000` | 16 KiB | `Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V18.bin` (16 KiB region, file ~14 KiB + 0xFF pad) |
+| Bootloader | `0x08000000` | 16 KiB | `Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin` (16 KiB region, file ~14 KiB + 0xFF pad) |
 | Application | `0x08004000` | ~111.5 KiB | `make ARK_G431_CAN` (`ldscript_CAN.ld`) |
 | EEPROM | `0x0801F800` | 2 KiB | [`ARK_G431_CAN_eeprom_defaults.json`](ARK_G431_CAN_eeprom_defaults.json) |
 

@@ -73,7 +73,9 @@ static void dc_note_rx_frame(const CanardCANFrame *f)
 #	define TARGET_PERIOD_US 1000U
 
 static CanardInstance canard;
-static uint8_t canard_memory_pool[CANARD_POOL_SIZE];
+/* libcanard reads 64-bit fields of pool blocks with LDRD, which needs word
+ * alignment; a plain uint8_t array is only aligned by link-order luck. */
+static uint8_t canard_memory_pool[CANARD_POOL_SIZE] __attribute__((aligned(8)));
 
 struct CANStats canstats;
 
