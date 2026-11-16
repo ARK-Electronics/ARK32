@@ -27,6 +27,7 @@
 #	include "settings.h"
 #	include "motor_runtime.h"
 #	include "esc_state.h"
+#	include "dshot.h" /* DSHOT_MIN_THROTTLE, DSHOT_3D_FORWARD_MIN_THROTTLE */
 
 // include the headers for the generated DroneCAN messages from the
 // dronecan_dsdlc compiler
@@ -998,11 +999,22 @@ static void handle_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer)
 	const int16_t input_can = cmd.cmd.data[(unsigned)eepromBuffer.can_esc_index];
 
 	/*
-      we need to map onto the AM32 expected range, which is a 11 bit number, where:
-      0: off
-      1-46: special codes
-      48-2047: throttle
-    */
+	 * Map onto the AM32 11-bit input: 0 off, 1-47 special codes (DShot
+	 * commands), 48-2047 throttle. Bidirectional: 48-1047 reverse and
+	 * 1048-2047 forward, slowest at 48 and 1048.
+	 *
+	 * DSDL esc.RawCommand: "Non-zero setpoint value below minimum should be
+	 * interpreted as min valid setpoint", and zero is no rotation. PX4 sends
+	 * UAVCAN_EC_MIN (default 1) for armed zero thrust and means it as the
+	 * slowest reliable spin; ArduPilot idles near 819 and sends small values
+	 * only while spooling up. Both send 0 when disarmed. So any nonzero
+	 * command is at least the slowest throttle in its direction:
+	 * - unidirectional raw 1-4 used to land on 47, which the start branch ran
+	 *   at minimum duty while the stall rail (input < 48) ended the run as a
+	 *   commanded stop: a coast/stop/re-kick loop at PX4 armed idle;
+	 * - bidirectional raw +1..+8 used to land on 1047, the fastest reverse
+	 *   throttle, and raw -1..-8 on 47, a stop.
+	 */
 	uint16_t this_input = 0;
 	if (input_can == 0) {
 		this_input = 0;
@@ -1010,12 +1022,21 @@ static void handle_RawCommand(CanardInstance *ins, CanardRxTransfer *transfer)
 		const float scaled_value = input_can * (1000.0 / 8192);
 		if (scaled_value >= 0) {
 			this_input = (uint16_t)(1047 + scaled_value);
+			if (this_input < DSHOT_3D_FORWARD_MIN_THROTTLE) {
+				this_input = DSHOT_3D_FORWARD_MIN_THROTTLE;
+			}
 		} else {
 			this_input = (uint16_t)(47 + scaled_value * -1);
+			if (this_input < DSHOT_MIN_THROTTLE) {
+				this_input = DSHOT_MIN_THROTTLE;
+			}
 		}
 	} else if (input_can > 0) {
 		const float scaled_value = input_can * (2000.0 / 8192);
 		this_input = (uint16_t)(47 + scaled_value);
+		if (this_input < DSHOT_MIN_THROTTLE) {
+			this_input = DSHOT_MIN_THROTTLE;
+		}
 	}
 
 	const uint64_t ts = micros64();
