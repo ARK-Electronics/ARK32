@@ -2,7 +2,7 @@
 #include "main.h"
 
 /*
-  A bootloader fault must not park the ESC. Before V20 every fault handler
+  A bootloader fault must not park the ESC. Before V19 every fault handler
   spun forever, and the RTC firmware-update request (TAMP BKP0) survives a
   reset, so a fault during a DroneCAN update (V18: misaligned canard pool)
   left the unit unreachable over CAN until someone attached SWD.

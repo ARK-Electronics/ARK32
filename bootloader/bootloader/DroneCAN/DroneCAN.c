@@ -868,7 +868,7 @@ static void send_firmware_read(void)
   Abort a firmware update: drop the RTC update request and reset. The
   partially written app fails its CRC in DroneCAN_boot_ok, so we stay in the
   bootloader and report no image CRC (handle_GetNodeInfo), and the flight
-  controller starts a fresh BeginFirmwareUpdate from offset 0. Before V20 a
+  controller starts a fresh BeginFirmwareUpdate from offset 0. Before V19 a
   failed read only cleared node_id and left the update request set.
  */
 static void fw_update_abort(void)

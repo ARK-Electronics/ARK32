@@ -142,7 +142,7 @@ BL_IMAGE_F051 := Bootloaders/AM32_F051_BOOTLOADER_ARK4IN1_V18.bin
 BL_REGION_SIZE_F051 := 4096
 # ARK 12S CAN: 16 KiB region, app at 0x08004000 (ldscript_CAN.ld).
 # Built from in-tree bootloader/ (make bootloader-g431-can).
-BL_IMAGE_G431_CAN ?= Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V20.bin
+BL_IMAGE_G431_CAN ?= Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin
 BL_REGION_SIZE_G431_CAN := 16384
 BOOTLOADER_G431_SRCS := \
 	$(wildcard bootloader/Makefile) \
@@ -278,7 +278,7 @@ include $(ROOT)/make/tools_install.mk
 arm_sdk_check:
 	$(QUIET)bash scripts/check-arm-sdk.sh "$(ARM_SDK_PREFIX)" "$(XPACK_GCC_VER)"
 
-# In-tree G431 CAN bootloader. Rebuilds Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V20.bin
+# In-tree G431 CAN bootloader. Rebuilds Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin
 # from bootloader/ so app embed / factory images pick up CAN FD and pinout changes.
 .PHONY: bootloader-g431-can
 bootloader-g431-can: $(BL_IMAGE_G431_CAN)

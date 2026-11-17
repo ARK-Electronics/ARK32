@@ -79,7 +79,7 @@ bool save_flash_nolib(const uint8_t *data, uint32_t length, uint32_t add)
 
   // The G431 D-cache is on at reset and not coherent with flash program and
   // erase: DroneCAN_boot_ok() has just read the whole app region, so a stale
-  // line would fail this read-back. The result is checked since V20 (it used
+  // line would fail this read-back. The result is checked since V19 (it used
   // to be ignored), so reset the D-cache first, as the app does.
   if ((FLASH->ACR & FLASH_ACR_DCEN) != 0u) {
     FLASH->ACR &= ~FLASH_ACR_DCEN;

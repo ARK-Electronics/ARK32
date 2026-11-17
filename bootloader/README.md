@@ -14,8 +14,8 @@ make bootloader-g431-can
 
 or `make -C bootloader`. Output:
 
-- `bootloader/obj/AM32_G431_BOOTLOADER_ARKG4_CAN_V20.{elf,bin,hex}`
-- copied to `Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V20.bin` for app embed and factory images
+- `bootloader/obj/AM32_G431_BOOTLOADER_ARKG4_CAN_V19.{elf,bin,hex}`
+- copied to `Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin` for app embed and factory images
 
 `make ARK_G431_CAN` rebuilds this image when bootloader sources change.
 

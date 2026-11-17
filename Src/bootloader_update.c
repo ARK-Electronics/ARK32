@@ -82,11 +82,11 @@ static void flash_flush_caches(void) {}
 
 #	if defined(MCU_G431)
 /*
- * G431 (ARK 12S CAN) rewrite policy, V20. The F051 path below is unchanged.
+ * G431 (ARK 12S CAN) rewrite policy, V19. The F051 path below is unchanged.
  *
  * - Never downgrade. The bootloader stamps its version into default_settings[]
  *   (bootloader/bootloader/DroneCAN/DroneCAN.c): 0x01 0x02 <VER> 0x01 0x23
- *   "NEOESC f051", once in each of V18, V19 and V20. An older app on a newer
+ *   "NEOESC f051", once in each of V18 and V19. An older app on a newer
  *   chip used to put V18 back on any byte difference.
  * - A same-version mismatch is a damaged bootloader (an interrupted rewrite)
  *   and is repaired; an unidentifiable one (or our trampoline, below) too.
@@ -98,7 +98,7 @@ static void flash_flush_caches(void) {}
  *   reset vector, then pages 1..N-1, then page 0 in full. Power loss during
  *   the long middle phase boots the app directly (initAfterJump() sets its own
  *   VTOR), which sees a damaged bootloader and repairs it. Only the two page-0
- *   erase+write windows (about 45 ms total) can still brick; before V20 the
+ *   erase+write windows (about 45 ms total) can still brick; before V19 the
  *   whole ~350 ms rewrite could.
  */
 static int bl_image_version(const uint8_t *p, uint32_t len)
