@@ -25,9 +25,11 @@ static bool dronecan_tx_canfd;
 
 static void dc_note_rx_frame(const CanardCANFrame *f)
 {
-  /* Latch CAN FD TX on the first FD frame. Classic DNA must not flip
+  /* Latch CAN FD TX on the first FD frame once the data rate is proven
+   * (BRS lock or configured CAN_FD_MBPS), so an FD frame without BRS never
+   * makes us transmit BRS at an unproven rate. Classic DNA must not flip
    * bootloader transfers back to classic on an FD bus. */
-  if (f->canfd) {
+  if (f->canfd && sys_can_prefer_canfd_tx()) {
     dronecan_tx_canfd = true;
   }
 }
@@ -119,6 +121,31 @@ static struct {
   uint32_t last_read_ms;
   uint32_t offset;
 } fwupdate;
+
+/*
+  Set only by DroneCAN_boot_ok() once the whole app image passes its signature
+  and CRC checks, and cleared on every failing path. handle_GetNodeInfo (ISR
+  context) advertises the image CRC only while this is set: the descriptor CRC
+  alone is written early in an update, so a half-written image used to look
+  complete to the flight controller. Primed in DroneCAN_Startup() so a good
+  image is never reported as needing an update.
+ */
+static volatile bool app_valid;
+extern volatile uint8_t bl_flash_ecc_error; /* set by NMI_Handler on a flash double-ECC error */
+
+/*
+  TAMP BKP3 counts update aborts and bootloader fault resets since the last
+  successful flash or app boot (it is cleared then, and on a power cycle).
+  After BL_MAX_UPDATE_FAILS a new BeginFirmwareUpdate is refused, so a file
+  that can never succeed (oversized, a bad flash page, a deterministic fault)
+  cannot erase the app region in an endless PX4 retry loop.
+ */
+#define BL_MAX_UPDATE_FAILS 3U
+
+void DroneCAN_invalidate_app(void)
+{
+  app_valid = false;
+}
 
 // set from the CAN RX ISR (RawCommand) and read in the boot decision, so
 // volatile (especially with -flto cross-TU optimisation)
@@ -705,7 +732,7 @@ static void handle_GetNodeInfo(CanardInstance *ins, CanardRxTransfer *transfer)
   /* App APDescriptor is at FLASH1+0x208 (ldscript_CAN.ld). CRC 0 => update needed. */
   {
     const uint32_t *d = (const uint32_t *)(MAIN_FW_START_ADDR + 0x208u);
-    if (d[0] == 0xf1e4a240u && d[1] == 0x06916864u) {
+    if (app_valid && d[0] == 0xf1e4a240u && d[1] == 0x06916864u) {
       const uint64_t crc = ((uint64_t)d[3] << 32) | d[2];
       if (crc != 0) {
         pkt.software_version.optional_field_flags = UAVCAN_PROTOCOL_SOFTWAREVERSION_OPTIONAL_FIELD_FLAG_IMAGE_CRC;
@@ -758,14 +785,26 @@ static void handle_begin_firmware_update(CanardInstance* ins, CanardRxTransfer* 
     check for a repeated BeginFirmwareUpdateRequest
    */
   if (fwupdate.node_id == transfer->source_node_id &&
+      fwupdate.path[req.image_file_remote_path.path.len] == 0 &&
       memcmp(fwupdate.path, req.image_file_remote_path.path.data, req.image_file_remote_path.path.len) == 0) {
-    /* ignore duplicate request */
+    /* ignore duplicate request (full path match: path[] is zero-filled) */
     return;
   }
+  if (get_rtc_backup_register(3) >= BL_MAX_UPDATE_FAILS) {
+    /* too many failed attempts since the last good flash or boot */
+    return;
+  }
+  bl_flash_ecc_error = 0; /* the update rewrites the app region */
 
+  /* The app is about to be overwritten: stop advertising its image CRC
+     before the reply (GetNodeInfo runs from the RX interrupt, and the new
+     image's descriptor lands within the first few blocks). */
+  app_valid = false;
   fwupdate.offset = 0;
   fwupdate.node_id = transfer->source_node_id;
-  strncpy(fwupdate.path, (char*)req.image_file_remote_path.path.data, req.image_file_remote_path.path.len);
+  /* clear first: a shorter path must not keep the tail of a previous one */
+  memset(fwupdate.path, 0, sizeof(fwupdate.path));
+  memcpy(fwupdate.path, req.image_file_remote_path.path.data, req.image_file_remote_path.path.len);
 
   uint8_t buffer[UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_RESPONSE_MAX_SIZE];
   struct uavcan_protocol_file_BeginFirmwareUpdateResponse reply;
@@ -822,6 +861,20 @@ static void send_firmware_read(void)
 }
 
 /*
+  Abort a firmware update: drop the RTC update request and reset. The
+  partially written app fails its CRC in DroneCAN_boot_ok, so we stay in the
+  bootloader and report no image CRC (handle_GetNodeInfo), and the flight
+  controller starts a fresh BeginFirmwareUpdate from offset 0. Before V20 a
+  failed read only cleared node_id and left the update request set.
+ */
+static void fw_update_abort(void)
+{
+  set_rtc_backup_register(0, 0);
+  set_rtc_backup_register(3, get_rtc_backup_register(3) + 1U);
+  NVIC_SystemReset();
+}
+
+/*
   handle response to send_firmware_read()
  */
 static void handle_file_read_response(CanardInstance* ins, CanardRxTransfer* transfer)
@@ -842,7 +895,7 @@ static void handle_file_read_response(CanardInstance* ins, CanardRxTransfer* tra
       return;
     }
     /* read failed */
-    fwupdate.node_id = 0;
+    fw_update_abort();
     return;
   }
 
@@ -852,13 +905,28 @@ static void handle_file_read_response(CanardInstance* ins, CanardRxTransfer* tra
   while (len & 7U) {
     pkt.data.data[len++] = 0xFF;
   }
-  save_flash_nolib(pkt.data.data, len, (uint32_t)MAIN_FW_START_ADDR + fwupdate.offset);
+  /* Bound every write to the app region (it ends at the EEPROM page) and
+     check it: an oversized image used to run into the settings page, and a
+     failed write was ignored while offset kept advancing. The empty EOF read
+     of an image that exactly fills the region writes nothing. */
+  if (len != 0 &&
+      (fwupdate.offset + len > (uint32_t)(EEPROM_START_ADD - MAIN_FW_START_ADDR) ||
+       !save_flash_nolib(pkt.data.data, len, (uint32_t)MAIN_FW_START_ADDR + fwupdate.offset))) {
+    fw_update_abort();
+    return;
+  }
 
   fwupdate.offset += pkt.data.len;
 
   if (pkt.data.len < 256) {
     /* firmware updare done */
+    if (fwupdate.offset == 0) {
+      /* an empty file is not a successful flash */
+      fw_update_abort();
+      return;
+    }
     fwupdate.node_id = 0;
+    set_rtc_backup_register(3, 0);
     set_rtc_backup_register(0, RTC_BKUP0_FLASHED);
     NVIC_SystemReset();
     return;
@@ -1256,6 +1324,10 @@ static void DroneCAN_Startup(void)
 
   canardSetLocalNodeID(&canard, node_id);
 
+  // validate the app image once before any GetNodeInfo can be answered, so
+  // a good image always reports its CRC (see app_valid)
+  (void)DroneCAN_boot_ok();
+
   // initialise low level CAN peripheral hardware
   sys_can_init();
 #if CANARD_ENABLE_CANFD
@@ -1408,11 +1480,13 @@ bool DroneCAN_boot_ok(void)
 {
   if (fwupdate.node_id != 0) {
     // in fw update
+    app_valid = false;
     return false;
   }
   if ((get_rtc_backup_register(0) & 0xFFFFU) == RTC_BKUP0_FWUPDATE) {
     // waiting for firmware update
     node_status.vendor_specific_status_code = FAIL_REASON_IN_UPDATE;
+    app_valid = false;
     return false;
   }
   /*
@@ -1422,16 +1496,23 @@ bool DroneCAN_boot_ok(void)
   const uint32_t app_max_len = (128-18)*1024;
   const uint8_t *fw_base = (const uint8_t *)MAIN_FW_START_ADDR;
   struct app_signature *appsig = bl_memmem(fw_base, app_max_len, sig, sizeof(sig));
-  if (appsig == NULL || (((uint32_t)appsig) & 3) != 0) {
+  if (appsig == NULL || (((uint32_t)appsig) & 3) != 0 ||
+      (const uint8_t *)(appsig + 1) > fw_base + app_max_len) {
     set_reason(FAIL_REASON_NO_APP_SIG, NULL);
+    app_valid = false;
     return false;
   }
-  if (appsig->fwlen > app_max_len) {
+  /* fwlen must cover the signature itself: a smaller value underflowed the
+     crc2 length below and ran the CRC off the end of flash. */
+  if (appsig->fwlen > app_max_len ||
+      appsig->fwlen < (uint32_t)((const uint8_t *)(appsig + 1) - fw_base)) {
     set_reason(FAIL_REASON_BAD_LENGTH_APP, NULL);
+    app_valid = false;
     return false;
   }
   if (memcmp(AM32_MCU, appsig->mcu, strlen(AM32_MCU)) != 0) {
     set_reason(FAIL_REASON_BAD_BOARD_ID, NULL);
+    app_valid = false;
     return false;
   }
 
@@ -1442,9 +1523,24 @@ bool DroneCAN_boot_ok(void)
   if (appsig->crc1 != crc1 ||
       appsig->crc2 != crc2) {
     set_reason(FAIL_REASON_BAD_CRC, NULL);
+    app_valid = false;
     return false;
   }
 #endif
+  {
+    /* Publish with interrupts off: a BeginFirmwareUpdate taken by the RX
+       interrupt during the CRC pass clears app_valid, which must not be
+       overwritten here, and must also stop the jump to the app. */
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    const bool ok = fwupdate.node_id == 0 && !bl_flash_ecc_error;
+    app_valid = ok;
+    __set_PRIMASK(primask);
+    if (!ok) {
+      set_reason(FAIL_REASON_BAD_CRC, NULL);
+      return false;
+    }
+  }
 
   // waive the raw-command requirement under no-CAN fallback. The !can_seen
   // re-check closes the late-frame race: a frame arriving after fallback armed

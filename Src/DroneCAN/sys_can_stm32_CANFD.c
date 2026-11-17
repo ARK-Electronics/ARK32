@@ -101,9 +101,17 @@ static const struct {
 static uint8_t fd_idx;
 static uint8_t fd_auto;
 static uint8_t fd_locked;
-static uint16_t fd_err_streak;
+static volatile uint16_t fd_err_streak;
 static volatile uint8_t fd_need_retune;
 static uint32_t fd_hunt_start_ms;
+/* Set by the RX ISR for a frame that did not lock FD and arrived with no
+ * protocol errors logged since the previous IT0 (CEL == 0); consumed by
+ * sys_can_service(). Clean traffic holds the hunt dwell, so a classic bus no
+ * longer re-INITs the controller every FD_HUNT_DWELL_MS for the whole flight. */
+static volatile uint8_t fd_rx_clean;
+/* CEL read once per IT0 (reading ECR clears it): shared by the RX path and
+ * the error streak. */
+static uint8_t fd_it0_cel;
 
 static uint8_t dlc_to_len(uint8_t dlc)
 {
@@ -279,17 +287,14 @@ static void handleRxInterrupt(uint8_t fifo_index)
 
 	*fifo_ack_reg = get_index;
 
-#	ifndef BOOTLOADER
 	/* Only a BRS frame proves the data-phase timing: an FD frame without
 	 * BRS runs its data phase at the nominal rate and matches any hunt index.
-	 * App only: the embedded bootloader binary is vendored and keeps its own
-	 * behaviour until it is rebuilt and validated on its own. */
+	 * Both builds (the bootloader used to lock on any FD frame). */
 	if (is_fd && (dlc_word & FDCAN_ELMT_BRS)) {
-#	else
-	if (is_fd) {
-#	endif
 		fd_err_streak = 0;
 		fd_locked = 1;
+	} else if (fd_it0_cel == 0) {
+		fd_rx_clean = 1;
 	}
 
 	DroneCAN_handleFrame(&frame);
@@ -297,9 +302,8 @@ static void handleRxInterrupt(uint8_t fifo_index)
 
 static void handleTxCompleteInterrupt(void) {}
 
-static void pollErrorFlagsFromISR(void)
+static void pollErrorFlagsFromISR(uint8_t cel)
 {
-	const uint8_t cel = (uint8_t)(FDCAN1->ECR >> 16);
 	if (cel == 0) {
 		return;
 	}
@@ -325,6 +329,7 @@ void sys_can_getUniqueID(uint8_t id[16])
 
 void FDCAN1_IT0_IRQHandler(void)
 {
+	fd_it0_cel = (uint8_t)(FDCAN1->ECR >> 16);
 	if ((FDCAN1->IR & FDCAN_IR_RF0N) || (FDCAN1->IR & FDCAN_IR_RF0F)) {
 		FDCAN1->IR = FDCAN_IR_RF0N | FDCAN_IR_RF0F;
 		handleRxInterrupt(0);
@@ -335,7 +340,7 @@ void FDCAN1_IT0_IRQHandler(void)
 		handleRxInterrupt(1);
 	}
 
-	pollErrorFlagsFromISR();
+	pollErrorFlagsFromISR(fd_it0_cel);
 }
 
 void FDCAN1_IT1_IRQHandler(void)
@@ -356,7 +361,7 @@ void FDCAN1_IT1_IRQHandler(void)
 	}
 #	endif
 
-	pollErrorFlagsFromISR();
+	pollErrorFlagsFromISR((uint8_t)(FDCAN1->ECR >> 16));
 }
 
 int16_t sys_can_transmit(const CanardCANFrame *txf)
@@ -384,7 +389,10 @@ void sys_can_enable_IRQ(void)
 
 static bool waitForBitState(volatile uint32_t *reg, uint32_t mask, bool target_state)
 {
-	while (true) {
+	/* Bounded: INIT/CCE normally settle within a few CAN bit times. A
+	 * controller that never acknowledges must not hang the ESC (the
+	 * bootloader has no watchdog); callers treat false as failure. */
+	for (uint32_t n = 0; n < 200000u; n++) {
 		bool current_state = ((*reg) & mask) != 0;
 		if (current_state == target_state) {
 			return true;
@@ -511,6 +519,8 @@ static void fd_retune_next(void)
 
 	FDCAN1->CCCR |= FDCAN_CCCR_INIT;
 	if (!waitForBitState(&FDCAN1->CCCR, FDCAN_CCCR_INIT, true)) {
+		/* don't retry (and spin the bounded wait) on every service call */
+		fd_hunt_start_ms = fd_now_ms();
 		return;
 	}
 	FDCAN1->CCCR |= FDCAN_CCCR_CCE;
@@ -528,6 +538,15 @@ void sys_can_service(void)
 	if (!fd_auto || fd_locked) {
 		fd_need_retune = 0;
 		return;
+	}
+	if (fd_rx_clean) {
+		fd_rx_clean = 0;
+		/* error-free traffic at the nominal rate: nothing to hunt for. Any
+		 * error since the last retune (fd_err_streak) lets the dwell run, so
+		 * an FD bus at another data rate still hunts. */
+		if (fd_err_streak == 0 && !fd_need_retune) {
+			fd_hunt_start_ms = fd_now_ms();
+		}
 	}
 	const uint32_t elapsed = fd_now_ms() - fd_hunt_start_ms;
 	if ((fd_need_retune && elapsed >= FD_HUNT_MIN_MS) || elapsed >= FD_HUNT_DWELL_MS) {

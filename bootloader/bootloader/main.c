@@ -475,6 +475,8 @@ static void jump()
   }
 
   sys_can_disable_IRQ();
+  /* booting a valid app: reset the update-failure count (TAMP BKP3) */
+  set_rtc_backup_register(3, 0);
 #endif
 
   bl_led_off();
@@ -659,6 +661,12 @@ static void decodeInput()
       payLoadBuffer[2] = BOOTLOADER_VERSION;
     }
 
+#if DRONECAN_SUPPORT
+    if (address != EEPROM_START_ADD) {
+      /* a serial app write invalidates the image CRC GetNodeInfo reports */
+      DroneCAN_invalidate_app();
+    }
+#endif
     if (!save_flash_nolib((uint8_t*)payLoadBuffer, payload_buffer_size,address)) {
       send_BAD_ACK();
     } else {

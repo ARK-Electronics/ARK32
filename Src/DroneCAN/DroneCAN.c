@@ -38,9 +38,12 @@ static bool dronecan_tx_canfd;
 
 static void dc_note_rx_frame(const CanardCANFrame *f)
 {
-	/* Latch CAN FD TX on the first FD frame. Classic DNA/NodeStatus on
-	 * an FD bus must not flip Status and telemetry back to classic. */
-	if (f->canfd) {
+	/* Latch CAN FD TX on the first FD frame once the data rate is proven
+	 * (a BRS lock, or a configured CAN_FD_MBPS): an FD frame without BRS
+	 * must not make us transmit BRS at an unproven rate. Classic
+	 * DNA/NodeStatus on an FD bus must not flip Status and telemetry back
+	 * to classic. */
+	if (f->canfd && sys_can_prefer_canfd_tx()) {
 		dronecan_tx_canfd = true;
 	}
 }

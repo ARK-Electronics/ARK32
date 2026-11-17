@@ -13,7 +13,7 @@ These files are release (or branch) artifacts as flat binaries. They are stored 
 |---|---|---|---|
 | `AM32_F051_BOOTLOADER_ARK4IN1_V18.bin` | STM32F051, ARK 4IN1 (default embed) | PB4; **PA15 nSLEEP low** | [ARK32-bootloader](https://github.com/ARK-Electronics/ARK32-bootloader) `master` (`cdce0a2`, #4); product `AM32_F051_BOOTLOADER_ARK4IN1` |
 | `AM32_F051_BOOTLOADER_PB4_V18.bin` | STM32F051 generic PB4 (reference only) | PB4 | [ARK32-bootloader v18.0.0](https://github.com/ARK-Electronics/ARK32-bootloader/releases/tag/v18.0.0) (`0d667c5`), asset `AM32_F051_BOOTLOADER_PB4_V18.hex` |
-| `AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin` | STM32G431/G491, ARK 12S CAN ESC (`ARK_G431_CAN`) | PB4 (also FDCAN TX PB9 / RX PA11); **DRV ENABLE (PC9) held low** | **In-tree** [`bootloader/`](../bootloader/) (`make bootloader-g431-can`). From ARK32-bootloader `feat/ark-g431-can-dual-protocol` (`060c417`, UAVCAN hw **0.71**) plus CAN FD. |
+| `AM32_G431_BOOTLOADER_ARKG4_CAN_V20.bin` | STM32G431/G491, ARK 12S CAN ESC (`ARK_G431_CAN`) | PB4 (also FDCAN TX PB9 / RX PA11); **DRV ENABLE (PC9) held low** | **In-tree** [`bootloader/`](../bootloader/) (`make bootloader-g431-can`). From ARK32-bootloader `feat/ark-g431-can-dual-protocol` (`060c417`, UAVCAN hw **0.71**) plus CAN FD. |
 
 | Resource | URL |
 |---|---|
@@ -45,7 +45,7 @@ Either kill switch disables embed (`EMBED_BOOTLOADER=0` or `NO_EMBED_BL=1`).
 
 ### G431 CAN factory image
 
-`BL_IMAGE_G431_CAN` in the `Makefile` points at `AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin`. The same file is app-side embedded (above) and consumed by:
+`BL_IMAGE_G431_CAN` in the `Makefile` points at `AM32_G431_BOOTLOADER_ARKG4_CAN_V20.bin`. The same file is app-side embedded (above) and consumed by:
 
 ```bash
 make factory-image-g431-can
@@ -57,17 +57,30 @@ The factory builder places it at `0x08000000` (16 KiB region) and pads with `0xF
 
 ### G431 CAN bootloader versions
 
+- **V20:** hardens the update path. Every change to the bootloader binary must bump `BOOTLOADER_VERSION`: the app only ever upgrades, and treats a same-version mismatch as damage to repair.
+  - **Write bounds (U1):** a DroneCAN firmware write is bounded to the app region and checked (read-back after a D-cache reset). A zero-length write never erases a page. A failed write, failed read or empty file aborts (clears BKP0, resets).
+  - **Faults (U3):** fault handlers clear BKP0 and reset without using the stack. NMI on a flash double-ECC error marks the app invalid instead of resetting.
+  - **Retry limit:** TAMP BKP3 counts aborts and fault resets; after 3 a new BeginFirmwareUpdate is refused until a good flash, an app boot or a power cycle.
+  - **Image CRC (U4):** GetNodeInfo advertises the image CRC only after the whole app validates, and never during an update.
+  - **App signature (U5):** the signature is bounded and `fwlen` lower-bounded.
+  - **CAN FD (U6):** locks only on BRS frames and holds the hunt dwell on error-free classic traffic. FD TX only after a proven rate. Bounded register waits.
+  - **Size:** `-fno-optimize-crc` keeps GCC 15 from turning the CRC loops into 1 KiB of tables (about 15.5 KiB of 16 KiB used).
 - **V19:** aligns libcanard's memory pool (`__attribute__((aligned(8)))`).
 - **V18 cannot be updated over CAN.** Its link placed the pool at `0x20000039`. libcanard reads each RxState's uint64 timestamp with LDRD, so the first multi-frame transfer, PX4's reply to the firmware-update `file.Read`, hard-faulted the bootloader.
   - The ESC then stayed in the bootloader on every reset, because the RTC update flag survives a reset.
   - Normal boots were unaffected.
 - **Recovering a V18 unit:**
-  - Update it over SWD or the signal-wire serial bootloader. Its first boot on a V19 app then rewrites the bootloader to V19.
+  - Update it over SWD or the signal-wire serial bootloader. Its first software reset on a V19 or later app then rewrites the bootloader.
   - A unit stuck mid-update needs `TAMP_BKP0R` (`0x40002500`) cleared, after setting RCC `PWREN` and PWR `DBP`, before it boots the app again.
 
 ## Risk / recovery
 
 App-side BL rewrite erases flash pages at `0x08000000` (reset vectors and the one-wire bootloader). Power loss after page 0 is erased and before vectors are rewritten leaves the chip without a valid reset vector — it will not reach the app or the previous bootloader.
+
+**G431 (V20 apps) narrows this window** (`Src/bootloader_update.c`):
+- **When it runs:** the app never downgrades (it reads both versions from the `default_settings` signature). It rewrites only after a software reset, never on a power-up.
+- **Trampoline:** it first writes page 0 with just the app's stack pointer and reset vector, then pages 1..7, then page 0 in full. A power cut in the long middle phase boots the app directly, and the app repairs the bootloader on its next software reset.
+- **Remaining brick window:** only the two page-0 erase and write windows (about 45 ms) can still brick.
 
 - **In-field recovery:** SWD (or another pre-existing ROM/system boot path) is required to reflash the bootloader region. Keep a known-good `AM32_F051_BOOTLOADER_*.bin` (or the release `.hex`) and OpenOCD/probe procedure for production and bench recovery.
 - **Software path:** On program/verify failure the update aborts without `NVIC_SystemReset`, re-enables IRQs, and continues into the already-running app so the board can still be reached if vectors survived. Sticky flash faults cannot hang forever with IRQs off (bounded per-page retries + IWDG armed for the update).
@@ -100,7 +113,7 @@ Source of truth is [`bootloader/`](../bootloader/), not a separate checkout:
 
 ```sh
 make bootloader-g431-can
-# installs Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin
+# installs Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V20.bin
 make ARK_G431_CAN
 make factory-image-g431-can
 ```
@@ -127,6 +140,6 @@ The compare is limited to the source file's length because `.bl_image` is padded
 ```sh
 arm-none-eabi-objcopy -O binary --only-section=.bl_image \
   obj/AM32_ARK_G431_CAN_*.elf /tmp/embedded.bin
-cmp -n "$(wc -c < Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin)" \
-  /tmp/embedded.bin Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V19.bin
+cmp -n "$(wc -c < Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V20.bin)" \
+  /tmp/embedded.bin Bootloaders/AM32_G431_BOOTLOADER_ARKG4_CAN_V20.bin
 ```

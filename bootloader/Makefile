@@ -1,5 +1,5 @@
 # In-tree G431 CAN bootloader for the ARK 12S CAN ESC (ARK_G431_CAN).
-# Built as AM32_G431_BOOTLOADER_ARKG4_CAN_V19 and installed into ../Bootloaders/.
+# Built as AM32_G431_BOOTLOADER_ARKG4_CAN_V20 and installed into ../Bootloaders/.
 #
 # HAL/CMSIS come from the app tree (../Mcu/g431/Drivers). Local Mcu/g431 holds
 # only bootloader-specific files (blutil, eeprom, startup, fault stubs).
@@ -80,7 +80,7 @@ SRC := $(SRC_HAL) $(SRC_MCU) $(SRC_BL) $(SRC_CAN)
 CFLAGS := \
 	-mcpu=cortex-m4 -mthumb \
 	-fsingle-precision-constant -fomit-frame-pointer -ffast-math --specs=nosys.specs \
-	-g3 -Os -ffunction-sections -fdata-sections -funsigned-char \
+	-g3 -Os -ffunction-sections -fdata-sections -funsigned-char -fno-optimize-crc \
 	-flto \
 	-Wall -Wextra -Wundef -Werror -Wno-unused-parameter \
 	-include $(ROOT)/Inc/targets.h \

@@ -68,6 +68,15 @@ uint16_t dshot_badcounts;
  * once moving. See the idle-exit holdoff in computeDshotDMA(). */
 #define DSHOT_IDLE_EXIT_HOLDOFF_FRAMES 2
 static uint8_t dshot_idle_exit_holdoff;
+#if defined(MCU_G431)
+/* G431 framing check (Mcu/g431/Src/stm32g4xx_it.c) dropped a capture window
+ * before decode: treat it like a timing reject so the idle-exit holdoff still
+ * needs consecutive valid frames. */
+void dshotFramingRejected(void)
+{
+	dshot_idle_exit_holdoff = 0;
+}
+#endif
 /* Diagnostic, alongside good/badcounts: frames rejected by the holdoff. A
  * healthy link ticks this by exactly DSHOT_IDLE_EXIT_HOLDOFF_FRAMES per real
  * spool-up; anything beyond that is single-frame drive demands that never

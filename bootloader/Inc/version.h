@@ -2,4 +2,4 @@
   update this file for new releases
  */
 
-#define BOOTLOADER_VERSION 19
+#define BOOTLOADER_VERSION 20

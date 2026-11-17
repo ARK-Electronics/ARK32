@@ -565,11 +565,24 @@ void MX_DMA_Init(void)
 	NVIC_EnableIRQ(DMA1_Channel1_IRQn);
 }
 
+/*
+ * TIM6 runs tenKhzRoutine (the 20 kHz control loop). At priority 0 it blocks
+ * the DShot capture DMA interrupt (priority 1), so a long control-loop pass
+ * delays the re-arm into the next frame; the F051 runs the same loop at 3.
+ * Bench A/B only: build with EXTRA_CFLAGS=-DG4_TENKHZ_IRQ_PRIO=3 for the F051
+ * order (COMP and the TIM7 commutation timer 0, DShot DMA 1, EXTI15 2, the loop
+ * 3). The default is unchanged until that A/B is done: the G431 ZC front end has
+ * never run with COMP/commutation preempting the control loop.
+ */
+#ifndef G4_TENKHZ_IRQ_PRIO
+#	define G4_TENKHZ_IRQ_PRIO 0
+#endif
+
 void MX_TIM6_Init(void)
 {
 	LL_TIM_InitTypeDef TIM_InitStruct = {0};
 	LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_TIM6);
-	NVIC_SetPriority(TIM6_DAC_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 0, 0));
+	NVIC_SetPriority(TIM6_DAC_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), G4_TENKHZ_IRQ_PRIO, 0));
 	NVIC_EnableIRQ(TIM6_DAC_IRQn);
 	TIM_InitStruct.Prescaler = PCLK_MHZ - 1;
 	TIM_InitStruct.CounterMode = LL_TIM_COUNTERMODE_UP;

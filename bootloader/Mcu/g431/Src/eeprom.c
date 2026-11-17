@@ -22,6 +22,13 @@ bool save_flash_nolib(const uint8_t *data, uint32_t length, uint32_t add)
     // address and length must be on 8 byte boundary
     return false;
   }
+  if (length == 0) {
+    // nothing to write: never erase a page for it. A zero-length write at a
+    // page boundary (the empty EOF read of an image that exactly fills the
+    // app region, or an empty serial CMD_PROG_FLASH) used to erase the
+    // EEPROM page at 0x0801F800.
+    return true;
+  }
   // we need to flash on 32 bit boundaries
   uint32_t data_length = length / 4;
   volatile FLASH_TypeDef *flash = FLASH;
@@ -69,6 +76,17 @@ bool save_flash_nolib(const uint8_t *data, uint32_t length, uint32_t add)
 
   // lock flash again
   SET_BIT(flash->CR, FLASH_CR_LOCK);
+
+  // The G431 D-cache is on at reset and not coherent with flash program and
+  // erase: DroneCAN_boot_ok() has just read the whole app region, so a stale
+  // line would fail this read-back. The result is checked since V20 (it used
+  // to be ignored), so reset the D-cache first, as the app does.
+  if ((FLASH->ACR & FLASH_ACR_DCEN) != 0u) {
+    FLASH->ACR &= ~FLASH_ACR_DCEN;
+    FLASH->ACR |= FLASH_ACR_DCRST;
+    FLASH->ACR &= ~FLASH_ACR_DCRST;
+    FLASH->ACR |= FLASH_ACR_DCEN;
+  }
 
   // ensure data is correct
   return memcmp(data, (const void *)add, length) == 0;
