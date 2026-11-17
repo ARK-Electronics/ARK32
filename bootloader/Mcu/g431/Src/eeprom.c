@@ -86,6 +86,8 @@ bool save_flash_nolib(const uint8_t *data, uint32_t length, uint32_t add)
     FLASH->ACR |= FLASH_ACR_DCRST;
     FLASH->ACR &= ~FLASH_ACR_DCRST;
     FLASH->ACR |= FLASH_ACR_DCEN;
+    __DSB();
+    __ISB();
   }
 
   // ensure data is correct

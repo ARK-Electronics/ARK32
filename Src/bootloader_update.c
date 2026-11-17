@@ -73,6 +73,8 @@ static void flash_flush_caches(void)
 		FLASH->ACR &= ~FLASH_ACR_ICRST;
 		FLASH->ACR |= FLASH_ACR_ICEN;
 	}
+	__DSB();
+	__ISB();
 }
 #	else
 static void flash_flush_caches(void) {}
@@ -204,7 +206,8 @@ void maybe_update_bootloader(void)
 		uint8_t tramp[8];
 		memcpy(tramp, app_vec, sizeof(tramp));
 		bool tramp_ok = have_tramp;
-		if (!tramp_ok) {
+		/* retry in place: the fallback below starts with the long page-0 window */
+		for (uint32_t attempt = 0; !tramp_ok && attempt < 3u; attempt++) {
 			RELOAD_WATCHDOG_COUNTER();
 			save_flash_nolib(tramp, (int)sizeof(tramp), MCU_FLASH_START);
 			flash_flush_caches();

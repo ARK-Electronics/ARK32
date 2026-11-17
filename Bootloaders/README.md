@@ -58,9 +58,9 @@ The factory builder places it at `0x08000000` (16 KiB region) and pads with `0xF
 ### G431 CAN bootloader versions
 
 - **V20:** hardens the update path. Every change to the bootloader binary must bump `BOOTLOADER_VERSION`: the app only ever upgrades, and treats a same-version mismatch as damage to repair.
-  - **Write bounds (U1):** a DroneCAN firmware write is bounded to the app region and checked (read-back after a D-cache reset). A zero-length write never erases a page. A failed write, failed read or empty file aborts (clears BKP0, resets).
+  - **Write bounds (U1):** a DroneCAN firmware write is bounded to the app region and checked (read-back after a D-cache reset). A zero-length write never erases a page. A failed write, a failed read, 8 read errors at offset 0, or an empty file aborts (clears BKP0, resets). A repeated BeginFirmwareUpdate for the running update gets ERROR_IN_PROGRESS.
   - **Faults (U3):** fault handlers clear BKP0 and reset without using the stack. NMI on a flash double-ECC error marks the app invalid instead of resetting.
-  - **Retry limit:** TAMP BKP3 counts aborts and fault resets; after 3 a new BeginFirmwareUpdate is refused until a good flash, an app boot or a power cycle.
+  - **Retry limit:** TAMP BKP3 counts update attempts (aborts and finished transfers) and fault resets. Booting an app clears it. After 3, a new BeginFirmwareUpdate is refused until the next app boot or power cycle. PX4 re-Begins whenever a node restarts without a matching image CRC, so without this a file that can never succeed erases the app region in an endless loop.
   - **Image CRC (U4):** GetNodeInfo advertises the image CRC only after the whole app validates, and never during an update.
   - **App signature (U5):** the signature is bounded and `fwlen` lower-bounded.
   - **CAN FD (U6):** locks only on BRS frames and holds the hunt dwell on error-free classic traffic. FD TX only after a proven rate. Bounded register waits.

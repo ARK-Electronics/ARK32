@@ -134,8 +134,9 @@ static volatile bool app_valid;
 extern volatile uint8_t bl_flash_ecc_error; /* set by NMI_Handler on a flash double-ECC error */
 
 /*
-  TAMP BKP3 counts update aborts and bootloader fault resets since the last
-  successful flash or app boot (it is cleared then, and on a power cycle).
+  TAMP BKP3 counts update attempts (aborts, finished transfers) and
+  bootloader fault resets since the last app boot (main.c clears it before
+  jumping; a power cycle clears it too).
   After BL_MAX_UPDATE_FAILS a new BeginFirmwareUpdate is refused, so a file
   that can never succeed (oversized, a bad flash page, a deterministic fault)
   cannot erase the app region in an endless PX4 retry loop.
@@ -784,32 +785,35 @@ static void handle_begin_firmware_update(CanardInstance* ins, CanardRxTransfer* 
   /*
     check for a repeated BeginFirmwareUpdateRequest
    */
+  uint8_t error = UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_RESPONSE_ERROR_OK;
   if (fwupdate.node_id == transfer->source_node_id &&
       fwupdate.path[req.image_file_remote_path.path.len] == 0 &&
       memcmp(fwupdate.path, req.image_file_remote_path.path.data, req.image_file_remote_path.path.len) == 0) {
-    /* ignore duplicate request (full path match: path[] is zero-filled) */
+    /* repeat of the running update (full path match: path[] is zero-filled).
+       Keep going and say so: libuavcan treats IN_PROGRESS as confirmed and
+       stops re-sending Begin every 250 ms. */
+    error = UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_RESPONSE_ERROR_IN_PROGRESS;
+  } else if (get_rtc_backup_register(3) >= BL_MAX_UPDATE_FAILS) {
+    /* too many failed attempts since the last app boot or power cycle */
     return;
-  }
-  if (get_rtc_backup_register(3) >= BL_MAX_UPDATE_FAILS) {
-    /* too many failed attempts since the last good flash or boot */
-    return;
-  }
-  bl_flash_ecc_error = 0; /* the update rewrites the app region */
+  } else {
+    bl_flash_ecc_error = 0; /* the update rewrites the app region */
 
-  /* The app is about to be overwritten: stop advertising its image CRC
-     before the reply (GetNodeInfo runs from the RX interrupt, and the new
-     image's descriptor lands within the first few blocks). */
-  app_valid = false;
-  fwupdate.offset = 0;
-  fwupdate.node_id = transfer->source_node_id;
-  /* clear first: a shorter path must not keep the tail of a previous one */
-  memset(fwupdate.path, 0, sizeof(fwupdate.path));
-  memcpy(fwupdate.path, req.image_file_remote_path.path.data, req.image_file_remote_path.path.len);
+    /* The app is about to be overwritten: stop advertising its image CRC
+       before the reply (GetNodeInfo runs from the RX interrupt, and the new
+       image's descriptor lands within the first few blocks). */
+    app_valid = false;
+    fwupdate.offset = 0;
+    fwupdate.node_id = transfer->source_node_id;
+    /* clear first: a shorter path must not keep the tail of a previous one */
+    memset(fwupdate.path, 0, sizeof(fwupdate.path));
+    memcpy(fwupdate.path, req.image_file_remote_path.path.data, req.image_file_remote_path.path.len);
+  }
 
   uint8_t buffer[UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_RESPONSE_MAX_SIZE];
   struct uavcan_protocol_file_BeginFirmwareUpdateResponse reply;
   memset(&reply, 0, sizeof(reply));
-  reply.error = UAVCAN_PROTOCOL_FILE_BEGINFIRMWAREUPDATE_RESPONSE_ERROR_OK;
+  reply.error = error;
 
   uint32_t total_size = DC_ENCODE(uavcan_protocol_file_BeginFirmwareUpdateResponse_encode, &reply, buffer);
 
@@ -891,8 +895,13 @@ static void handle_file_read_response(CanardInstance* ins, CanardRxTransfer* tra
   }
   if (pkt.error.value != UAVCAN_PROTOCOL_FILE_ERROR_OK) {
     if (fwupdate.offset == 0) {
-      // MissionPlanner does this sometimes, ignore
-      return;
+      // MissionPlanner does this sometimes, ignore a few. Nothing has been
+      // written yet, so after that abort: the old app is intact and boots.
+      static uint8_t zero_offset_errors;
+      if (++zero_offset_errors < 8U) {
+        return;
+      }
+      zero_offset_errors = 0;
     }
     /* read failed */
     fw_update_abort();
@@ -926,7 +935,10 @@ static void handle_file_read_response(CanardInstance* ins, CanardRxTransfer* tra
       return;
     }
     fwupdate.node_id = 0;
-    set_rtc_backup_register(3, 0);
+    /* a finished transfer still counts as an attempt: only booting the new
+       app clears BKP3 (main.c), so a truncated or bad image that never boots
+       is bounded like an abort */
+    set_rtc_backup_register(3, get_rtc_backup_register(3) + 1U);
     set_rtc_backup_register(0, RTC_BKUP0_FLASHED);
     NVIC_SystemReset();
     return;
