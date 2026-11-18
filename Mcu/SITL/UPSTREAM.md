@@ -60,9 +60,16 @@ small ARK adapter retains these deliberate differences:
   Short contiguous audio windows preserve dots and handle dropped UDP batches.
 - Zero-throttle CAN keepalives during parameter round trips, because ARK
   resets after input timeout.
+- With stuck-rotor protection disabled, a brief obstruction must recover
+  without cycling throttle. A sustained obstruction must still trip ARK's
+  independent acquisition/desync episode rail, remain stopped after release,
+  and recover after zero throttle. Upstream's fixed three-second obstruction
+  falls near that rail's latch threshold and cannot distinguish these cases.
 - ARK firmware version defaults are selected before ESCSim imports its
   parameter generator. Its defaults reader is connected to ARK's schema-backed
   defaults because the literal C array has been replaced by a generated header.
+  Those defaults include the target's input-mode and protection corrections
+  after the shared EEPROM skeleton is applied.
   Upstream parameter parsing and image construction remain in use; all three
   ARK and three upstream model/parameter pairs are checked.
 - CAN dependencies and multicast startup failures fail the suite. Sanitizer
