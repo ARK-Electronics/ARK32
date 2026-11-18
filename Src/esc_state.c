@@ -5,11 +5,14 @@
 #include "esc_state.h"
 
 #include "motor_runtime.h"
+#include "zc_frontend.h"
 #include "common.h"
 #include "dshot.h"
 #include "signal.h"
 #include "eeprom.h"
 #include "faults.h"
+#include "debug_uart.h"
+#include "comparator.h"
 
 volatile esc_state_t esc_state = ESC_DISARMED;
 volatile uint16_t esc_illegal_edge_count = 0;
@@ -55,6 +58,7 @@ static const uint16_t esc_allowed[ESC_STATE_COUNT] = {
 	[ESC_FAULT_LVC] = (1u << ESC_FAULT_LVC),
 };
 
+#ifdef USE_DEBUG_UART
 const char *escStateName(esc_state_t s)
 {
 	switch (s) {
@@ -82,6 +86,7 @@ const char *escStateName(esc_state_t s)
 			return "?";
 	}
 }
+#endif
 
 esc_state_t escGetState(void)
 {
@@ -117,19 +122,33 @@ static void escCommitState(esc_state_t next)
 		}
 #endif
 	}
+	if (from != next) {
+		debugUartLogState((uint8_t)from, (uint8_t)next);
+	}
 	esc_state = next;
 }
 
 /* Force without edge check (reconcile / recovery). */
 static void escForceState(esc_state_t next)
 {
+	if (esc_state != next) {
+		debugUartLogState((uint8_t)esc_state, (uint8_t)next);
+	}
 	esc_state = next;
 }
 
 void escReconcileFromFlags(void)
 {
+	/* A stopped motor is a new run next time. The established-run latch
+	 * must not survive PX4 disarm / zero throttle: ESC `armed` stays 1
+	 * across FC arm/disarm, so leftover established made the next
+	 * idle-start jump look like an in-flight desync (error_count/WARN). */
+	if (!running && !stepper_sine) {
+		fault_run_established = 0;
+	}
+
 	/* Latched faults win over drive mode. */
-	if (bemf_timeout_happened == ESC_STUCK_LATCH) {
+	if (bemf_timeout_happened == ESC_STUCK_LATCH || faultGateDriverFaultActive()) {
 		escForceState(ESC_FAULT_STUCK);
 		return;
 	}
@@ -205,6 +224,10 @@ void escToOpenLoop(void)
 	running = 1;
 	old_routine = 1;
 	stepper_sine = 0;
+#if defined(ZC_FRONTEND_G431)
+	/* Drop interrupt-ZC while back in poll; otherwise dual-path thrash. */
+	maskPhaseInterrupts();
+#endif
 	escCommitState(ESC_OPEN_LOOP);
 }
 

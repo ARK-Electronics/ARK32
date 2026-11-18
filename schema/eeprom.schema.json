@@ -352,13 +352,37 @@
                 "minimum": 0
               },
               "default": {
-                "type": "integer"
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]*$"
+                  }
+                ]
               },
               "min": {
-                "type": "integer"
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]*$"
+                  }
+                ]
               },
               "max": {
-                "type": "integer"
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]*$"
+                  }
+                ]
               },
               "ptr": {
                 "enum": [
@@ -384,6 +408,9 @@
             "properties": {
               "key": {
                 "type": "string"
+              },
+              "optional": {
+                "type": "boolean"
               }
             },
             "required": [

@@ -123,6 +123,20 @@ void loadEEpromSettings(void)
 			startup_max_duty_cycle = startup_max_duty_cycle + dead_time_override;
 			setPwmDeadTime(dead_time_override);
 		}
+		/* temperature_limit and can_temp_derate_band are resolved at use, in
+		 * runtimeThermalLimitTick(), and never rewritten here: a save (the
+		 * boot version stamp, DShot or DroneCAN) would otherwise persist the
+		 * coercion - the 4IN1 factory 141 as 255 and byte 184 0xFF as 15.
+		 * Firmware does not rewrite stored settings; migrations live in the
+		 * configurator.
+		 *
+		 * THERMAL_LIMIT_MIN_C is a build-time override ONLY so a bench can
+		 * exercise the derate at a temperature the board reaches (a 5-inch
+		 * 6S attempt plateaued at 57 C). Do not lower it in a shipping build:
+		 * 70 C is the floor the product's protection envelope assumes, and
+		 * check-erase-defaults.py gates the shipped pair. It lives in
+		 * targets.h because the DroneCAN parameter table validates the same
+		 * byte against TEMPERATURE_LIMIT's min; keep the two shared. */
 
 		if (eepromBuffer.current_limit > 0 && eepromBuffer.current_limit <= 100) {
 			use_current_limit = 1;
@@ -136,6 +150,8 @@ void loadEEpromSettings(void)
 		if (eepromBuffer.input_type < 10) {
 			switch (eepromBuffer.input_type) {
 				case AUTO_IN:
+					/* Detect first wire protocol (DShot/PWM). DroneCAN still
+					 * runs; while RawCommand is live it wins (DroneCAN_active). */
 					dshot = 0;
 					servoPwm = 0;
 					EDT_ARMED = 1;
@@ -153,6 +169,12 @@ void loadEEpromSettings(void)
 					EDT_ARM_ENABLE = 1;
 					EDT_ARMED = 0;
 					dshot = 1;
+					break;
+				case DRONECAN_IN:
+					/* Wire capture left idle; DroneCAN_Init disables its IRQs. */
+					dshot = 0;
+					servoPwm = 0;
+					EDT_ARMED = 1;
 					break;
 			};
 		} else {
@@ -262,6 +284,36 @@ void loadEEpromSettings(void)
 		advance_erpm_scale_q12 = (uint16_t)(scale - (scale >> 4)); /* * 15/16 */
 	}
 
+	reverse_speed_threshold = map(motor_kv, 300, 3000, 1000, 500);
+	if (eepromBuffer.bidirectional_mode) {
+		polling_mode_changeover = POLLING_MODE_THRESHOLD / 2;
+	} else {
+		polling_mode_changeover = POLLING_MODE_THRESHOLD;
+	}
+}
+
+/*
+ * Re-apply tables that depend on motor_kv / motor_poles after a DroneCAN (or
+ * other) live change. Does not re-read flash. motor_kv is the live decoded
+ * value (e.g. 360); eepromBuffer.motor_kv may be the quantised byte form.
+ */
+void applyMotorIdentitySettings(void)
+{
+	/* Same rules as loadEEpromSettings(), so a live kV or pole change ends
+	 * where a reboot with that EEPROM would: only the raw 20 kV byte (0)
+	 * opts out of the low-RPM ceiling (#122) and RC-car mode always limits;
+	 * motor_poles is already within MOTOR_POLES_MIN..MOTOR_POLES_MAX (#110
+	 * sanitizes it at load and DroneCAN range-checks the set); the advance
+	 * scale uses the 256/12500 form that stays inside uint32 for any pole
+	 * count. */
+	low_rpm_throttle_limit = (eepromBuffer.motor_kv != 0 || eepromBuffer.rc_car_reversing) ? 1 : 0;
+	low_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (100U * 32U);
+	high_rpm_level = ((uint32_t)motor_kv * eepromBuffer.motor_poles) / (17U * 32U);
+	advance_erpm_scale_q12 = 0;
+	if (motor_kv >= 300) {
+		uint16_t scale = (uint16_t)(((uint32_t)motor_kv * eepromBuffer.motor_poles * 256u) / 12500u);
+		advance_erpm_scale_q12 = (uint16_t)(scale - (scale >> 4)); /* * 15/16 */
+	}
 	reverse_speed_threshold = map(motor_kv, 300, 3000, 1000, 500);
 	if (eepromBuffer.bidirectional_mode) {
 		polling_mode_changeover = POLLING_MODE_THRESHOLD / 2;

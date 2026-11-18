@@ -52,6 +52,13 @@
 #	define CURRENT_OFFSET 0
 #	define CURRENT_AUTO_OFFSET
 #	define TARGET_MIN_BEMF_COUNTS 3
+/* Model the ARK protection envelope: the SITL seed image and a DroneCAN param
+ * erase must land where a shipped ARK ESC does, or the duty-limit tests verify
+ * a board nobody ships. Same values as the ARK_G431_CAN block below. */
+#	define TARGET_DEFAULT_TEMPERATURE_LIMIT 105
+#	define TARGET_DEFAULT_CURRENT_LIMIT 100
+#	define TARGET_DEFAULT_TEMP_DERATE_BAND 15
+#	define TARGET_DEFAULT_INPUT_TYPE 0
 #endif
 
 #ifdef ARK_4IN1_F051
@@ -67,7 +74,10 @@
 #	define CURRENT_ADC_CHANNEL LL_ADC_CHANNEL_3
 #	define CURRENT_ADC_PIN LL_GPIO_PIN_3
 #	define USE_SERIAL_TELEMETRY
-/* DRV8328 nSLEEP (PA15): high = awake. Sleep when idle via gate_driver.c. */
+/* DRV8328 nSLEEP (PA15): high = awake. Sleep when idle via gate_driver.c.
+	 * nFAULT (PB5): every assert Hi-Z's the FETs (no OTW-only / no VDS
+	 * auto-retry). Firmware cuts PWM and latches until zero throttle;
+	 * nSLEEP-low sleep is the fault reset. */
 #	define USE_DRV8328_NSLEEP
 #	define NSLEEP_PORT GPIOA
 #	define NSLEEP_PIN LL_GPIO_PIN_15
@@ -187,6 +197,61 @@
 #ifndef TARGET_DEFAULT_MAX_RAMP
 #	define TARGET_DEFAULT_MAX_RAMP 160
 #endif
+
+/*
+ * Protection defaults restored by a DroneCAN param ERASE, and the single
+ * source of truth for default_settings[] bytes 43/44 plus the
+ * post-skeleton band byte (184). These must equal what the product's
+ * factory eeprom defaults JSON ships, or "restore defaults" in the field
+ * silently changes a shipped ESC's protection envelope - the one config
+ * change nobody re-checks afterwards. check-factory-image-ark.sh gates the
+ * JSON against the built image; scripts/check-erase-defaults.py gates
+ * these macros against the JSON.
+ *
+ * Values are the eeprom storage encoding: temperature in C, current in
+ * 2 A counts (so 100 = 200 A, the largest settings.c will arm), band in C.
+ * 255 in the temperature slot means "no thermal derate".
+ */
+#ifndef TARGET_DEFAULT_TEMPERATURE_LIMIT
+#	define TARGET_DEFAULT_TEMPERATURE_LIMIT 255
+#endif
+#ifndef TARGET_DEFAULT_CURRENT_LIMIT
+#	define TARGET_DEFAULT_CURRENT_LIMIT 0
+#endif
+#ifndef TARGET_DEFAULT_TEMP_DERATE_BAND
+#	define TARGET_DEFAULT_TEMP_DERATE_BAND THERMAL_DERATE_BAND_DEFAULT
+#endif
+/* Byte 46. The configurator skeleton carries upstream's DShot (1), which on a
+ * CAN-only board would take the ESC off the bus after a param erase. */
+#ifndef TARGET_DEFAULT_INPUT_TYPE
+#	define TARGET_DEFAULT_INPUT_TYPE 0 /* AUTO_IN */
+#endif
+
+/*
+ * Lowest thermal ceiling the firmware will arm. TWO independent places
+ * enforce this and they must agree, or the one you did not change silently
+ * wins: settings.c coerces an out-of-range limits.temperature to 255
+ * (disabled), and the DroneCAN parameter table re-validates the same byte
+ * at boot and substitutes TEMPERATURE_LIMIT's default (105) instead. A
+ * bench that lowered only settings.c saw its 30 C write come back as 105.
+ *
+ * Build-time override for bench verification ONLY - the derate runs from
+ * limits.temperature upward to +temp_derate_band_c, so exercising it at
+ * the shipped 70 C floor needs the die driven past 70, which a propped ESC
+ * in its own slipstream may never reach:
+ *   make ARK_G431_CAN HWCI_PERF=1 EXTRA_CFLAGS=-DTHERMAL_LIMIT_MIN_C=30
+ * Never lower it in a shipping build.
+ */
+#ifndef THERMAL_LIMIT_MIN_C
+#	define THERMAL_LIMIT_MIN_C 70
+#endif
+/* Upper end of the same window. 255 is NOT part of it - that is the
+ * explicit "no thermal derate" sentinel and is preserved on purpose. */
+#ifndef THERMAL_LIMIT_MAX_C
+#	define THERMAL_LIMIT_MAX_C 140
+#endif
+/* Value the temperature slot is disabled with. */
+#define THERMAL_LIMIT_DISABLED 255
 
 #ifndef RAMP_SPEED_STARTUP
 #	define RAMP_SPEED_STARTUP 2 // adjusted 2.14 to match duty cycle change between mcu targets.
@@ -2533,6 +2598,19 @@
 #	define NOMINAL_PWM 24000U
 #endif
 
+#ifndef ZC_SEARCH_BLANK_64THS
+// half the commutation interval - the long-standing post-commutation blank
+#	define ZC_SEARCH_BLANK_64THS 32
+#endif
+// 64ths of the interval. The default is spelled as the shift it replaces so
+// that leaving the knob alone is provably a no-op - and so the general form's
+// intermediate product cannot overflow on an interval it never sees anyway.
+#if ZC_SEARCH_BLANK_64THS == 32
+#	define ZC_SEARCH_BLANK(interval) ((interval) >> 1)
+#else
+#	define ZC_SEARCH_BLANK(interval) (((uint32_t)(interval) * ZC_SEARCH_BLANK_64THS) >> 6)
+#endif
+
 #ifndef TIM1_AUTORELOAD
 // calculate commutation timer ARR based on a nominal 24kHz PWM
 #	define TIM1_AUTORELOAD ((uint16_t)(CPU_FREQUENCY_MHZ * 1000U * 1000U / NOMINAL_PWM) - 1)
@@ -2563,5 +2641,30 @@
 #		define RAM_FUNC __attribute__((optimize("O3")))
 #	else
 #		define RAM_FUNC
+#	endif
+#endif
+
+/*
+ * Zero-crossing front end selection (Inc/zc_frontend.h has the rationale).
+ * Defined here so every file that includes targets.h sees it: a shared
+ * branch on ZC_FRONTEND_G431 in a file without Inc/zc_frontend.h must not
+ * silently compile the other branch. ZC_FRONTEND_G431 may be set by a target
+ * only on the G431 or on SITL (ARK_G4_12S_SITL_CAN).
+ */
+#ifndef ZC_FRONTEND_SELECTED
+#	define ZC_FRONTEND_SELECTED
+#	if defined(ZC_FRONTEND_G431) && defined(MCU_F051)
+#		error "ZC_FRONTEND_G431 on an F051 build would mix the F051 front end with the G431 shared branches"
+#	endif
+#	if defined(ZC_FRONTEND_G431) && !(defined(MCU_G431) || defined(MCU_SITL))
+#		error "ZC_FRONTEND_G431 is only supported on MCU_G431 and on SITL"
+#	endif
+#	if defined(MCU_F051)
+#		define ZC_FRONTEND_F051 1
+#	elif defined(MCU_G431) || defined(ZC_FRONTEND_G431)
+#		undef ZC_FRONTEND_G431
+#		define ZC_FRONTEND_G431 1
+#	else
+#		define ZC_FRONTEND_STOCK 1
 #	endif
 #endif
