@@ -148,6 +148,13 @@ void DroneCAN_invalidate_app(void)
   app_valid = false;
 }
 
+/* true from an accepted BeginFirmwareUpdate (or the app's RTC request) until
+   the transfer ends, which is always in a reset */
+bool DroneCAN_update_in_progress(void)
+{
+  return fwupdate.node_id != 0;
+}
+
 // set from the CAN RX ISR (RawCommand) and read in the boot decision, so
 // volatile (especially with -flto cross-TU optimisation)
 static volatile bool have_raw_command;

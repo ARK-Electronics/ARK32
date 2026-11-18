@@ -1488,6 +1488,22 @@ int main(void)
 #endif
 
   while (1) {
+#if DRONECAN_SUPPORT
+    if (DroneCAN_update_in_progress()) {
+      /*
+        A CAN firmware update owns the bootloader until it ends, always in a
+        reset. Skip the signal-wire paths meanwhile: on a DShot line every
+        pulse looks like a start bit, and each bogus byte keeps CAN IRQs off
+        for about half a millisecond (bit-banged 19200). At DShot frame rates
+        that overflowed the FDCAN RX FIFO, file.Read replies lost frames, and
+        the update stalled (bench, 2026-11-17: stuck at 768 B with the stand
+        sending DShot, about 4 KB/s with it off). No jump() either: boot_ok()
+        refuses during an update.
+       */
+      (void)DroneCAN_update();
+      continue;
+    }
+#endif
     receiveBuffer();
 
     if (invalid_command > 100) {
