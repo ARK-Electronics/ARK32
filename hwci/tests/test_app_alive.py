@@ -122,6 +122,52 @@ def test_never_alive_raises_actionable_error(monkeypatch):
     assert reader.resets == 2  # both attempts exhausted
 
 
+def test_elf_has_embedded_bl_fails_closed_on_unreadable_elf():
+    from hwci.runner import _elf_has_embedded_bl
+    assert _elf_has_embedded_bl("/no/such/firmware.elf") is True
+
+
+def test_embedded_bl_grace_skips_reset_if_app_comes_up(monkeypatch):
+    # G431 HWCI keeps .bl_image. After flash the app may be rewriting the
+    # on-chip BL with IRQs off; a reset_run in that window is a brick.
+    # If the app becomes alive during the grace poll, never reset.
+    import hwci.runner as runner
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+    clock = (i * 0.2 for i in range(10_000))
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(clock))
+
+    class DelayedAliveReader:
+        def __init__(self):
+            self.reads = 0
+            self._iters = 0
+
+        def read(self):
+            self.reads += 1
+            if self.reads >= 4:
+                self._iters += 1
+                return FakeSample(self._iters, 25.2)
+            raise PerfDecodeError("rewriting")
+
+    reader = DelayedAliveReader()
+    dbg, throttle = FakeDbg(FakeReader(0)), FakeThrottle()
+    _ensure_app_alive(dbg, reader, throttle, embed_bl=True)
+    assert dbg._reader.resets == 0
+    assert throttle.commands == []
+
+
+def test_embedded_bl_grace_then_reset_if_still_dead(monkeypatch):
+    import hwci.runner as runner
+    monkeypatch.setattr(runner.time, "sleep", lambda s: None)
+    clock = iter(range(0, 10_000))
+    monkeypatch.setattr(runner.time, "monotonic", lambda: float(next(clock)))
+
+    reader = FakeReader(alive_after_resets=1)
+    dbg, throttle = FakeDbg(reader), FakeThrottle()
+    _ensure_app_alive(dbg, reader, throttle, embed_bl=True)
+    assert reader.resets == 1
+    assert throttle.commands == ["quiesce"]
+
+
 def test_debugger_error_propagates():
     class DeadProbeReader:
         def read(self):

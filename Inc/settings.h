@@ -10,5 +10,7 @@
 void loadEEpromSettings(void);
 void saveEEpromSettings(void);
 void checkDeviceInfo(void);
+/* Recompute kV/poles-derived runtime tables after a live param change. */
+void applyMotorIdentitySettings(void);
 
 #endif /* SETTINGS_H_ */

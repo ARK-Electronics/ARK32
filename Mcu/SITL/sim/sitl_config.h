@@ -59,6 +59,18 @@ typedef struct {
 		// threshold this long before the output commits (inertial
 		// propagation - constant delay, absorbs shorter pulses)
 		uint32_t comparator_min_toggle_ns;
+		// PWM-window dependent comparator front end, fitted to the ARK
+		// 12S CAN (G431) bench map 2026-11-12 (0 = off). In the PWM
+		// off-window, and for comparator_turnon_settle_ns after each
+		// turn-on, the floating phase reads its back-EMF this many
+		// electrical degrees late (rising / falling ramps); the settled
+		// on-window reads it true. For comparator_turnoff_high_ns after
+		// each high-side turn-off the output reads HIGH (falling-step
+		// "post", rising-step "pre")
+		float comparator_offwin_lag_rise_deg;
+		float comparator_offwin_lag_fall_deg;
+		uint32_t comparator_turnon_settle_ns;
+		uint32_t comparator_turnoff_high_ns;
 		// mainline progress lease: simulated time may not run further
 		// than this ahead of the last firmware-thread interception
 		// while the mainline is runnable. Bounds sim-visible mainline

@@ -93,6 +93,11 @@ EEPROM_FIELDS: dict[str, Field] = {f.name: f for f in [
     Field("auto_advance", 47, 0, 1,
           "1 = firmware maps advance from duty cycle, ignoring advance_level",
           c_member="auto_timing"),
+    Field("brake_on_stop", 28, 0, 2,
+          "0=coast (allOff), 1=full brake, 2=active brake"),
+    Field("rc_car_reverse", 38, 0, 1,
+          "1 = RC-car reverse / proportional prop brake",
+          c_member="rc_car_reversing"),
 ]}
 
 # Identity/version bytes that a settings write must NEVER change: a mismatch
@@ -108,6 +113,25 @@ _OFFSET_TO_NAME: dict[int, str] = {
     **{f.offset: f.name for f in EEPROM_FIELDS.values()},
     **READ_ONLY_OFFSETS,
 }
+
+
+def assert_required(page: Settings, required: dict[str, int]) -> None:
+    """Refuse a run whose EEPROM would silently invalidate the measurement.
+
+    Empty ``required`` is a no-op. Names must be in :data:`EEPROM_FIELDS`.
+    """
+    if not required:
+        return
+    bad = []
+    for name, want in required.items():
+        got = page.get(name)
+        if got != want:
+            bad.append(f"{name}={got} (need {want})")
+    if bad:
+        raise SettingsError(
+            "EEPROM precondition failed: " + ", ".join(bad)
+            + "; refusing to run rather than produce a plausible wrong number. "
+            "Inspect with `hwci settings read` and write a corrected page.")
 
 
 def resolve_field(name: str, offset: int | None = None) -> Field:
@@ -244,10 +268,16 @@ def default_blob() -> bytes:
     d[27] = 14     # motor_poles
     d[30] = 5      # beep_volume
     d[32], d[33], d[34], d[35] = 128, 128, 128, 50   # servo cal
-    d[37] = 30     # low_cell_volt_cutoff (3.0v)
-    d[43], d[44] = 141, 102   # limits (off)
+    d[37] = 50     # low_voltage_threshold -> 250+50 = 3.00 V/cell
+    # 141/102 are the AM32 configurator's out-of-range "disabled" pair. The
+    # current limiter does stay off (102 > 100 is never armed), but settings.c
+    # resolves the temperature byte to TARGET_DEFAULT_TEMPERATURE_LIMIT, so on
+    # a target that arms the derate (ARK_G431_CAN, AM32_SITL_CAN) a rig flashed
+    # with this blob runs WITH the thermal foldback, not without it. Write 255
+    # instead if a sweep needs the derate genuinely disabled.
+    d[43], d[44] = 141, 102   # temperature_limit, current_limit
     d[45] = 5      # sine_mode_power
-    d[46] = 1      # input_type
+    d[46] = 0      # input_type AUTO_IN (detect DShot/PWM; CAN prioritised if live)
     return bytes(d)
 
 

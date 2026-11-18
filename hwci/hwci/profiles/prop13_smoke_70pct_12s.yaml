@@ -1,0 +1,57 @@
+name: prop13_smoke_70pct_12s
+description: >
+  First loaded smoke for HQProp 13x10x3 on MAD Polar XC5000 345KV @ 12S.
+  Staircase to 70% only (user ceiling). MAD rates this motor ~6.1 kg max
+  thrust; 70% is well under that if the prop is honest, but first-run
+  aborts are sized for a bad start / wrong rotation / sensor glitch.
+
+  Confirm the 13" is installed, rotation is correct (exhaust away from
+  the stand plate), and the no-prop 100% smoke already passed.
+sample_rate_hz: 100
+arm_settle_s: 3.0
+pole_pairs: 7
+# ESC-estimated runaway guard (mechanical rpm): just above the 345KV no-load
+# ceiling at 12S full charge (1.1 x 345 x 50.4 V = 19127). A healthy run cannot read
+# above it; a false commutation lock does, at low stand speed and current.
+esc_max_rpm: 20000
+demag_rpm_drop_fraction: 0.30
+demag_commutation_spike: 3.0
+steady_tail_fraction: 0.5
+
+safety:
+  max_current_a: 60.0
+  max_thrust_n: 70.0
+  max_rpm: 16000
+  max_motor_temp_c: 85.0
+
+smoke_gates:
+  enabled: true
+  min_throttle: 0.40
+  min_running_fraction: 0.90
+  max_bemf_latch_samples: 0
+  require_esc_drive_states: true
+  min_esc_drive_fraction: 0.90
+  max_illegal_edges: 0
+  min_rpm:
+    0.4: 2500
+    0.6: 4000
+    0.7: 5000
+
+segments:
+  - {label: idle,   throttle: 0.00, duration_s: 2.0}
+  - {label: ramp10, throttle: 0.10, duration_s: 3.0, ramp: true}
+  - {label: hold10, throttle: 0.10, duration_s: 4.0, steady: true}
+  - {label: ramp20, throttle: 0.20, duration_s: 3.0, ramp: true}
+  - {label: hold20, throttle: 0.20, duration_s: 4.0, steady: true}
+  - {label: ramp30, throttle: 0.30, duration_s: 3.0, ramp: true}
+  - {label: hold30, throttle: 0.30, duration_s: 4.0, steady: true}
+  - {label: ramp40, throttle: 0.40, duration_s: 3.0, ramp: true}
+  - {label: hold40, throttle: 0.40, duration_s: 4.0, steady: true}
+  - {label: ramp50, throttle: 0.50, duration_s: 4.0, ramp: true}
+  - {label: hold50, throttle: 0.50, duration_s: 5.0, steady: true}
+  - {label: ramp60, throttle: 0.60, duration_s: 4.0, ramp: true}
+  - {label: hold60, throttle: 0.60, duration_s: 5.0, steady: true}
+  - {label: ramp70, throttle: 0.70, duration_s: 5.0, ramp: true}
+  - {label: hold70, throttle: 0.70, duration_s: 5.0, steady: true}
+  - {label: rampdn, throttle: 0.00, duration_s: 6.0, ramp: true}
+  - {label: stop,   throttle: 0.00, duration_s: 3.0}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tempfile
 
@@ -37,6 +38,15 @@ def sitl_path(request):
         pytest.fail(
             'SITL binary not found. Build with: make AM32_SITL_CAN\n'
             'or pass --sitl /path/to/elf')
+    # Images built by sitl_params must carry this binary's target defaults
+    # (ARK_G4_12S_SITL_CAN ships MAX_RAMP 5, AM32_SITL_CAN the generic 160).
+    m = re.match(r'ARK32_(.+)_\d+\.\d+', os.path.basename(path))
+    if m:
+        import sitl_params
+        try:
+            sitl_params.set_target(m.group(1))
+        except ValueError:
+            pass  # not a targets.h block: keep the default target
     return path
 
 
