@@ -139,11 +139,14 @@ static void escForceState(esc_state_t next)
 
 void escReconcileFromFlags(void)
 {
-	/* A stopped motor is a new run next time. The established-run latch
-	 * must not survive PX4 disarm / zero throttle: ESC `armed` stays 1
-	 * across FC arm/disarm, so leftover established made the next
-	 * idle-start jump look like an in-flight desync (error_count/WARN). */
-	if (!running && !stepper_sine) {
+	/* A run the pilot stopped is a new run next time. The established-run
+	 * latch must not survive PX4 disarm / zero throttle: ESC `armed` stays 1
+	 * across FC arm/disarm, so leftover established made the next idle-start
+	 * jump look like an in-flight desync (error_count/WARN). But a desync or
+	 * stall recovery under held throttle also stops the motor, and that must
+	 * keep the latch, or the recovery's own desyncs and stalls go uncounted
+	 * (PR #147 review). So clear it only on a disarm or a received stop. */
+	if (!running && !stepper_sine && (!armed || (fault_pilot_zero && adjusted_input == 0))) {
 		fault_run_established = 0;
 	}
 
