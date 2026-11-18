@@ -1,0 +1,38 @@
+name: g431_hiz_spindown
+description: >
+  Ordinary stop-and-reapply measurement. Hold 20%, cut throttle, wait,
+  and re-apply 20% after several coast durations. Record time to stable
+  running RPM and any stall or repeated acquisition events. require_eeprom
+  pins brake_on_stop=0 and rc_car_reverse=0 for an unbraked coast. This
+  profile retains its historical name; it does not test the nFAULT latch
+  or configure an automatic restart delay. A nFAULT drive-loss latch needs
+  continuous zero throttle before rearming. Props off; these measurements
+  do not reproduce windmilling. See BENCH_SETUPS.md and pair with
+  g431_current_floor on the same rig session.
+require_eeprom:
+  brake_on_stop: 0
+  rc_car_reverse: 0
+sample_rate_hz: 100
+arm_settle_s: 3.0
+steady_tail_fraction: 0.5
+
+safety:
+  max_current_a: 8.0
+  max_motor_temp_c: 80.0
+  max_rpm: 4000
+  max_thrust_n: 2.0
+
+segments:
+  - {label: idle,     throttle: 0.00, duration_s: 2.0, steady: true}
+  - {label: ramp20,   throttle: 0.20, duration_s: 2.0, ramp: true}
+  - {label: hold20,   throttle: 0.20, duration_s: 4.0, steady: true}
+  - {label: coast05,  throttle: 0.00, duration_s: 0.5}
+  - {label: re20_05,  throttle: 0.20, duration_s: 4.0, steady: true}
+  - {label: coast10,  throttle: 0.00, duration_s: 1.0}
+  - {label: re20_10,  throttle: 0.20, duration_s: 4.0, steady: true}
+  - {label: coast20,  throttle: 0.00, duration_s: 2.0}
+  - {label: re20_20,  throttle: 0.20, duration_s: 4.0, steady: true}
+  - {label: coast30,  throttle: 0.00, duration_s: 3.0}
+  - {label: re20_30,  throttle: 0.20, duration_s: 4.0, steady: true}
+  - {label: rampdn,   throttle: 0.00, duration_s: 2.0, ramp: true}
+  - {label: stop,     throttle: 0.00, duration_s: 2.0}
