@@ -48,6 +48,9 @@ COLUMNS = [
     "perf_dshot_last_com_us", "perf_dshot_telem_mode", "perf_dshot_edt_mode",
     # missed-ZC blind commutation counter (struct v7+)
     "perf_zc_blind_steps",
+    # slew-limited applied duty (0..2000) and firmware battery voltage, for
+    # ramp-rate checks (struct v1+; appended so column order is unchanged)
+    "perf_duty", "perf_voltage_v",
 ]
 
 
@@ -100,6 +103,8 @@ def make_row(t: float, segment: str, throttle_cmd: float,
             perf_input=r["input"],
             perf_armed=r["armed"],
             perf_running=r["running"],
+            perf_duty=r["duty_cycle"],
+            perf_voltage_v=round(perf.voltage, 2),
         )
         if "zc_count" in r:  # struct v2+
             row.update(

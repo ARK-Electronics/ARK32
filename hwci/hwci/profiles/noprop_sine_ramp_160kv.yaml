@@ -1,0 +1,28 @@
+name: noprop_sine_ramp_160kv
+description: >
+  PX4-like spool-up through sine start on CR Systems 10025 Pro 160KV,
+  no prop, 12S. Ramp (not step) so sine mode is actually traversed before
+  the six-step handoff. Confirm prop is OFF.
+sample_rate_hz: 100
+arm_settle_s: 3.0
+pole_pairs: 21
+steady_tail_fraction: 0.5
+
+safety:
+  max_current_a: 80.0
+  max_thrust_n: 8.0
+  # 160KV * ~48 V no-load is ~7.7k; 8k leaves headroom for optical glitches
+  # that aborted the step matrix at 6846 while stand samples were ~138.
+  max_rpm: 8000
+  max_motor_temp_c: 80.0
+
+segments:
+  - {label: idle,    throttle: 0.00, duration_s: 2.0}
+  - {label: ramp08,  throttle: 0.08, duration_s: 4.0, ramp: true}
+  - {label: hold08,  throttle: 0.08, duration_s: 3.0, steady: true}
+  - {label: ramp12,  throttle: 0.12, duration_s: 3.0, ramp: true}
+  - {label: hold12,  throttle: 0.12, duration_s: 3.0, steady: true}
+  - {label: ramp18,  throttle: 0.18, duration_s: 3.0, ramp: true}
+  - {label: hold18,  throttle: 0.18, duration_s: 4.0, steady: true}
+  - {label: rampdn,  throttle: 0.00, duration_s: 4.0, ramp: true}
+  - {label: stop,    throttle: 0.00, duration_s: 2.0}

@@ -1,0 +1,46 @@
+name: prop13_smoke_40pct_12s
+description: >
+  Loaded smoke to 40% for HQProp 13x10x3 on MAD Polar XC5000 345KV @ 12S.
+  Same article as xc5000-prop13-65 / tune-g431-345kv-13x10. Stand ramps
+  are 2 %/s (10% in 5 s). ESC EEPROM max_ramp stays at 0.5 %/ms.
+
+  Last 65% hold was ~5.7k RPM / 8 A / 1.9 kgf at 40%. max_rpm is 25000
+  so a single optical glitch (~21k, which aborted xc5000-prop13-65 on
+  ramp-down) cannot kill the run.
+sample_rate_hz: 100
+arm_settle_s: 3.0
+pole_pairs: 7
+demag_rpm_drop_fraction: 0.30
+demag_commutation_spike: 3.0
+steady_tail_fraction: 0.5
+
+safety:
+  max_current_a: 40.0
+  max_thrust_n: 50.0
+  max_rpm: 25000
+  max_motor_temp_c: 85.0
+
+smoke_gates:
+  enabled: true
+  min_throttle: 0.30
+  min_running_fraction: 0.90
+  max_bemf_latch_samples: 0
+  require_esc_drive_states: true
+  min_esc_drive_fraction: 0.90
+  max_illegal_edges: 0
+  min_rpm:
+    0.3: 2000
+    0.4: 2500
+
+segments:
+  - {label: idle,   throttle: 0.00, duration_s: 2.0}
+  - {label: ramp10, throttle: 0.10, duration_s: 5.0, ramp: true}
+  - {label: hold10, throttle: 0.10, duration_s: 4.0, steady: true}
+  - {label: ramp20, throttle: 0.20, duration_s: 5.0, ramp: true}
+  - {label: hold20, throttle: 0.20, duration_s: 4.0, steady: true}
+  - {label: ramp30, throttle: 0.30, duration_s: 5.0, ramp: true}
+  - {label: hold30, throttle: 0.30, duration_s: 4.0, steady: true}
+  - {label: ramp40, throttle: 0.40, duration_s: 5.0, ramp: true}
+  - {label: hold40, throttle: 0.40, duration_s: 5.0, steady: true}
+  - {label: rampdn, throttle: 0.00, duration_s: 20.0, ramp: true}
+  - {label: stop,   throttle: 0.00, duration_s: 3.0}
