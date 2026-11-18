@@ -6,6 +6,10 @@ description: >
 sample_rate_hz: 100
 arm_settle_s: 3.0
 pole_pairs: 7
+# ESC-estimated runaway guard (mechanical rpm): just above the 345KV no-load
+# ceiling at 12S full charge (1.1 x 345 x 50.4 V = 19127). A healthy run cannot read
+# above it; a false commutation lock does, at low stand speed and current.
+esc_max_rpm: 20000
 demag_rpm_drop_fraction: 0.30
 demag_commutation_spike: 3.0
 steady_tail_fraction: 0.5

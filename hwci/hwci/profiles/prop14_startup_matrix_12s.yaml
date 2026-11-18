@@ -25,6 +25,10 @@ description: >
   ~2 A / ~4 N, far under these limits, which are sized for the start
   transient rather than the steady point.
 sample_rate_hz: 100
+# ESC-estimated runaway guard (mechanical rpm): just above the 360KV no-load
+# ceiling at 12S full charge (1.1 x 360 x 50.4 V = 19958). A healthy run cannot read
+# above it; a false commutation lock does, at low stand speed and current.
+esc_max_rpm: 20000
 arm_settle_s: 3.0
 steady_tail_fraction: 0.5
 demag_rpm_drop_fraction: 0.30
