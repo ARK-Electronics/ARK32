@@ -958,6 +958,7 @@ static void set_input(uint16_t input)
 	 * zero, so the failsafe never counts as one. */
 	if (canstats.last_raw_command_us != 0) {
 		fault_pilot_zero = (uint8_t)(unfiltered_input == 0);
+		wire_drove_since_can = 0; /* RawCommand owns throttle (Src/signal.c) */
 	}
 	const uint16_t filtered_input = Filter2P_apply(unfiltered_input, eepromBuffer.can_filter_hz, 1000);
 
@@ -977,7 +978,7 @@ static void set_input(uint16_t input)
 		dshot = 1;
 	}
 
-	transfercomplete();
+	canInputTick(); /* not transfercomplete(): that re-decodes the wire capture */
 	setInput();
 
 	canstats.num_input++;

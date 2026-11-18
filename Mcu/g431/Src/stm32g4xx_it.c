@@ -249,6 +249,11 @@ void DMA1_Channel1_IRQHandler(void)
 	if (LL_DMA_IsActiveFlag_TC1(DMA1) == 1) {
 		DMA1->IFCR |= DMA_IFCR_CGIF1;
 		DMA1_Channel1->CCR = 0x00;
+#if DRONECAN_SUPPORT
+		if (!out_put && autoWireDetectOnCapture()) {
+			return; /* RawCommand came first: detect the wire protocol (Src/signal.c) */
+		}
+#endif
 		/* receive completions only: before arming, a bidirectional ESC's
 		 * telemetry reply also ends here (out_put set, the timer in output
 		 * mode), and its flags say nothing about a received window */

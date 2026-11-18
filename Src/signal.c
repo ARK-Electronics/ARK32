@@ -90,10 +90,28 @@ void computeServoInput()
 			}
 			/* The received pulse, not the slewed newinput: slewing through
 			 * neutral is not a pilot zero. */
+#if DRONECAN_SUPPORT
+			{
+				const uint8_t stop =
+					(uint8_t)(eepromBuffer.bidirectional_mode ? servorawinput + (servo_dead_band << 1) >= 1000 &&
+											    servorawinput <= 1000 + (servo_dead_band << 1)
+										  : servorawinput == 0);
+				/* While RawCommand owns throttle the wire is not the pilot.
+				 * After it lets go, a wire stop counts only once the wire
+				 * itself has demanded throttle. */
+				if (!DroneCAN_active()) {
+					if (!stop) {
+						wire_drove_since_can = 1;
+					}
+					fault_pilot_zero = (uint8_t)(stop && wire_drove_since_can);
+				}
+			}
+#else
 			fault_pilot_zero =
 				(uint8_t)(eepromBuffer.bidirectional_mode ? servorawinput + (servo_dead_band << 1) >= 1000 &&
 										    servorawinput <= 1000 + (servo_dead_band << 1)
 									  : servorawinput == 0);
+#endif
 			signaltimeout = 0;
 		}
 	} else {
@@ -114,6 +132,63 @@ void computeServoInput()
 		newinput = servorawinput;
 	}
 }
+
+#if DRONECAN_SUPPORT
+uint8_t wire_drove_since_can = 1;
+
+/*
+ * set_input() used to call transfercomplete() on every RawCommand and on the
+ * 1 kHz re-injection. That re-decoded the last wire capture: after the 250 ms
+ * RawCommand timeout it replayed a stale PWM stop as a pilot zero, which
+ * could clear a fault latched under CAN (PR #147 review). It also re-armed
+ * the capture mid-frame and could send a bidirectional DShot reply out of
+ * turn. RawCommand needs only the input-side arming bookkeeping below; it is
+ * transfercomplete()'s !armed block without the DShot frame-time average,
+ * which belongs to the wire.
+ */
+void canInputTick(void)
+{
+	if (armed) {
+		return;
+	}
+	if (adjusted_input == 0 && calibration_required == 0) {
+		zero_input_count++;
+	} else if (!eepromBuffer.disable_stick_calibration) {
+		zero_input_count = 0;
+		if (adjusted_input > 1500) {
+			if (getAbsDif(adjusted_input, last_input) > 50) {
+				enter_calibration_count = 0;
+			} else {
+				enter_calibration_count++;
+			}
+			if (enter_calibration_count > 50 && (!high_calibration_set)) {
+				playBeaconTune3();
+				calibration_required = 1;
+				enter_calibration_count = 0;
+			}
+			last_input = adjusted_input;
+		}
+	}
+}
+
+/*
+ * AUTO with RawCommand first: set_input() sets inputSet before any wire
+ * protocol is known, so transfercomplete() never runs detection and never
+ * re-arms the capture; the wire could not take over after a RawCommand
+ * timeout (PR #147 review). Called on a real capture completion only (the
+ * capture interrupt), never from set_input(): the 1 kHz re-injection would
+ * restart the capture mid-frame. Returns 1 if it handled the capture.
+ */
+uint8_t autoWireDetectOnCapture(void)
+{
+	if (inputSet != 1 || dshot || servoPwm || eepromBuffer.input_type == DRONECAN_IN) {
+		return 0;
+	}
+	detectInput();
+	receiveDshotDma();
+	return 1;
+}
+#endif
 
 void transfercomplete()
 {

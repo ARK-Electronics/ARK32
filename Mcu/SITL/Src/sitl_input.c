@@ -26,6 +26,7 @@
 #include "common.h"
 #include "dshot.h"
 #include "IO.h"
+#include "signal.h"
 #include "sitl.h"
 #include "sitl_config.h"
 #include "sitl_net.h"
@@ -257,6 +258,11 @@ void sitl_input_dma_irq(void)
 		sitl_irq_pend(SITL_IRQ_EXTI15);
 		return;
 	}
+#if DRONECAN_SUPPORT
+	if (!out_put && autoWireDetectOnCapture()) {
+		return; /* RawCommand came first: detect the wire protocol (Src/signal.c) */
+	}
+#endif
 	transfercomplete();
 	sitl_irq_pend(SITL_IRQ_EXTI15);
 }

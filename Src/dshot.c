@@ -20,6 +20,7 @@
 #include <stddef.h>
 #if DRONECAN_SUPPORT
 #	include "DroneCAN/DroneCAN.h"
+#	include "signal.h" /* wire_drove_since_can */
 #endif
 
 const char gcr_encode_table[16] = {0b11001, 0b11011, 0b10010, 0b10011, 0b11101, 0b10101, 0b10110, 0b10111,
@@ -235,6 +236,9 @@ void computeDshotDMA()
 					}
 					newinput = tocheck;
 					fault_pilot_zero = 0;
+#if DRONECAN_SUPPORT
+					wire_drove_since_can = 1;
+#endif
 					dshotcommand = 0;
 					command_count = 0;
 					return;
@@ -266,7 +270,12 @@ void computeDshotDMA()
 				}
 #endif
 				newinput = 0;
+#if DRONECAN_SUPPORT
+				/* after a RawCommand takeover, only once the wire has driven */
+				fault_pilot_zero = wire_drove_since_can; /* commands 1-47 leave it alone */
+#else
 				fault_pilot_zero = 1; /* commands 1-47 leave it alone */
+#endif
 				dshotcommand = 0;
 				command_count = 0;
 			}
