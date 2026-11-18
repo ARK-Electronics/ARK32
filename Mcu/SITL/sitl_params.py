@@ -34,10 +34,19 @@ def _default(name, field):
 
 
 # Public table shape is retained for the GUI and existing sitl.param files;
-# offsets, ranges and defaults now come exclusively from the schema.
-PARAMS = [(field['offset'], name, *raw_range(field), _default(name, field),
-           field.get('description', field['name'])) for name, field in _NAMED.items()]
+# offsets and ranges come from the schema. Defaults come from the schema
+# skeleton, except the bytes the selected SITL target corrects on top of it
+# (set_target() below), so the editor's "All defaults" stages what the
+# firmware would seed.
+_SCHEMA_PARAMS = [(field['offset'], name, *raw_range(field), _default(name, field),
+                   field.get('description', field['name'])) for name, field in _NAMED.items()]
+PARAMS = list(_SCHEMA_PARAMS)
 PARAMS_BY_NAME = {p[1]: p for p in PARAMS}
+
+# The SITL target whose Inc/targets.h block supplies the post-skeleton
+# defaults. conftest.py sets it from the binary under test, so an image built
+# for ARK_G4_12S_SITL_CAN gets that target's MAX_RAMP 5, not the generic 160.
+TARGET = 'AM32_SITL_CAN'
 
 
 def calc_value(name, byte):
@@ -113,16 +122,18 @@ def mismatches(image, model):
 EEPROM_SIZE = _SCHEMA['bufferSize']
 
 
-def _post_skeleton_defaults():
+def _post_skeleton_defaults(target=None):
     '''the bytes Src/DroneCAN/DroneCAN.c apply_post_skeleton_defaults()
     writes on top of the configurator skeleton, resolved for the SITL
-    target, so an image built here is the one the firmware would seed'''
+    target (TARGET unless given), so an image built here is the one the
+    firmware would seed'''
+    target = target or TARGET
     root = Path(__file__).resolve().parents[2]
     source = (root / 'Src/DroneCAN/DroneCAN.c').read_text()
     body = re.search(r'apply_post_skeleton_defaults\(EEprom_t \*e\)\s*\{(.*?)\n\}',
                      source, re.S)
     targets = (root / 'Inc/targets.h').read_text()
-    block = targets[targets.index('#ifdef AM32_SITL_CAN\n'):]
+    block = targets[targets.index('#ifdef %s\n' % target):]
     block = block[:block.index('\n#ifdef ')]
     out = {}
     if body:
@@ -139,26 +150,26 @@ def _post_skeleton_defaults():
     return out
 
 
-def _firmware_defaults():
+def _firmware_defaults(target=None):
     '''the full page a factory-flashed ESC boots with: the configurator
     skeleton, erased past it, then the target's own corrections - the same
     image DroneCAN.c erase_image() builds'''
     prefix = default_bytes(_SCHEMA, _LAYOUT, _FIRMWARE)
     image = bytearray(b'\xff' * EEPROM_SIZE)
     image[:len(prefix)] = prefix
-    for member, value in _post_skeleton_defaults().items():
+    for member, value in _post_skeleton_defaults(target).items():
         field = _FIELDS.get(re.sub(r'_(\w)', lambda m: m[1].upper(), member))
         if field is not None:
             image[field['offset']] = value
     return bytes(image)
 
 
-def base_image():
+def base_image(target=None):
     '''an eeprom image with no per-target settings: firmware defaults,
     erased (0xff) past the end of them, and the version fields taken
     from Inc/version.h so they track this tree'''
     img = bytearray(b'\xff' * EEPROM_SIZE)
-    d = _firmware_defaults()
+    d = _firmware_defaults(target)
     img[:len(d)] = d
     for name in ('EEPROM_VERSION', 'VERSION_MAJOR', 'VERSION_MINOR'):
         p = PARAMS_BY_NAME[name]
@@ -166,9 +177,9 @@ def base_image():
     return img
 
 
-def build_image(overrides):
+def build_image(overrides, target=None):
     '''eeprom image for {name: stored byte}, on top of base_image()'''
-    img = base_image()
+    img = base_image(target)
     for name, value in overrides.items():
         p = PARAMS_BY_NAME.get(name)
         if p is None:
@@ -178,6 +189,26 @@ def build_image(overrides):
             raise ValueError('%s=%d is not a byte' % (name, value))
         img[p[0]] = value
     return bytes(img)
+
+
+def set_target(target):
+    '''select the SITL target (an Inc/targets.h #ifdef name) for
+    base_image()/build_image() and the editor's default column. Only the
+    bytes the target corrects change, so CAN fields keep their schema
+    defaults rather than an erased image's 0xff'''
+    global TARGET
+    _post_skeleton_defaults(target)  # ValueError if targets.h has no such block
+    TARGET = target
+    image = _firmware_defaults(target)
+    corrected = set()
+    for member in _post_skeleton_defaults(target):
+        field = _FIELDS.get(re.sub(r'_(\w)', lambda m: m[1].upper(), member))
+        if field is not None:
+            corrected.add(field['offset'])
+    PARAMS[:] = [(off, name, lo, hi, image[off] if off in corrected and name not in _VER else dflt, text)
+                 for off, name, lo, hi, dflt, text in _SCHEMA_PARAMS]
+    PARAMS_BY_NAME.clear()
+    PARAMS_BY_NAME.update({p[1]: p for p in PARAMS})
 
 
 def parse_param_file(path):
@@ -274,3 +305,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+set_target(TARGET)
