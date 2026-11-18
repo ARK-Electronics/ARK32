@@ -27,6 +27,9 @@ from sitl_harness import SITL_DIR, Sender, rpm_from_state, wait_for_state
 from sitl_state_protocol import (
     STATE_MAGIC_CMD, STATE_CMD_ZC_STATS,
 )
+from test_state_protocol import Watch, control_socket
+
+ESC_STUCK_LATCH = 102  # Inc/esc_state.h
 ZC_STATS_MAGIC = 0x5356
 STATS_FIELDS = ('zero_crosses', 'commutation_interval', 'dropped_edges',
                 'desync_happened', 'old_routine', 'running', 'armed',
@@ -84,7 +87,6 @@ def test_racer_hard_spool_cannot_desync_forever_below_acquisition(
         # ~20 desyncs/s, 20 early events per JUMP charge) would either get
         # ramp-backoff help past acquisition, or pile enough charges to latch.
         max_zc = 0
-        max_desync = 0
         saw_running = False
         end = None
         t0 = time.time()
@@ -95,7 +97,6 @@ def test_racer_hard_spool_cannot_desync_forever_below_acquisition(
                 time.sleep(0.05)
                 continue
             max_zc = max(max_zc, s['zero_crosses'])
-            max_desync = max(max_desync, s['desync_happened'])
             if s['running']:
                 saw_running = True
             end = s
@@ -108,13 +109,35 @@ def test_racer_hard_spool_cannot_desync_forever_below_acquisition(
         assert end is not None
 
         acquired = max_zc > 100
-        # Stuck latch / fault path: drive no longer running after many desyncs
-        latched_off = (max_desync >= 20 and end['running'] == 0)
+        # Acq desyncs no longer increment desync_happened (established-only
+        # error_count). Success is acquire past zc 100, or drive stopped by
+        # the acq-rail episode latch — not free-running forever below acq.
+        # One running == 0 sample is also what a restart-holdoff coast looks
+        # like, so a latch must be the stuck latch itself and must keep the
+        # motor stopped under the same throttle for a second (PR #147 review).
+        latched_off = False
+        if not acquired:
+            with control_socket(sitl) as sock:
+                watch = Watch(sock, [(1, 'bemf_timeout_happened'), (1, 'running')])
+                samples = 0
+                latched_off = True
+                hold_end = time.monotonic() + 1.0
+                while time.monotonic() < hold_end:
+                    watch.poll()
+                    v = watch.values
+                    if v.get(0) is None:
+                        continue
+                    samples += 1
+                    if v.get(0) != ESC_STUCK_LATCH or v.get(1) != 0:
+                        latched_off = False
+                        end = dict(end, bemf_timeout_happened=v.get(0), running_now=v.get(1))
+                        break
+                latched_off = latched_off and samples > 0
 
         assert acquired or latched_off, (
             'acquisition rail did not break free-desync-below-zc100: '
-            'max_zc=%d max_desync=%d end=%r\n%s'
-            % (max_zc, max_desync, end, sitl.log_tail()))
+            'max_zc=%d end=%r\n%s'
+            % (max_zc, end, sitl.log_tail()))
     finally:
         tx.value = 0
         time.sleep(0.5)

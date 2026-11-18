@@ -48,6 +48,9 @@ COLUMNS = [
     "perf_dshot_last_com_us", "perf_dshot_telem_mode", "perf_dshot_edt_mode",
     # missed-ZC blind commutation counter (struct v7+)
     "perf_zc_blind_steps",
+    # slew-limited applied duty (0..2000) and firmware battery voltage, for
+    # ramp-rate checks (struct v1+; appended so column order is unchanged)
+    "perf_duty", "perf_voltage_v",
 ]
 
 
@@ -100,6 +103,8 @@ def make_row(t: float, segment: str, throttle_cmd: float,
             perf_input=r["input"],
             perf_armed=r["armed"],
             perf_running=r["running"],
+            perf_duty=r["duty_cycle"],
+            perf_voltage_v=round(perf.voltage, 2),
         )
         if "zc_count" in r:  # struct v2+
             row.update(
@@ -137,6 +142,9 @@ def make_row(t: float, segment: str, throttle_cmd: float,
 class RunResult:
     meta: dict = field(default_factory=dict)
     rows: list[dict] = field(default_factory=list)
+    # Optional G4 debug-UART transcript (timestamped lines); written as
+    # debug_uart.log next to samples.csv when present.
+    debug_uart_text: str | None = None
 
     def save(self, run_dir: str | Path) -> Path:
         run_dir = Path(run_dir)
@@ -147,6 +155,8 @@ class RunResult:
             writer.writerows(self.rows)
         with open(run_dir / "meta.json", "w") as fh:
             json.dump(self.meta, fh, indent=2, sort_keys=True)
+        if self.debug_uart_text:
+            (run_dir / "debug_uart.log").write_text(self.debug_uart_text)
         return run_dir
 
     @classmethod

@@ -1,0 +1,46 @@
+# ARK 12S CAN ESC + CR Systems 10025 Pro 160KV — Flight Stand SETUP A
+# 42 poles (21 pole-pairs). EEPROM motor_kv byte 4 → decoded 180 kV
+# (AM32 40 kV steps; 160 sits between 140 and 180).
+#
+#   hwci flash --config config/rig.g431_160kv_10025.yaml
+#   hwci run  --config config/rig.g431_160kv_10025.yaml \
+#             --profile noprop_smoke_160kv_25pct --battery-cells 12
+target: ARK_G431_CAN
+
+debugger_backend: openocd
+openocd_bin: openocd
+openocd_configs:
+  - interface/stlink.cfg
+  - target/stm32g4x.cfg
+app_load_addr: 0x08004000
+adapter_speed_khz: 8000
+
+telem_backend: none
+
+debug_uart_backend: serial
+debug_uart_port: /dev/ttyACM0
+debug_uart_baud: 115200
+
+throttle_backend: flightstand
+
+stand_backend: grpc
+stand_host: 192.168.7.70
+stand_port: 50051
+stand_signals:
+  thrust: 11
+  torque: 14
+  rpm: 15
+  voltage: 6
+  current: 8
+  esc_output: 0
+  esc_zero: 0.0
+  esc_min: 48.0
+  esc_max: 2047.0
+  thrust_is_grams: false
+  rpm_is_rad_per_s: true
+  motor_temp: "/boards/COM3/inputs/29"
+  fet_temp: "/boards/COM3/inputs/31"
+
+motor_name: "CR Systems 10025 Pro 160KV"
+pole_pairs: 21
+prop: "none"

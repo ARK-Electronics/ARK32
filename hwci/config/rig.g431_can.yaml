@@ -1,0 +1,64 @@
+# =============================================================================
+# ARK 12S CAN ESC (STM32G431/G491) — Flight Stand SETUP A
+# =============================================================================
+# Target: ARK_G431_CAN (USE_DEBUG_UART on USART2 TX PB3 @ 115200)
+#
+# SWD:    ST-Link → SWDIO/SWCLK/GND (do NOT feed 3V3 from ST-Link when bus-powered)
+# UART:   PB3 debug console → ST-Link V3 VCP (usually /dev/ttyACM0 / if01)
+#         udev: /dev/esc-debug-uart  (scripts/99-hwci.rules)
+# Signal: Flight Stand ESC out → ESC signal (uni DShot/PWM); no BDShot parallel
+#
+# Target presets (auto-applied when omitted):
+#   openocd: interface/stlink.cfg + target/stm32g4x.cfg
+#   app_load_addr: 0x08004000  (16 KiB bootloader)
+#   adapter_speed_khz: 8000
+#
+# Copy to ../rig.yaml on the G4 bench, or:
+#   hwci run --config config/rig.g431_can.yaml --profile noprop_smoke --battery-cells 6
+# =============================================================================
+
+target: ARK_G431_CAN
+
+debugger_backend: openocd
+openocd_bin: openocd
+# Explicit G4 SWD (also filled by TARGET_PRESETS if omitted):
+openocd_configs:
+  - interface/stlink.cfg
+  - target/stm32g4x.cfg
+app_load_addr: 0x08004000
+adapter_speed_khz: 8000
+
+# KISS ESC telemetry wire (optional; leave none if not connected)
+telem_backend: none
+# telem_port: /dev/esc-telem
+# telem_baud: 115200
+
+# Debug console via ST-Link VCP (PB3 USART2 TX) — state + nFAULT + desync
+debug_uart_backend: serial
+debug_uart_port: /dev/esc-debug-uart
+debug_uart_baud: 115200
+
+throttle_backend: flightstand
+
+stand_backend: grpc
+stand_host: 192.168.7.22
+stand_port: 50051
+stand_signals:
+  thrust: 11
+  torque: 14
+  rpm: 15
+  voltage: 6
+  current: 8
+  esc_output: 0
+  esc_zero: 0.0
+  esc_min: 48.0
+  esc_max: 2047.0
+  thrust_is_grams: false
+  rpm_is_rad_per_s: true
+  motor_temp: "/boards/COM3/inputs/29"
+  fet_temp: "/boards/COM3/inputs/31"
+
+# Phase 1 default article: 1800 KV free-run (no prop)
+motor_name: "JS Technology 2306 1800KV"
+pole_pairs: 7
+prop: "none"

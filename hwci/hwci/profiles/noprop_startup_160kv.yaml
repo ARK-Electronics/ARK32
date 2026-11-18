@@ -1,0 +1,58 @@
+name: noprop_startup_160kv
+description: >
+  Cold-start matrix for CR Systems 10025 Pro 160KV, no prop, 12S.
+  Step throttle (not ramped) so min_startup_duty is actually exercised.
+  Three starts at 8/12/18/25%. Off windows 3 s: bare bell coasts quickly.
+  Pair with debug_uart.log for OPEN_LOOP/CLOSED_LOOP/desync lines.
+  Host startup_stats: success = perf_running and eRPM>=1000.
+sample_rate_hz: 100
+arm_settle_s: 3.0
+pole_pairs: 21
+# ESC-estimated runaway guard (mechanical rpm): just above the 160KV no-load
+# ceiling at 12S full charge (1.1 x 160 x 50.4 V = 8870). A healthy run cannot read
+# above it; a false commutation lock does, at low stand speed and current.
+esc_max_rpm: 9000
+steady_tail_fraction: 0.5
+demag_rpm_drop_fraction: 0.30
+demag_commutation_spike: 3.0
+
+safety:
+  # Open-loop six-step on this bell has pulsed ~46 A at first commutation
+  # on 12S with min_startup_duty=300 (15%). Abort is a backstop, not a
+  # tune target.
+  max_current_a: 80.0
+  # No-prop thrust is ~0; the 10025 start jerk rings the load cell past 2 N.
+  max_thrust_n: 8.0
+  max_rpm: 5000
+  max_motor_temp_c: 80.0
+
+segments:
+  - {label: idle, throttle: 0.00, duration_s: 2.0}
+
+  - {label: start08a, throttle: 0.08, duration_s: 3.0}
+  - {label: off08a,   throttle: 0.00, duration_s: 3.0}
+  - {label: start08b, throttle: 0.08, duration_s: 3.0}
+  - {label: off08b,   throttle: 0.00, duration_s: 3.0}
+  - {label: start08c, throttle: 0.08, duration_s: 3.0}
+  - {label: off08c,   throttle: 0.00, duration_s: 3.0}
+
+  - {label: start12a, throttle: 0.12, duration_s: 3.0}
+  - {label: off12a,   throttle: 0.00, duration_s: 3.0}
+  - {label: start12b, throttle: 0.12, duration_s: 3.0}
+  - {label: off12b,   throttle: 0.00, duration_s: 3.0}
+  - {label: start12c, throttle: 0.12, duration_s: 3.0}
+  - {label: off12c,   throttle: 0.00, duration_s: 3.0}
+
+  - {label: start18a, throttle: 0.18, duration_s: 3.0}
+  - {label: off18a,   throttle: 0.00, duration_s: 3.0}
+  - {label: start18b, throttle: 0.18, duration_s: 3.0}
+  - {label: off18b,   throttle: 0.00, duration_s: 3.0}
+  - {label: start18c, throttle: 0.18, duration_s: 3.0}
+  - {label: off18c,   throttle: 0.00, duration_s: 3.0}
+
+  - {label: start25a, throttle: 0.25, duration_s: 3.0}
+  - {label: off25a,   throttle: 0.00, duration_s: 3.0}
+  - {label: start25b, throttle: 0.25, duration_s: 3.0}
+  - {label: off25b,   throttle: 0.00, duration_s: 3.0}
+  - {label: start25c, throttle: 0.25, duration_s: 3.0}
+  - {label: stop,     throttle: 0.00, duration_s: 3.0}

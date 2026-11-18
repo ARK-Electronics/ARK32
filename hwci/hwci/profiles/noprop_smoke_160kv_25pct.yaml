@@ -1,0 +1,45 @@
+name: noprop_smoke_160kv_25pct
+description: >
+  No-prop free-run climb to 25% on 12S for CR Systems 10025 Pro 160KV
+  (42 poles / 21 pole-pairs). Do not reuse 1800KV min_rpm gates.
+  Free-run mech RPM ≈ 160 * Vbus * throttle: ~1.8k @ 25% on 44 V.
+  Confirm prop is OFF before running.
+sample_rate_hz: 100
+arm_settle_s: 3.0
+pole_pairs: 21
+# ESC-estimated runaway guard (mechanical rpm): just above the 160KV no-load
+# ceiling at 12S full charge (1.1 x 160 x 50.4 V = 8870). A healthy run cannot read
+# above it; a false commutation lock does, at low stand speed and current.
+esc_max_rpm: 9000
+demag_rpm_drop_fraction: 0.25
+demag_commutation_spike: 3.0
+steady_tail_fraction: 0.5
+
+safety:
+  # 10025 bell inertia: open-loop start on 12S can pulse tens of amps
+  # with no prop; 15 A aborted at first commutation (~46 A stand).
+  max_current_a: 80.0
+  max_motor_temp_c: 80.0
+  max_rpm: 5000
+  max_thrust_n: 2.0
+
+smoke_gates:
+  enabled: true
+  min_throttle: 0.20
+  min_running_fraction: 0.80
+  max_bemf_latch_samples: 0
+  require_esc_drive_states: true
+  min_esc_drive_fraction: 0.80
+  max_illegal_edges: 0
+  min_rpm:
+    0.20: 400
+    0.25: 600
+
+segments:
+  - {label: idle,    throttle: 0.00, duration_s: 2.0}
+  - {label: ramp10,  throttle: 0.10, duration_s: 4.0, ramp: true}
+  - {label: hold10,  throttle: 0.10, duration_s: 4.0, steady: true}
+  - {label: ramp25,  throttle: 0.25, duration_s: 5.0, ramp: true}
+  - {label: hold25,  throttle: 0.25, duration_s: 8.0, steady: true}
+  - {label: rampdn,  throttle: 0.00, duration_s: 5.0, ramp: true}
+  - {label: stop,    throttle: 0.00, duration_s: 2.0}

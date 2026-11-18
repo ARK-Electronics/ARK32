@@ -1,0 +1,53 @@
+# =============================================================================
+# ARK 12S CAN ESC + MAD Polar XC5000 345KV — Flight Stand SETUP A
+# =============================================================================
+# Article: 12N14P (7 pole-pairs). EEPROM motor_kv byte 8 → decoded 340 kV
+# (nearest AM32 step: eeprom*40+20). Optical RPM on stand signal 15.
+#
+# Sequence:
+#   1. No prop, 12S pack — noprop_smoke_345kv_12s  (to 100%)
+#   2. HQProp 13x10x3    — prop13_smoke_70pct_12s  (to 70%)
+#   3. hwci tune --spec tunes/g431_345kv_13x10.yaml
+#
+#   hwci run --config config/rig.g431_345kv_xc5000.yaml \
+#            --profile noprop_smoke_345kv_12s --battery-cells 12
+# =============================================================================
+target: ARK_G431_CAN
+
+debugger_backend: openocd
+openocd_bin: openocd
+openocd_configs:
+  - interface/stlink.cfg
+  - target/stm32g4x.cfg
+app_load_addr: 0x08004000
+adapter_speed_khz: 8000
+
+telem_backend: none
+
+debug_uart_backend: serial
+debug_uart_port: /dev/ttyACM0
+debug_uart_baud: 115200
+
+throttle_backend: flightstand
+
+stand_backend: grpc
+stand_host: 192.168.7.70
+stand_port: 50051
+stand_signals:
+  thrust: 11
+  torque: 14
+  rpm: 15
+  voltage: 6
+  current: 8
+  esc_output: 0
+  esc_zero: 0.0
+  esc_min: 48.0
+  esc_max: 2047.0
+  thrust_is_grams: false
+  rpm_is_rad_per_s: true
+  motor_temp: "/boards/COM3/inputs/29"
+  fet_temp: "/boards/COM3/inputs/31"
+
+motor_name: "MAD Polar XC5000 345KV"
+pole_pairs: 7
+prop: "HQProp 13x10x3"

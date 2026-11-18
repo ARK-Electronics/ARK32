@@ -13,15 +13,43 @@ class BuildArtifacts:
     hex: Path
 
 
-def find_artifact(obj_dir: Path, target: str, ext: str) -> Path | None:
-    """Newest ``obj/ARK32_<target>_*.<ext>`` build artifact, or None.
+# Sidecar images share the ``ARK32_<target>_<ver>`` prefix. A glob of ``*.bin``
+# must not pick ``.eeprom.bin`` / ``.uavcan.bin`` (or ``.factory.hex`` for
+# ``*.hex``) — flashing those at the app base overwrites vectors. Observed
+# 2026-08-14: hwci ci programmed the 2 KiB EEPROM dump at 0x08004000.
+_SIDECAR_MARKERS = (".eeprom.", ".factory.", ".uavcan.")
 
-    The single place that knows the Makefile's artifact naming; RigConfig's
-    ELF resolution reuses it so the flashed binary and the parsed ELF can
-    never be picked by two different rules.
+
+def _app_images(obj_dir: Path, target: str, ext: str) -> list[Path]:
+    """``obj/ARK32_<target>_*.<ext>`` firmware images, oldest first by mtime."""
+    ext = ext.lstrip(".")
+    hits = [
+        p for p in Path(obj_dir).glob(f"ARK32_{target}_*.{ext}")
+        if p.is_file() and not any(m in p.name for m in _SIDECAR_MARKERS)
+    ]
+    hits.sort(key=lambda p: p.stat().st_mtime)
+    return hits
+
+
+def find_artifact(obj_dir: Path, target: str, ext: str) -> Path | None:
+    """The ``obj/ARK32_<target>_*.<ext>`` firmware image to use, or None.
+
+    Ignores factory/EEPROM/UAVCAN sidecars. The ELF is the newest by mtime, so
+    a rebuild wins over an older version sitting in ``obj/``. A ``.bin`` or
+    ``.hex`` is that ELF's sibling (same stem), never chosen by its own mtime:
+    a touched or copied older image would otherwise pair one build's binary
+    with another build's symbols (PR #147 review). With no ELF at all, the
+    newest image of the asked kind. RigConfig ELF resolution uses this too.
     """
-    hits = sorted(obj_dir.glob(f"ARK32_{target}_*.{ext}"))
-    return hits[-1] if hits else None
+    ext = ext.lstrip(".")
+    elves = _app_images(obj_dir, target, "elf")
+    if ext == "elf":
+        return elves[-1] if elves else None
+    if elves:
+        sibling = elves[-1].with_suffix("." + ext)
+        return sibling if sibling.is_file() else None
+    images = _app_images(obj_dir, target, ext)
+    return images[-1] if images else None
 
 
 def build_firmware(repo_root: str | Path, target: str, *,

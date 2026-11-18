@@ -41,6 +41,11 @@ def test_upstream_dataset_params_use_schema_defaults(tmp_path):
         golden = bytes.fromhex((root / 'schema/eeprom-defaults.hex').read_text())
         assert len(golden) == 48
         expected[:len(golden)] = golden
+        # The SITL seed and DroneCAN ERASE restore the ARK protection
+        # envelope on top of the historical configurator skeleton. Keep
+        # these expectations independent of the adapter's defaults callback.
+        for offset, value in ((43, 105), (44, 100), (46, 0), (184, 15)):
+            expected[offset] = value
         versions = dict(re.findall(
             r'^\\s*#define\\s+(EEPROM_VERSION|VERSION_MAJOR|VERSION_MINOR)\\s+(\\d+)',
             (root / 'Inc/version.h').read_text(), re.MULTILINE))
@@ -48,7 +53,9 @@ def test_upstream_dataset_params_use_schema_defaults(tmp_path):
             expected[offset] = int(versions[name])
         actual = params.base_image()
         assert len(actual) == 192
-        assert actual == expected
+        assert actual == expected, [
+            (offset, got, want) for offset, (got, want) in
+            enumerate(zip(actual, expected)) if got != want]
 
         checks = []
         original_check = suite.check

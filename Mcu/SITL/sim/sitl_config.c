@@ -116,6 +116,10 @@ static const struct cfg_entry cfg_table[] = {
 	{"sim", "comparator_phase_rc_ns", CFG_U32, &sitl_cfg.sim.comparator_phase_rc_ns},
 	{"sim", "comparator_neutral_rc_ns", CFG_U32, &sitl_cfg.sim.comparator_neutral_rc_ns},
 	{"sim", "comparator_min_toggle_ns", CFG_U32, &sitl_cfg.sim.comparator_min_toggle_ns},
+	{"sim", "comparator_offwin_lag_rise_deg", CFG_FLOAT, &sitl_cfg.sim.comparator_offwin_lag_rise_deg},
+	{"sim", "comparator_offwin_lag_fall_deg", CFG_FLOAT, &sitl_cfg.sim.comparator_offwin_lag_fall_deg},
+	{"sim", "comparator_turnon_settle_ns", CFG_U32, &sitl_cfg.sim.comparator_turnon_settle_ns},
+	{"sim", "comparator_turnoff_high_ns", CFG_U32, &sitl_cfg.sim.comparator_turnoff_high_ns},
 	{"sim", "fw_lag_max_ns", CFG_U32, &sitl_cfg.sim.fw_lag_max_ns},
 	{"sim", "watchdog_enabled", CFG_BOOL, &sitl_cfg.sim.watchdog_enabled},
 };
