@@ -7,6 +7,7 @@
 #include "main.h"
 #include "common.h"
 #include "motor_runtime.h"
+#include "telemetry_rpm.h"
 #include "zc_frontend.h"
 #include "faults.h"
 #include "esc_state.h"
@@ -825,8 +826,12 @@ void runtimeMotorModeTick(void)
 		return;
 	}
 	if (!escInSineStart()) {
-		e_rpm = running * (600000 / e_com_time); // in tens of rpm
-		k_erpm = e_rpm / 10;			 // ecom time is time for one electrical revolution in microseconds
+		/* An unmeasured e_com_time (the first start after boot) reads as standstill.
+		 * 600000 / 2 truncated into e_rpm reported a ~540k rpm spike (wrapped by
+		 * esc.Status to 16512 rpm for 14 poles) and opened the low-rpm throttle
+		 * ceiling below for the first commutations. */
+		e_rpm = running * erpmHundredsFromComTime(e_com_time); // in tens of rpm
+		k_erpm = e_rpm / 10;				       // ecom time is time for one electrical revolution in microseconds
 
 		if (low_rpm_throttle_limit) { // some hardware doesn't need this, its on
 			// by default to keep hardware / motors

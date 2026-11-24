@@ -26,6 +26,7 @@
 #	include "debug_uart.h"
 #	include "settings.h"
 #	include "motor_runtime.h"
+#	include "telemetry_rpm.h"
 #	include "esc_state.h"
 #	include "dshot.h" /* DSHOT_MIN_THROTTLE, DSHOT_3D_FORWARD_MIN_THROTTLE */
 
@@ -1422,7 +1423,8 @@ static void send_ESCStatus(void)
 	current.count = 0;
 
 	pkt.temperature = C_TO_KELVIN(degrees_celsius);
-	pkt.rpm = (e_rpm * 200) / eepromBuffer.motor_poles;
+	/* int18: saturated so a 2-pole motor above 131071 rpm cannot wrap */
+	pkt.rpm = escStatusRpm(e_rpm, eepromBuffer.motor_poles);
 	/* Instant demand factor: applied duty 0..2000 → 0..100% of full scale. */
 	{
 		uint16_t pct = duty_cycle / 20u;
