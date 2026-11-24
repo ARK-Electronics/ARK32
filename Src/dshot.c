@@ -15,6 +15,7 @@
 #include "comparator.h"
 #include "peripherals.h"
 #include "motor_runtime.h"
+#include "telemetry_rpm.h"
 #include "esc_state.h"
 #include "faults.h"
 #include <stddef.h>
@@ -373,12 +374,12 @@ void computeDshotDMA()
 	}
 }
 
-void make_dshot_package(uint16_t com_time)
+void make_dshot_package(uint32_t com_time)
 {
 	uint16_t extended_frame_to_send = 0;
 #ifdef HWCI_PERF
 	/* Snapshot the period the reply will advertise (stopped → 65535 later). */
-	const uint16_t _hwci_com_snap = com_time;
+	const uint16_t _hwci_com_snap = (com_time > 65535u) ? 65535u : (uint16_t)com_time;
 #endif
 
 	if (dshot_extended_telemetry) {
@@ -417,9 +418,7 @@ void make_dshot_package(uint16_t com_time)
 		telem_scheduler.last_sent_extended = 1;
 
 	} else {
-		if (!running) {
-			com_time = 65535;
-		}
+		com_time = dshotTelemetryPeriodUs(com_time, running);
 		//	calculate shift amount for data in format eee mmm mmm mmm, first 1 found
 		// in first seven bits of data determines shift amount
 		// this allows for a range of up to 65408 microseconds which would be

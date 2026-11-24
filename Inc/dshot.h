@@ -94,7 +94,7 @@ enum {
 #	define DSHOT_CMD_MAX_THROTTLE DSHOT_MAX_THROTTLE
 
 void computeDshotDMA(void);
-void make_dshot_package(uint16_t com_time);
+void make_dshot_package(uint32_t com_time);
 
 /* Temporary 20/21 direction, independent of the stored motor direction. */
 extern uint8_t dshot_direction_reversed;
